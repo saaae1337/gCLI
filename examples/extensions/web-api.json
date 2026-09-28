@@ -1,0 +1,22 @@
+{
+  "name": "web-api",
+  "description": "HTTP-инструменты: запросы к внешним API без shell",
+  "tools": [
+    {
+      "name": "gh_repo",
+      "description": "Информация о GitHub-репозитории (owner/repo из input)",
+      "url": "https://api.github.com/repos/{input}",
+      "method": "GET",
+      "headers": { "Accept": "application/vnd.github+json" },
+      "timeout_sec": 20
+    },
+    {
+      "name": "httpbin_post",
+      "description": "Пример POST-запроса: input уходит в JSON-тело",
+      "url": "https://httpbin.org/post",
+      "method": "POST",
+      "body": "{\"text\": \"{input}\"}",
+      "timeout_sec": 20
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# Бинарники и сборки
+builds/
+*.exe
+*.exe~
+gcli
+gcli-*
+
+# Go
+*.test
+*.out
+vendor/
+
+# Системное
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Редакторы
+.idea/
+.vscode/
+*.swp
+*~
+
+# Локальные данные gcli в проекте (сессии не коммитим)
+.gcli/sessions/

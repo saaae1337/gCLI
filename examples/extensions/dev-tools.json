@@ -1,0 +1,30 @@
+{
+  "name": "dev-tools",
+  "description": "Быстрые shell-инструменты разработки: статус git, свежие коммиты, запуск тестов",
+  "tools": [
+    {
+      "name": "git_status",
+      "description": "Краткий статус git-репозитория: ветка и изменённые файлы",
+      "command": "git status --short --branch",
+      "timeout_sec": 20
+    },
+    {
+      "name": "git_recent",
+      "description": "Последние 15 коммитов в одну строку",
+      "command": "git log --oneline -15",
+      "timeout_sec": 20
+    },
+    {
+      "name": "run_tests",
+      "description": "Запустить тесты проекта (Go; input — опциональный путь/пакет)",
+      "command": "go test {input} ./...",
+      "timeout_sec": 240
+    },
+    {
+      "name": "todo_grep",
+      "description": "Найти в коде комментарии TODO/FIXME по слову из input",
+      "command": "grep -rn \"{input}\" --include=*.go . | head -30",
+      "timeout_sec": 30
+    }
+  ]
+}
