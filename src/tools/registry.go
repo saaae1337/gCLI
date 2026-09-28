@@ -107,6 +107,8 @@ type Env struct {
 	Ask func(question string, options []string) (string, error)
 	// Agents — список активных/завершённых субагентов.
 	Agents func(action, name string) string
+	// Self — снимок собственного состояния агента (инструмент self_status).
+	Self func() SelfReport
 	// Depth — текущая глубина вложенности агента.
 	Depth int
 	// MaxDepth — максимальная глубина вложенности.
@@ -357,6 +359,13 @@ func (r *Registry) Merge(others ...*Registry) *Registry {
 
 // WorkDir — рабочий каталог реестра.
 func (r *Registry) WorkDir() string { return r.workDir }
+
+// CountRead — сколько файлов агент уже прочитал в этой сессии.
+func (r *Registry) CountRead() int {
+	readMu.Lock()
+	defer readMu.Unlock()
+	return len(r.env.ReadFiles)
+}
 
 // SetDepth — задать глубину вложенности в копии реестра.
 //

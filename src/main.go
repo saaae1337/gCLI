@@ -77,6 +77,10 @@ type app struct {
 	// ошибке подряд кот не хандрит, а сердится.
 	lastTurnFailed bool
 
+	// lastAgent — агент текущего хода. Нужен инструменту self_status,
+	// чтобы агент видел свой настоящий системный промпт, а не базовый.
+	lastAgent *agent.Agent
+
 	// setupNotes — замечания при старте (подключённые MCP-серверы и т.п.),
 	// показываются под баннером одной группой.
 	setupNotes []string
@@ -381,6 +385,7 @@ func (a *app) buildTools() {
 		Spawn:      a.spawnAgent,
 		Agents:     a.agentsInfo,
 		Ask:        a.askUser,
+		Self:       a.selfReport,
 	}
 	a.tools = tools.New(env)
 	a.tools.RegisterSkills()
@@ -578,6 +583,9 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 	ag.WithAgentMode(a.sess.AgentMode)
 	ag.Notes = a.notesText()
 	ag.OnNote = a.onNote
+	a.mu.Lock()
+	a.lastAgent = ag
+	a.mu.Unlock()
 	if a.repo.Cfg.PlanMode {
 		ag.System = planModeSystem
 	}

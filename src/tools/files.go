@@ -38,6 +38,10 @@ const (
 
 	schemaNote = `{"type":"object","properties":{"title":{"type":"string","description":"Короткий заголовок заметки"},"body":{"type":"string","description":"Текст заметки — факт, вывод, договорённость"}},"required":["title","body"]}`
 
+	schemaRemember = `{"type":"object","properties":{"action":{"type":"string","enum":["write","forget","read"],"description":"write — запомнить факт между сессиями; forget — забыть по подстроке; read — показать всю память (по умолчанию)"},"fact":{"type":"string","description":"Текст факта — для write и поиск для forget"},"note":{"type":"string","description":"Почему факт важен (для write). Помеченные факты попадают в промпт в первую очередь и не протухают."}}}`
+
+	schemaSelf = `{"type":"object","properties":{"section":{"type":"string","description":"Часть отчёта: контекст, расход, итерации, заметки, субагенты, лимиты. Пусто — весь отчёт."}}}`
+
 	schemaSpawn = `{"type":"object","properties":{"type":{"type":"string","description":"Тип субагента или имя своего агента из .gcli/agents/*.md. Типы: explorer — карта кода (только чтение); reviewer — ревью и баги (чтение); planner — план реализации (чтение); coder — реализация; tester — тесты; frontend — верстка с проверкой по скриншотам; researcher — веб-исследование; docs — документация; general — универсал"},"task":{"type":"string","description":"Чёткая задача для субагента: что сделать и что вернуть"},"name":{"type":"string","description":"Имя субагента (необязательно)"},"model":{"type":"string","description":"Модель субагента (необязательно, по умолчанию текущая)"},"read_only":{"type":"boolean","description":"Запретить любые изменения файлов (по умолчанию true для explorer/reviewer/planner/researcher)"}},"required":["type","task"]}`
 
 	schemaAgents = `{"type":"object","properties":{"action":{"type":"string","enum":["status","list","result"],"description":"status — сводка; list — список запусков; result — итог субагента по имени"},"name":{"type":"string","description":"Имя субагента для action=result"}}}`
@@ -66,6 +70,10 @@ func (r *Registry) registerBuiltins() {
 		schemaThink, "think", false, r.hThink)
 	r.register("task_note", "Записать важный факт, вывод или договорённость в память задачи — будет доступно субагентам и в /export.",
 		schemaNote, "plan", false, r.hNote)
+	r.register("remember", "Долговременная память, переживает сессии: action=write запомнить факт о проекте (fact, note — почему важен); action=forget забыть по подстроке; action=read показать всё. Используй для дорогих выводов: команды сборки, грабли, договорённости.",
+		schemaRemember, "plan", false, r.hRemember)
+	r.register("self_status", "Посмотреть на самого себя: заполнение контекста и порог сжатия, расход токенов, оставшиеся итерации, заметки, субагенты, фактические лимиты инструментов. Звони, когда не уверен в бюджете или не понимаешь, что уже было сделано.",
+		schemaSelf, "think", false, r.hSelfStatus)
 }
 
 // ---------- Инструменты чтения ----------

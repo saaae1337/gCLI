@@ -194,6 +194,12 @@ func (a *Agent) BuildRequest() core.ChatRequest {
 	if mem := a.memoryBlock(); mem != "" {
 		creq.System += "\n\n# Память проекта (GCLI.md)\n\n" + mem
 	}
+	// Долговременная память агента: факты, которые он сам выяснил
+	// в прошлых сессиях. Идёт после проектной памяти, чтобы её
+	// содержимое считалось более важным.
+	if lm := tools.MemoryDigest(24); lm != "" {
+		creq.System += "\n\n" + lm
+	}
 	if sp := a.skillsBlock(); sp != "" {
 		creq.System += "\n\n" + sp
 	}
