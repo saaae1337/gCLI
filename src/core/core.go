@@ -200,6 +200,7 @@ type Config struct {
 	SubModel      string `json:"sub_model,omitempty"`       // модель субагентов (пусто = как у главного)
 	SubMaxTurns   int    `json:"sub_max_turns,omitempty"`   // лимит ходов одного субагента
 	SubTimeoutMin int    `json:"sub_timeout_min,omitempty"` // потолок времени на субагента, минут (0 = 10)
+	SubRetries    int    `json:"sub_retries,omitempty"`     // попытки запуска субагента при сбое (1..3, 0 = 2)
 	ParallelTools bool   `json:"parallel_tools,omitempty"`  // выполнять параллельные вызовы инструментов
 }
 

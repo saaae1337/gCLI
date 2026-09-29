@@ -46,6 +46,45 @@ func (s *subagentSession) Todos() []tools.TodoItem          { return s.todos }
 func (s *subagentSession) ReplaceMessages(m []core.Message) { s.msgs = m }
 func (s *subagentSession) Usage() core.Usage                { return s.usage }
 
+// CollectReport — принудительно собрать отчёт из уже собранного контекста.
+//
+// Ключевая идея прочности: модель часто уже знает ответ к моменту сбоя,
+// но не успевает его сформулировать — цикл рвётся по лимиту итераций или
+// по обрыву связи на полуслове. Здесь инструменты отключаются, и модели
+// предлагается единственная задача: сдать отчёт. Если и это не выходит,
+// отчёт собирается детерминированно из истории — но это уже аварийный
+// вариант, и его текст честно помечается как неполный.
+func (a *Agent) CollectReport(ctx context.Context) string {
+	if !a.AgentMode {
+		return ""
+	}
+	const demand = "[Система] Инструменты недоступны. Сдай ИТОГОВЫЙ ОТЧЁТ по исходной задаче: " +
+		"что сделано, что не получилось и почему. Отчёт самодостаточный — заказчик не видит твоего контекста."
+
+	prevSys, prevReg, prevMode := a.System, a.d.Registry, a.AgentMode
+	a.System = prevSys + finalizePrompt
+	a.d.Registry = emptyRegistry(prevReg)
+	a.AgentMode = false
+	defer func() {
+		a.System, a.d.Registry, a.AgentMode = prevSys, prevReg, prevMode
+	}()
+
+	a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: demand})
+	for i := 0; i < finalizeTurns; i++ {
+		assistant, err := a.callModel(ctx, a.BuildRequest(), true)
+		if err != nil {
+			break
+		}
+		a.Turns++
+		assistant.ToolCalls = nil
+		a.d.Session.AddMessage(assistant)
+		if txt := strings.TrimSpace(assistant.Content); txt != "" {
+			return txt
+		}
+	}
+	return ""
+}
+
 // RunSubagent — выполнить задачу субагента и вернуть отчёт.
 func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subagents.Outcome {
 	sess := &subagentSession{}
@@ -128,10 +167,15 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 	ag.Notes = spec.Notes
 	ag.NotesList = splitNotes(spec.Notes)
 
-	// Первый ход: задача.
+	// Первый ход: задача. При повторной попытке добавляем объяснение,
+	// почему прошлый запуск не удался, — иначе субагент повторит
+	// ту же неудачную тактику и снова вернёт обрывок.
 	task := spec.Task
 	if spec.Summary != "" {
 		task = "Контекст задачи:\n" + spec.Summary + "\n\nТвоя задача:\n" + spec.Task
+	}
+	if spec.RetryHint != "" {
+		task += spec.RetryHint
 	}
 
 	var toolCalls int
@@ -143,15 +187,49 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 	}
 
 	if err := ag.Run(ctx, task); err != nil {
+		// Обрыв связи — не повод отдавать главному агенту пустоту.
+		// Сеть может лечь уже после того, как субагент собрал всё нужное
+		// в своей истории, поэтому даём ему один финальный ход без
+		// инструментов: требуем отчёт из того, что уже есть.
+		if ctx.Err() != nil {
+			return subagents.Outcome{
+				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
+				Turns: ag.Turns,
+				Tools: toolCalls,
+				Usage: sess.usage,
+			}
+		}
+		report := ag.CollectReport(context.Background())
+		if strings.TrimSpace(report) == "" {
+			return subagents.Outcome{
+				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
+				Turns: ag.Turns,
+				Tools: toolCalls,
+				Usage: sess.usage,
+			}
+		}
 		return subagents.Outcome{
-			Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
-			Turns: ag.Turns,
-			Tools: toolCalls,
-			Usage: sess.usage,
+			Full:    report,
+			Summary: subagents.Summarize(report),
+			Turns:   ag.Turns,
+			Tools:   toolCalls,
+			Usage:   sess.usage,
 		}
 	}
 
 	full := lastAssistantText(sess.msgs)
+	// Отчёт может оказаться пустым, обрезанным или мыслью вслух.
+	// В этом случае собираем его принудительно, пока есть что сказать.
+	for attempt := 0; attempt < 2; attempt++ {
+		if subagents.AssessReport(full) == subagents.ReportOK {
+			break
+		}
+		report := ag.CollectReport(context.Background())
+		if strings.TrimSpace(report) == "" || report == full {
+			break
+		}
+		full = report
+	}
 	if strings.TrimSpace(full) == "" {
 		full = summarize(sess.msgs, 40)
 	}

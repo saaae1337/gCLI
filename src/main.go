@@ -405,7 +405,19 @@ func (a *app) buildTools() {
 
 // buildPool — собрать пул субагентов.
 func (a *app) buildPool() {
-	a.pool = subagents.NewPool(a.runSubagent, subagents.PoolOptions{
+	// Runner оборачивается слоем прочности: временный обрыв сети и
+	// негодный (пустой/обрезанный) отчёт — это не повод оставлять
+	// главного агента без результата. Раньше такие сбои доходили до
+	// него как есть, и он получал обрывок вместо ответа.
+	runner := a.runSubagent
+	if a.repo.Cfg.Subagents {
+		rs := subagents.DefaultResilience()
+		if n := a.repo.Cfg.SubRetries; n > 0 {
+			rs.Attempts = core.Clamp(n, 1, 3)
+		}
+		runner = subagents.Wrap(runner, rs)
+	}
+	a.pool = subagents.NewPool(runner, subagents.PoolOptions{
 		MaxParallel: core.Clamp(a.repo.Cfg.SubMaxPar, 1, 8),
 		MaxDepth:    core.Clamp(a.repo.Cfg.SubMaxDepth, 1, 3),
 		Enabled:     a.repo.Cfg.Subagents,

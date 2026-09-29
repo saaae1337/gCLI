@@ -38,6 +38,8 @@ type Run struct {
 	Summary  string
 	Full     string
 	Err      string
+	// Retries — сколько повторов понадобилось (слой прочности).
+	Retries int
 
 	cancel context.CancelFunc
 }
@@ -92,6 +94,9 @@ type Spec struct {
 	// ToolsAllow — белый список инструментов (пользовательские агенты).
 	// nil = набор по типу.
 	ToolsAllow []string
+	// RetryHint — добавка к задаче при повторной попытке (слой прочности).
+	// Модели сообщает, что предыдущая попытка сорвалась и что делать иначе.
+	RetryHint string
 }
 
 // Runner — функция, выполняющая задачу субагента.
@@ -105,6 +110,8 @@ type Outcome struct {
 	Turns   int
 	Tools   int
 	Usage   core.Usage
+	// Retries — сколько повторов понадобилось (0 = уложился с первого раза).
+	Retries int
 }
 
 // Pool — пул субагентов: запуск, лимиты, журнал.
@@ -224,6 +231,7 @@ func (p *Pool) Spawn(ctx context.Context, spec Spec) (Outcome, error) {
 	run.Turns = out.Turns
 	run.Tools = out.Tools
 	run.Usage = out.Usage
+	run.Retries = out.Retries
 	switch {
 	case err != nil:
 		run.Status = StatusError
