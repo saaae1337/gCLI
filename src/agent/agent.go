@@ -203,6 +203,11 @@ func (a *Agent) BuildRequest() core.ChatRequest {
 	if sp := a.skillsBlock(); sp != "" {
 		creq.System += "\n\n" + sp
 	}
+	// Чем проверять этот проект. Без этой строки агент гадает команду
+	// или вовсе её не запускает, и правка уходит непроверенной.
+	if h := tools.VerifyHint(a.WorkDir); h != "" {
+		creq.System += "\n\n# Проверка результата\n\n" + h
+	}
 	return creq
 }
 

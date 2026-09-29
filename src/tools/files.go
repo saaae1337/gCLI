@@ -42,6 +42,8 @@ const (
 
 	schemaSelf = `{"type":"object","properties":{"section":{"type":"string","description":"Часть отчёта: контекст, расход, итерации, заметки, субагенты, лимиты. Пусто — весь отчёт."}}}`
 
+	schemaVerify = `{"type":"object","properties":{"command":{"type":"string","description":"Команда проверки. Пусто — определить автоматически по файлам проекта"},"suggest":{"type":"boolean","description":"Только показать варианты проверки, ничего не запускать"},"list":{"type":"boolean","description":"То же, что suggest"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах (по умолчанию 300)"},"workdir":{"type":"string","description":"Каталог запуска"},"no_baseline":{"type":"boolean","description":"Не обновлять базовую линию: посмотреть, что сломано, не потеряв предыдущее состояние"}}}`
+
 	schemaSpawn = `{"type":"object","properties":{"type":{"type":"string","description":"Тип субагента или имя своего агента из .gcli/agents/*.md. Типы: explorer — карта кода (только чтение); reviewer — ревью и баги (чтение); planner — план реализации (чтение); coder — реализация; tester — тесты; frontend — верстка с проверкой по скриншотам; researcher — веб-исследование; docs — документация; general — универсал"},"task":{"type":"string","description":"Чёткая задача для субагента: что сделать и что вернуть"},"name":{"type":"string","description":"Имя субагента (необязательно)"},"model":{"type":"string","description":"Модель субагента (необязательно, по умолчанию текущая)"},"read_only":{"type":"boolean","description":"Запретить любые изменения файлов (по умолчанию true для explorer/reviewer/planner/researcher)"}},"required":["type","task"]}`
 
 	schemaAgents = `{"type":"object","properties":{"action":{"type":"string","enum":["status","list","result"],"description":"status — сводка; list — список запусков; result — итог субагента по имени"},"name":{"type":"string","description":"Имя субагента для action=result"}}}`
@@ -74,6 +76,8 @@ func (r *Registry) registerBuiltins() {
 		schemaRemember, "plan", false, r.hRemember)
 	r.register("self_status", "Посмотреть на самого себя: заполнение контекста и порог сжатия, расход токенов, оставшиеся итерации, заметки, субагенты, фактические лимиты инструментов. Звони, когда не уверен в бюджете или не понимаешь, что уже было сделано.",
 		schemaSelf, "think", false, r.hSelfStatus)
+	r.register("verify", "Проверить, что правки реально работают. Без command: определит, чем проверять этот проект (по go.mod, package.json, Cargo.toml…) и разберёт ошибки. Сравнивает с прошлым прогоном и показывает НОВЫЕ падения — то есть что сломалось именно из-за последней правки.",
+		schemaVerify, "exec", false, r.hVerify)
 }
 
 // ---------- Инструменты чтения ----------
