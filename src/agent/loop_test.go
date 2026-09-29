@@ -61,7 +61,7 @@ func TestLoopDetectorIgnoresFormattingDifferences(t *testing.T) {
 func TestLoopDetectorDifferentArgsAreNotLoop(t *testing.T) {
 	d := NewLoopDetector()
 	for i := 0; i < 5; i++ {
-		w := d.Record([]core.ToolCall{tc("read_file", `{"path":"file` + string(rune('a'+i)) + `.go"}`)}, nil)
+		w := d.Record([]core.ToolCall{tc("read_file", `{"path":"file`+string(rune('a'+i))+`.go"}`)}, nil)
 		if w != "" {
 			t.Fatalf("разные файлы — не петля: %s", w)
 		}

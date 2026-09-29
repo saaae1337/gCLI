@@ -220,7 +220,8 @@ func TestPoolSpawnPropagatesRetries(t *testing.T) {
 	}
 	if d := p.Details("explorer-1"); !strings.Contains(d, "готов") {
 		t.Errorf("отчёт не записан в пул:\n%s", d)
-	}}
+	}
+}
 
 func TestQualityTextAllCases(t *testing.T) {
 	for _, q := range []Quality{ReportEmpty, ReportNarrative, ReportTruncated} {

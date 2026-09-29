@@ -28,11 +28,11 @@ type SelfReport struct {
 	// Лимит итераций агентного цикла.
 	MaxIters int
 	// Модель и провайдер.
-	Model  string
+	Model    string
 	Provider string
 	// Режим: главный агент или субагент.
 	Subagent string
-	Depth     int
+	Depth    int
 	// Собственная статистика.
 	Usage core.Usage
 	Stats core.Stats

@@ -55,9 +55,9 @@ func ReadMemory() []MemoryEntry {
 
 // MemoryEntry — одна запись долговременной памяти.
 type MemoryEntry struct {
-	Date  string // 2026-09-29
-	Fact  string // нормализованный текст факта
-	Note  string // необязательный комментарий после #
+	Date string // 2026-09-29
+	Fact string // нормализованный текст факта
+	Note string // необязательный комментарий после #
 }
 
 // ParseMemory — разобрать содержимое файла памяти.
