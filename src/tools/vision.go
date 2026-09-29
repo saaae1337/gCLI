@@ -56,12 +56,12 @@ const schemaReadImage = `{"type":"object","properties":{` +
 
 // RegisterVision — инструменты зрения.
 func (r *Registry) RegisterVision() {
-	r.register("screenshot", "Сделать скриншот страницы и ПОСМОТРЕТЬ на него глазами: снимок прикладывается к твоему контексту как изображение. "+
+	r.registerBound("screenshot", "Сделать скриншот страницы и ПОСМОТРЕТЬ на него глазами: снимок прикладывается к твоему контексту как изображение. "+
 		"Используй после вёрстки/изменения UI (target — URL или HTML-файл), чтобы проверить, как страница выглядит на самом деле.",
-		schemaScreenshot, "read", false, r.hScreenshot)
-	r.register("read_image", "Посмотреть на изображение с диска (png, jpg, webp, gif): файл прикладывается к контексту как изображение. "+
+		schemaScreenshot, "read", false, func(r *Registry) Handler { return r.hScreenshot })
+	r.registerBound("read_image", "Посмотреть на изображение с диска (png, jpg, webp, gif): файл прикладывается к контексту как изображение. "+
 		"Используй для макетов, скриншотов пользователя, схем.",
-		schemaReadImage, "read", false, r.hReadImage)
+		schemaReadImage, "read", false, func(r *Registry) Handler { return r.hReadImage })
 }
 
 // findBrowser — найти headless-браузер для скриншотов.

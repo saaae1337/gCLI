@@ -188,8 +188,8 @@ const schemaLoadSkill = `{"type":"object","properties":{"name":{"type":"string",
 
 // RegisterSkills — зарегистрировать инструмент load_skill.
 func (r *Registry) RegisterSkills() {
-	r.register("load_skill", "Загрузить навык (skill) из библиотеки пользователя: полный текст инструкций по имени. Список доступных навыков — в системном промпте и в /skills.",
-		schemaLoadSkill, "read", false, r.hLoadSkill)
+	r.registerBound("load_skill", "Загрузить навык (skill) из библиотеки пользователя: полный текст инструкций по имени. Список доступных навыков — в системном промпте и в /skills.",
+		schemaLoadSkill, "read", false, func(r *Registry) Handler { return r.hLoadSkill })
 }
 
 // hLoadSkill — отдать модели полный текст навыка.

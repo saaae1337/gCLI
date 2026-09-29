@@ -381,6 +381,7 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 			// Лимит исчерпан: даём агенту несколько ходов, чтобы сдать
 			// результат, вместо обрыва цикла на полуслове.
 			a.Turns = iter - 1
+			a.autoHandoff(maxIters)
 			if err := a.finalize(ctx); err != nil {
 				return err
 			}
@@ -446,6 +447,33 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 	}
 	a.MaybeAutoCompact()
 	return nil
+}
+
+// autoHandoff — сохранить снимок состояния при обрыве хода по лимиту итераций.
+//
+// Делается машинно, а не по просьбе модели, потому что ровно в этот момент
+// модель уже не способна оценить, что важно: ход обрывается на середине
+// работы. Снимок кладётся и в историю (следующий ход читает его как
+// пользовательское сообщение), и на диск (переживает сжатие контекста).
+// Ошибка записи не должна ломать ход: снимок — страховка, а не условие работы.
+func (a *Agent) autoHandoff(maxIters int) {
+	if a.d.Registry == nil || !a.AgentMode {
+		return
+	}
+	txt, err := a.d.Registry.AutoHandoff(fmt.Sprintf("ход оборвался на лимите итераций (%d)", maxIters))
+	if err != nil {
+		if a.OnNote != nil {
+			a.OnNote("handoff", "не удалось сохранить снимок состояния: "+err.Error())
+		}
+		return
+	}
+	a.d.Session.AddMessage(core.Message{
+		Role:    core.RoleUser,
+		Content: "[Система] Ход оборвался на лимите итераций. Ниже — автоматический снимок состояния.\n\n" + txt,
+	})
+	if a.OnNote != nil {
+		a.OnNote("handoff", "сохранён снимок состояния: следующий ход продолжит с него, а не с нуля")
+	}
 }
 
 // finalize — принудительно собрать результат после исчерпания лимита итераций.

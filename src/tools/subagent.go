@@ -10,15 +10,15 @@ import (
 
 // registerSubagentTools — инструменты делегирования (доступны в агентном режиме).
 func (r *Registry) registerSubagentTools() {
-	r.register("spawn_agent", "Запустить субагента — отдельного ИИ-агента с собственным контекстом и (возможно) другой моделью. "+
+	r.registerBound("spawn_agent", "Запустить субагента — отдельного ИИ-агента с собственным контекстом и (возможно) другой моделью. "+
 		"Специализации: explorer (карта кода), reviewer (баги/безопасность), planner (план реализации), coder (реализация), "+
 		"tester (тесты), frontend (верстка с проверкой по скриншотам), researcher (веб/доки), docs (документация), general (универсал). "+
 		"Также работают имена твоих агентов из .gcli/agents/*.md. Используй для независимых подзадач; субагент вернёт отчёт — дождись и используй его.",
-		schemaSpawn, "agent", false, r.hSpawnAgent)
-	r.register("agent_status", "Сводка по субагентам: status — что сейчас работает, list — все запуски сессии, result — итог по имени.",
-		schemaAgents, "agent", false, r.hAgentStatus)
-	r.register("ask_user", "Задать вопрос пользователю, когда без его решения задачу нельзя продолжить. Используй редко — только для развилок.",
-		schemaAsk, "agent", false, r.hAskUser)
+		schemaSpawn, "agent", false, func(r *Registry) Handler { return r.hSpawnAgent })
+	r.registerBound("agent_status", "Сводка по субагентам: status — что сейчас работает, list — все запуски сессии, result — итог по имени.",
+		schemaAgents, "agent", false, func(r *Registry) Handler { return r.hAgentStatus })
+	r.registerBound("ask_user", "Задать вопрос пользователю, когда без его решения задачу нельзя продолжить. Используй редко — только для развилок.",
+		schemaAsk, "agent", false, func(r *Registry) Handler { return r.hAskUser })
 }
 
 // RegisterSubagentTools — публично зарегистрировать инструменты субагентов.
@@ -103,8 +103,12 @@ func (r *Registry) hAskUser(_ context.Context, m map[string]any) (Result, error)
 	opts := ArgStrSlice(m, "options")
 	ans, err := r.env.Ask(q, opts)
 	if err != nil {
+		// Вопрос задан, ответа нет — след обязателен, иначе агент будет ждать
+		// ответа, которого не существует, и потеряет ход.
+		r.recordAsk(q, "", true)
 		return Result{}, err
 	}
+	r.recordAsk(q, ans, false)
 	return Result{
 		Text:    fmt.Sprintf("Ответ пользователя: %s", ans),
 		Summary: "ответ: " + coreTruncate(coreOneLine(ans), 70),

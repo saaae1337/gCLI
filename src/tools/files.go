@@ -14,7 +14,7 @@ import (
 
 // Схемы инструментов (JSON Schema для function calling).
 const (
-	schemaRead = `{"type":"object","properties":{"path":{"type":"string","description":"Путь к файлу (относительный или абсолютный)"},"offset":{"type":"integer","description":"Начальная строка (1-based)"},"limit":{"type":"integer","description":"Максимум строк (по умолчанию 2000)"}},"required":["path"]}`
+	schemaRead = `{"type":"object","properties":{"path":{"type":"string","description":"Путь к файлу (относительный или абсолютный)"},"offset":{"type":"integer","description":"Начальная строка (1-based)"},"limit":{"type":"integer","description":"Максимум строк (по умолчанию 2000)"},"escape":{"type":"boolean","description":"Показать невидимое: табы как →, CR при CRLF, неразрывные пробелы, BOM. Включай, когда edit_file не находит old_string"}},"required":["path"]}`
 
 	schemaWrite = `{"type":"object","properties":{"path":{"type":"string","description":"Путь к файлу"},"content":{"type":"string","description":"Полное содержимое файла"}},"required":["path","content"]}`
 
@@ -49,41 +49,79 @@ const (
 	schemaAgents = `{"type":"object","properties":{"action":{"type":"string","enum":["status","list","result"],"description":"status — сводка; list — список запусков; result — итог субагента по имени"},"name":{"type":"string","description":"Имя субагента для action=result"}}}`
 
 	schemaAsk = `{"type":"object","properties":{"question":{"type":"string","description":"Вопрос пользователю, требующий решения"},"options":{"type":"array","items":{"type":"string"},"description":"Варианты ответа, если их немного"}},"required":["question"]}`
+
+	schemaChanges = `{"type":"object","properties":{"path":{"type":"string","description":"Показать правки только по этому файлу"},"detail":{"type":"boolean","description":"Приложить diff последних правок"}}}`
+
+	schemaRevert = `{"type":"object","properties":{"path":{"type":"string","description":"Файл должен совпадать с последней правкой — иначе откат откажется"},"dry_run":{"type":"boolean","description":"Показать diff отката, ничего не применяя"},"show":{"type":"boolean","description":"То же, что dry_run"}}}`
+
+	schemaProject = `{"type":"object","properties":{}}`
+
+	schemaHandoff = `{"type":"object","properties":{"next":{"type":"string","description":"С чего начать следующий ход — одна фраза, самое важное для продолжения"},"done":{"type":"array","items":{"type":"string"},"description":"Что реально сделано, короткими пунктами"},"blocked":{"type":"string","description":"На чём застрял и чего ждёт"}}}`
+
+	schemaHandoffRead = `{"type":"object","properties":{}}`
+
+	schemaInspect = `{"type":"object","properties":{"path":{"type":"string","description":"Файл для точного просмотра"},"offset":{"type":"integer","description":"Начальная строка (1-based)"},"limit":{"type":"integer","description":"Сколько строк показать (по умолчанию 40)"},"search":{"type":"string","description":"Показать строки вокруг этого текста — удобнее, чем считать номера"}},"required":["path"]}`
+
+	schemaDryRun = `{"type":"object","properties":{"tool":{"type":"string","description":"Имя инструмента для проверки"},"args":{"type":"string","description":"Аргументы в виде JSON, как ты бы их передал"},"command":{"type":"string","description":"Для проверки bash/verify — команда, которую ты собираешься выполнить"}},"required":["tool"]}`
+
+	schemaJob = `{"type":"object","properties":{"action":{"type":"string","enum":["run","status","output","stop","clear"],"description":"run — запустить в фоне; status — список с кодами выхода; output — забрать вывод (без id — последний); stop — завершить; clear — убрать завершённые"},"command":{"type":"string","description":"Команда для action=run"},"id":{"type":"string","description":"ID процесса для output/stop"},"workdir":{"type":"string","description":"Каталог запуска"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах для action=run; не задан — без ограничения"}}}`
+
+	schemaAskTrace = `{"type":"object","properties":{}}`
 )
 
 // registerBuiltins — все встроенные инструменты.
 func (r *Registry) registerBuiltins() {
-	r.register("read_file", "Прочитать текстовый файл. Возвращает содержимое с номерами строк. Читай перед edit_file.",
-		schemaRead, "read", false, r.hReadFile)
-	r.register("write_file", "Создать файл или полностью перезаписать. Перед вызовом пользователю показывается diff.",
-		schemaWrite, "write", true, r.hWriteFile)
-	r.register("edit_file", "Точечная замена фрагмента в файле. old_string должен точно совпадать с содержимым (с отступами). Сначала read_file.",
-		schemaEdit, "write", true, r.hEditFile)
-	r.register("list_dir", "Список файлов и папок в каталоге.", schemaList, "read", false, r.hListDir)
-	r.register("glob", "Найти файлы по шаблону (поддерживается **).", schemaGlob, "read", false, r.hGlob)
-	r.register("grep", "Поиск по регулярному выражению в файлах проекта.", schemaGrep, "read", false, r.hGrep)
-	r.register("bash", "Выполнить shell-команду и получить вывод. Не запускай интерактивные команды. Требует подтверждения пользователя.",
-		schemaBash, "exec", true, r.hBash)
-	r.register("web_search", "Поиск в интернете. Возвращает заголовки, ссылки и сниппеты.", schemaSearch, "net", false, r.hWebSearch)
-	r.register("web_fetch", "Скачать страницу и извлечь текст.", schemaFetch, "net", false, r.hWebFetch)
-	r.register("todo_write", "Вести план многошаговой задачи: создай список, обновляй статусы in_progress/completed по ходу работы.",
-		schemaTodo, "plan", false, r.hTodoWrite)
-	r.register("think", "Приватное размышление: разложи сложную задачу на шаги, проверь гипотезы, спланируй действия перед другими инструментами. Ничего не меняет.",
-		schemaThink, "think", false, r.hThink)
-	r.register("task_note", "Записать важный факт, вывод или договорённость в память задачи — будет доступно субагентам и в /export.",
-		schemaNote, "plan", false, r.hNote)
-	r.register("remember", "Долговременная память, переживает сессии: action=write запомнить факт о проекте (fact, note — почему важен); action=forget забыть по подстроке; action=read показать всё. Используй для дорогих выводов: команды сборки, грабли, договорённости.",
-		schemaRemember, "plan", false, r.hRemember)
-	r.register("self_status", "Посмотреть на самого себя: заполнение контекста и порог сжатия, расход токенов, оставшиеся итерации, заметки, субагенты, фактические лимиты инструментов. Звони, когда не уверен в бюджете или не понимаешь, что уже было сделано.",
-		schemaSelf, "think", false, r.hSelfStatus)
-	r.register("verify", "Проверить, что правки реально работают. Без command: определит, чем проверять этот проект (по go.mod, package.json, Cargo.toml…) и разберёт ошибки. Сравнивает с прошлым прогоном и показывает НОВЫЕ падения — то есть что сломалось именно из-за последней правки.",
-		schemaVerify, "exec", false, r.hVerify)
+	r.registerBound("read_file", "Прочитать текстовый файл. Возвращает содержимое с номерами строк. Читай перед edit_file.",
+		schemaRead, "read", false, func(r *Registry) Handler { return r.hReadFile })
+	r.registerBound("write_file", "Создать файл или полностью перезаписать. Перед вызовом пользователю показывается diff.",
+		schemaWrite, "write", true, func(r *Registry) Handler { return r.hWriteFile })
+	r.registerBound("edit_file", "Точечная замена фрагмента в файле. old_string должен точно совпадать с содержимым (с отступами). Сначала read_file.",
+		schemaEdit, "write", true, func(r *Registry) Handler { return r.hEditFile })
+	r.registerBound("list_dir", "Список файлов и папок в каталоге.", schemaList, "read", false, func(r *Registry) Handler { return r.hListDir })
+	r.registerBound("glob", "Найти файлы по шаблону (поддерживается **).", schemaGlob, "read", false, func(r *Registry) Handler { return r.hGlob })
+	r.registerBound("grep", "Поиск по регулярному выражению в файлах проекта.", schemaGrep, "read", false, func(r *Registry) Handler { return r.hGrep })
+	r.registerBound("bash", "Выполнить shell-команду и получить вывод. Не запускай интерактивные команды. Требует подтверждения пользователя.",
+		schemaBash, "exec", true, func(r *Registry) Handler { return r.hBash })
+	r.registerBound("web_search", "Поиск в интернете. Возвращает заголовки, ссылки и сниппеты.", schemaSearch, "net", false, func(r *Registry) Handler { return r.hWebSearch })
+	r.registerBound("web_fetch", "Скачать страницу и извлечь текст.", schemaFetch, "net", false, func(r *Registry) Handler { return r.hWebFetch })
+	r.registerBound("todo_write", "Вести план многошаговой задачи: создай список, обновляй статусы in_progress/completed по ходу работы.",
+		schemaTodo, "plan", false, func(r *Registry) Handler { return r.hTodoWrite })
+	r.registerBound("think", "Приватное размышление: разложи сложную задачу на шаги, проверь гипотезы, спланируй действия перед другими инструментами. Ничего не меняет.",
+		schemaThink, "think", false, func(r *Registry) Handler { return r.hThink })
+	r.registerBound("task_note", "Записать важный факт, вывод или договорённость в память задачи — будет доступно субагентам и в /export.",
+		schemaNote, "plan", false, func(r *Registry) Handler { return r.hNote })
+	r.registerBound("remember", "Долговременная память, переживает сессии: action=write запомнить факт о проекте (fact, note — почему важен); action=forget забыть по подстроке; action=read показать всё. Используй для дорогих выводов: команды сборки, грабли, договорённости.",
+		schemaRemember, "plan", false, func(r *Registry) Handler { return r.hRemember })
+	r.registerBound("self_status", "Посмотреть на самого себя: заполнение контекста и порог сжатия, расход токенов, оставшиеся итерации, заметки, субагенты, фактические лимиты инструментов. Звони, когда не уверен в бюджете или не понимаешь, что уже было сделано.",
+		schemaSelf, "think", false, func(r *Registry) Handler { return r.hSelfStatus })
+	r.registerBound("verify", "Проверить, что правки реально работают. Без command: определит, чем проверять этот проект (по go.mod, package.json, Cargo.toml…) и разберёт ошибки. Сравнивает с прошлым прогоном и показывает НОВЫЕ падения — то есть что сломалось именно из-за последней правки.",
+		schemaVerify, "exec", false, func(r *Registry) Handler { return r.hVerify })
+
+	// ---- Состояние и самоконтроль работы ----
+	r.registerBound("handoff", "Сохранить снимок состояния перед концом хода: что изменено, что сделано, что осталось, с чего начать следующий ход. КАЖДАЙ, когда итерации кончаются или работа не помещается в ход, — иначе следующий ход начнётся с нуля. Приближение к лимиту итераций снимет снимок АВТОМАТИЧЕСКИ: вручную зови только когда обрываешь работу осознанно (сдаёшь задачу пользователю или уходишь в паузу).",
+		schemaHandoff, "plan", false, func(r *Registry) Handler { return r.hHandoff })
+	r.registerBound("handoff_read", "Прочитать последний снимок состояния. Вызывай В НАЧАЛЕ хода, если работа продолжается и в прошлый раз был сделан handoff. Снимок может остаться с прошлого обрыва по лимиту итераций.",
+		schemaHandoffRead, "plan", false, func(r *Registry) Handler { return r.hHandoffRead })
+	r.registerBound("project_info", "Где корень проекта, какой стек, где точки входа и чем собирать. Звони в начале работы в чужом репозитории: экономит вызовы на поиск go.mod и промахивающуюся сборку. В конце отчёта предлагает факты для remember.",
+		schemaProject, "read", false, func(r *Registry) Handler { return r.hProjectInfo })
+	r.registerBound("changes", "Что я поменял в этом ходе: список файлов, строки, плюс состояние рабочего дерева git — без шума вроде «LF will be replaced by CRLF».",
+		schemaChanges, "read", false, func(r *Registry) Handler { return r.hChanges })
+	r.registerBound("revert_last", "Откатить последнюю правку (write_file или edit_file). По умолчанию показывает, что изменится; для применения не передавай dry_run. Откажется, если файл уже меняли не ты — чтобы не затереть чужую работу.",
+		schemaRevert, "write", true, func(r *Registry) Handler { return r.hRevertLast })
+	r.registerBound("inspect", "Показать файл с видимыми невидимыми символами: табы как →, CR при CRLF, неразрывные пробелы, BOM. Звони, когда edit_file не находит old_string: сразу видно, чем текст отличается от того, что в файле. То же делает read_file с escape:true.",
+		schemaInspect, "read", false, func(r *Registry) Handler { return r.hInspect })
+	r.registerBound("dry_run", "Показать, что инструмент сделал бы, ничего не делая: для write — diff до и после, для bash — какая команда запустится. Нужен перед рискованной правкой и при проверке самого инструмента. Для edit_file показывает результат замены, для bash — команду и каталог запуска.",
+		schemaDryRun, "think", false, func(r *Registry) Handler { return r.hDryRun })
+	r.registerBound("job", "Фоновые процессы для долгих команд: action=run запустить в фоне, status — список, output — забрать вывод и код выхода, stop — завершить. Для сборки и тестов, которые не влезают в таймаут bash. action=output без id берёт последний процесс; clear убирает завершённые.",
+		schemaJob, "exec", true, func(r *Registry) Handler { return r.hJob })
+	r.registerBound("ask_trace", "Что я спрашивал у пользователя и что получил в ответ. Проверяй, если кажется, что ждёшь ответа, которого не было: отсутствие следа означает, что вопрос не был задан.",
+		schemaAskTrace, "plan", false, func(r *Registry) Handler { return r.hAskTrace })
 }
 
 // ---------- Инструменты чтения ----------
 
 // hReadFile — чтение файла с нумерацией строк.
-func (r *Registry) hReadFile(_ context.Context, m map[string]any) (Result, error) {
+func (r *Registry) hReadFile(ctx context.Context, m map[string]any) (Result, error) {
 	raw := ArgStr(m, "path")
 	if raw == "" {
 		return Result{}, fmt.Errorf("укажи path")
@@ -94,6 +132,13 @@ func (r *Registry) hReadFile(_ context.Context, m map[string]any) (Result, error
 		return Result{}, err
 	}
 	markRead(r.env.ReadFiles, p)
+
+	// escape — тот же escape-вид, что у inspect. Дублировать обработчик
+	// незачем: агент чаще читает именно read_file, и переключать режим
+	// отдельным инструментом он забывает.
+	if ArgBool(m, "escape") {
+		return r.hInspect(ctx, m)
+	}
 
 	if core.IsBinary(data) {
 		return Result{
@@ -228,8 +273,10 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 	content := ArgStr(m, "content")
 
 	var old string
+	existed := false
 	if b, err := os.ReadFile(p); err == nil {
 		old = string(b)
+		existed = true
 	}
 	if old == content {
 		return Result{Text: "Файл не изменился — запись отменена (содержимое идентично)", Summary: "без изменений"}, nil
@@ -244,6 +291,9 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 	if err := core.WriteAtomic(p, []byte(content), 0o644); err != nil {
 		return Result{}, err
 	}
+	// Журнал: правка записана, значит её можно показать в changes и откатить.
+	// existed передаётся явно — на диске файла уже нет, если он создан.
+	r.noteChange(p, "write_file", old, content, existed)
 	markRead(r.env.ReadFiles, p)
 	rel := core.RelToWD(r.workDir, p)
 	return Result{
@@ -303,6 +353,7 @@ func (r *Registry) hEditFile(_ context.Context, m map[string]any) (Result, error
 	if err := core.WriteAtomic(p, []byte(updated), 0o644); err != nil {
 		return Result{}, err
 	}
+	r.noteChange(p, "edit_file", content, updated, true)
 	rel := core.RelToWD(r.workDir, p)
 	return Result{
 		Text:    fmt.Sprintf("Файл обновлён: %s (замен: %d)", rel, replaced),

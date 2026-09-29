@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -70,6 +71,24 @@ type Tool struct {
 	// оригинальное имя).
 	MCPSrv  string
 	MCPCall string
+
+	// rebind — пересобрать обработчик для другого реестра.
+	//
+	// Обработчики встроенных инструментов — это связанные методы
+	// (r.hReadFile), то есть они навсегда захватывают тот реестр, в котором
+	// были зарегистрированы. Копия реестра (Base/Restrict/Merge) получала
+	// поэтому инструменты с чужим состоянием: ask_trace субагента показывал
+	// вопросы главного агента, а read_file субагента отмечал файл прочитанным
+	// в карте главного. Всё это молча ломало изоляцию, ради которой копии и
+	// создаются. Пересборка обработчика чинит это в одном месте.
+	rebind func(dst *Registry) Handler
+}
+
+// bindTo — обработчик инструмента для указанного реестра.
+func (t *Tool) bindTo(dst *Registry) {
+	if t.rebind != nil {
+		t.Handler = t.rebind(dst)
+	}
 }
 
 // Registry — набор инструментов.
@@ -79,6 +98,16 @@ type Registry struct {
 	workDir   string
 	env       Env
 	skillsOff []string
+
+	// log — журнал собственных правок агента (write_file, edit_file).
+	// Ссылочное поле, как и env.ReadFiles: реестр копируется по значку в
+	// Base(), и журнал должен быть общим у главного агента и субагентов.
+	log *changeLog
+
+	// asks — журнал вопросов пользователю (след ask_user).
+	// Принадлежит реестру, а не процессу: иначе главный агент и субагенты
+	// делили бы один след и видели бы чужие ответы как свои.
+	asks *askLog
 
 	// muMCP защищает карту живых MCP-соединений (перезагрузка из UI-потока
 	// может совпасть с вызовом инструмента из агентной горутины).
@@ -196,11 +225,22 @@ func New(env Env) *Registry {
 	if env.HTTPClient == nil {
 		env.HTTPClient = NewHTTPClient()
 	}
+	if env.WorkDir == "" {
+		// Пустой рабочий каталог — источник тихих поломок: относительные пути
+		// уезжают в корень диска, а подсказки инструментов врут.
+		if wd, err := os.Getwd(); err == nil {
+			env.WorkDir = wd
+		} else {
+			env.WorkDir = "."
+		}
+	}
 	r := &Registry{
 		byName:    map[string]*Tool{},
 		workDir:   env.WorkDir,
 		env:       env,
 		skillsOff: env.SkillsOff,
+		log:       &changeLog{},
+		asks:      &askLog{},
 	}
 	r.registerBuiltins()
 	return r
@@ -214,7 +254,22 @@ func (r *Registry) Base() *Registry {
 		workDir:   r.workDir,
 		env:       r.env,
 		skillsOff: r.skillsOff,
+		// Журнал правок общий: субагент тоже вносит правки, и они должны
+		// попасть в changes и handoff главного агента.
+		log: r.log,
+		// След вопросов — свой: вопросы субагента не должны попадать в
+		// ask_trace главного агента, иначе он примет чужие ответы за свои.
+		asks: &askLog{},
 	}
+	// Карта прочитанных файлов — своя копия. env копируется по значку, а
+	// ReadFiles внутри — ссылочное поле, поэтому без этого все копии реестра
+	// делили одну карту с главным агентом: чтение субагента давало главному
+	// право редактировать файл, которого он не читал.
+	rf := make(map[string]bool, len(r.env.ReadFiles))
+	for k := range r.env.ReadFiles {
+		rf[k] = true
+	}
+	out.env.ReadFiles = rf
 	for _, t := range r.tools {
 		// Инструменты расширений и MCP-серверов живут только у главного
 		// агента: субагентам — встроенный набор.
@@ -222,6 +277,7 @@ func (r *Registry) Base() *Registry {
 			continue
 		}
 		cp := *t
+		cp.bindTo(out)
 		out.tools = append(out.tools, &cp)
 		out.byName[t.Def.Name] = &cp
 	}
@@ -294,6 +350,11 @@ func (r *Registry) Restrict(allow, deny []string) *Registry {
 		workDir:   r.workDir,
 		env:       r.env,
 		skillsOff: r.skillsOff,
+		// Журнал правок общий: субагент тоже вносит правки, и они должны
+		// попасть в changes и handoff главного агента.
+		log: r.change(),
+		// След вопросов — свой: см. Base().
+		asks: &askLog{},
 	}
 	out.env.ReadOnly = r.env.ReadOnly
 	// Копия карты прочитанных файлов: субагент не должен «наследовать»
@@ -315,6 +376,9 @@ func (r *Registry) Restrict(allow, deny []string) *Registry {
 			continue
 		}
 		cp := *t
+		// Обработчик пересобирается на out: иначе инструмент ограниченного
+		// реестра писал бы в ask_trace и карту прочитанных файлов родителя.
+		cp.bindTo(out)
 		out.tools = append(out.tools, &cp)
 		out.byName[t.Def.Name] = &cp
 	}
@@ -343,13 +407,31 @@ func isWriteTool(name string) bool {
 // Merge — вернуть копию реестра с добавленными инструментами (для объединения
 // результатов нескольких параллельных субагентов).
 func (r *Registry) Merge(others ...*Registry) *Registry {
-	out := &Registry{byName: map[string]*Tool{}, workDir: r.workDir, env: r.env, skillsOff: r.skillsOff}
+	out := &Registry{
+		byName:    map[string]*Tool{},
+		workDir:   r.workDir,
+		env:       r.env,
+		skillsOff: r.skillsOff,
+		// Журнал общий, иначе объединённый реестр «забыл» бы о правках
+		// и revert_last ругался бы на пустой журнал.
+		log: r.change(),
+		// След вопросов — свой: объединённый реестр агрегирует инструменты
+		// нескольких субагентов, и общий след смешал бы их ответы.
+		asks: &askLog{},
+	}
+	// Карта прочитанных файлов — своя копия: см. Base().
+	rf := make(map[string]bool, len(r.env.ReadFiles))
+	for k := range r.env.ReadFiles {
+		rf[k] = true
+	}
+	out.env.ReadFiles = rf
 	for _, reg := range append([]*Registry{r}, others...) {
 		for _, t := range reg.tools {
 			if out.byName[t.Def.Name] != nil {
 				continue
 			}
 			cp := *t
+			cp.bindTo(out)
 			out.tools = append(out.tools, &cp)
 			out.byName[t.Def.Name] = &cp
 		}
@@ -386,6 +468,22 @@ func (r *Registry) register(name, desc, schema, category string, confirm bool, h
 	t := &Tool{
 		Def:          ToolDef{Name: name, Description: desc, Schema: schema},
 		Handler:      h,
+		Category:     category,
+		NeedsConfirm: confirm,
+	}
+	r.tools = append(r.tools, t)
+	r.byName[name] = t
+}
+
+// registerBound — добавить инструмент вместе с фабрикой обработчика.
+//
+// Фабрика нужна копиям реестра: они пересобирают обработчик уже на себя, и
+// инструмент работает с состоянием той копии, а не исходного реестра.
+func (r *Registry) registerBound(name, desc, schema, category string, confirm bool, mk func(*Registry) Handler) {
+	t := &Tool{
+		Def:          ToolDef{Name: name, Description: desc, Schema: schema},
+		Handler:      mk(r),
+		rebind:       mk,
 		Category:     category,
 		NeedsConfirm: confirm,
 	}
@@ -447,23 +545,62 @@ func ArgStr(m map[string]any, k string) string {
 }
 
 // ArgInt — целочисленный аргумент со значением по умолчанию.
+//
+// Числа приходят из JSON (float64), но аргументы собирают и вручную — из
+// расширений, тестов, MCP-моста, и там это обычный int. Раньше такой int
+// молча превращался в значение по умолчанию: инструмент получал не тот
+// offset/limit, который ему передали, и вёл себя так, будто аргумента не
+// было вовсе. Тихий сбой хуже явной ошибки, поэтому принимаем оба вида чисел.
 func ArgInt(m map[string]any, k string, def int) int {
-	if v, ok := m[k].(float64); ok {
+	switch v := m[k].(type) {
+	case int:
+		return v
+	case int32:
 		return int(v)
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
 	}
 	return def
 }
 
 // ArgBool — булев аргумент.
 func ArgBool(m map[string]any, k string) bool {
-	v, _ := m[k].(bool)
-	return v
+	switch v := m[k].(type) {
+	case bool:
+		return v
+	case string:
+		// Некоторые модели присылают "true"/"да" строкой.
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "yes", "да", "1":
+			return true
+		}
+	}
+	return false
 }
 
 // ArgFloat — число с плавающей точкой.
 func ArgFloat(m map[string]any, k string, def float64) float64 {
-	if v, ok := m[k].(float64); ok {
+	switch v := m[k].(type) {
+	case float64:
 		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
 	}
 	return def
 }
