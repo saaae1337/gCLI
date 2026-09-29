@@ -368,6 +368,9 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 	// Счётчик реально выполненных итераций (для отчётов и статистики).
 	a.Turns = 0
 
+	// Детектор петли: ловит повторяющиеся вызовы и одинаковые ошибки.
+	loops := NewLoopDetector()
+
 	for iter := 1; ; iter++ {
 		if iter > maxIters {
 			// Лимит исчерпан: даём агенту несколько ходов, чтобы сдать
@@ -407,6 +410,12 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 				Name:       r.tc.Name,
 				Content:    r.text,
 			})
+		}
+		// Петля: предупреждаем модель, если она топчется на месте.
+		// Не прерываем цикл — решение остаётся за ней, но теперь у неё
+		// есть факты: что именно повторяется и сколько раз.
+		if warn := loops.Record(assistant.ToolCalls, results); warn != "" {
+			a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: warn})
 		}
 		// Зрение: изображения из результатов (screenshot, read_image)
 		// прикладываются следующим сообщением пользователя — оба протокола
@@ -645,7 +654,13 @@ func (a *Agent) MaybeAutoCompact() {
 	if a.d.AutoCompact <= 0 {
 		return
 	}
-	est := core.EstimateContext(a.d.Session.Messages())
+	// Считаем полный контекст: системный промпт и схемы инструментов тоже
+	// давят на окно, хоть и не меняются от хода к ходу.
+	var defs []tools.ToolDef
+	if a.AgentMode && a.d.Registry != nil {
+		defs = a.d.Registry.Defs()
+	}
+	est := core.FullContext(a.SystemPrompt(), defs, a.d.Session.Messages())
 	if est < a.d.AutoCompact || len(a.d.Session.Messages()) < 8 {
 		return
 	}

@@ -510,7 +510,32 @@ func FlattenMessages(msgs []Message) string {
 }
 
 // EstimateContext — приблизительный размер контекста в токенах.
+//
+// Учитывает только сообщения. Системный промпт сюда НЕ входит намеренно:
+// он не растёт от хода к ходу, а историю сжимать нужно. Для оценки полного
+// давления на окно используй FullContext.
 func EstimateContext(msgs []Message) int { return ApproxTokens(FlattenMessages(msgs)) }
+
+// FullContext — оценка контекста вместе с системным промптом и схемами
+// инструментов.
+//
+// Смысл в том, что системный промпт здесь — не мелочь: базовые правила,
+// блок навыков, память проекта и долговременная память вместе дают
+// десятки тысяч токенов. Раньше их не считали, и порог авто-сжатия
+// срабатывал поздно реального переполнения окна.
+func FullContext(system string, toolDefs []ToolDef, msgs []Message) int {
+	total := ApproxTokens(system)
+	for _, td := range toolDefs {
+		total += ApproxTokens(td.Name) + ApproxTokens(td.Description) + ApproxTokens(td.Schema)
+	}
+	total += EstimateContext(msgs)
+	// Изображения в оценке не участвуют (их вес непредсказуем), но их
+	// наличие стоит отметить, иначе агент не увидит, что они съедают окно.
+	for _, m := range msgs {
+		total += 1600 * len(m.Images)
+	}
+	return total
+}
 
 // Slug — превратить произвольную строку в безопасный slug.
 func Slug(s string, maxLen int) string {
