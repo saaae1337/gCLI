@@ -120,9 +120,24 @@ type app struct {
 	reasonAny   bool // модель вообще присылала размышления в этом ходу
 	// reasonHinted — подсказка про Ctrl+O уже показана в этом ходу.
 	reasonHinted bool
+	// reasonPast — между ходами на экране уже напечатан блок размышлений
+	// последнего хода (showLastReason). По нему REPL рисует приглашение
+	// усадкой, как после команды или хода, иначе кот со строкой состояния
+	// нарисовался бы поверх мыслей, а анимация заикалась бы на только что
+	// дописанных строках.
+	reasonPast bool
 	// reasonPrintedLen — сколько байт буфера уже показано на экране.
 	// Нужно, чтобы задним числом не напечатать один блок дважды.
 	reasonPrintedLen int
+
+	// reasonLast — размышления последнего ЗАВЕРШЁННОГО хода. Живут отдельно
+	// от reasonBuf и переживают resetReason: Ctrl+O после ответа должен
+	// показывать мысли, а не «размышлений пока нет». Раньше буфер обнулялся
+	// в начале следующего хода, и посмотреть мысли задним числом было уже
+	// нечем — а именно для этого Ctrl+O и нужен.
+	// Пишет только finishReason (конец хода): внутри хода Ctrl+O смотрит на
+	// reasonBuf, так что гасить прошлый блок на каждом куске незачем.
+	reasonLast string
 }
 
 // reasonHint — подсказка на строке ожидания.
@@ -220,6 +235,13 @@ func main() {
 	defer a.saveSession()
 
 	a.installSignalHandler()
+
+	// Ctrl+O читаем ровно один раз на весь сеанс (см. watchKeys): и во
+	// время хода, и между ходами. Иначе мысли последнего ответа уехали
+	// бы вверх по экрану навсегда, а на границе ходов нажатие
+	// обрабатывалось бы двумя конкурирующими читателями.
+	keys := a.startWatcher(a.ctrlO)
+	defer keys.stopWatcher()
 
 	// Режим одного запроса (CI/скрипты).
 	if *flagPrompt != "" {
@@ -742,6 +764,11 @@ func (a *app) reasonText() string {
 // Первое нажатие показывает накопленное и включает показ дальше по ходу,
 // повторное сворачивает поток и останавливает показ. Накопленное при этом
 // не выбрасывается: «скрыть» значит «убрать с глаз», а не «выбросить».
+//
+// Между ходами модель не думает и в буфере текущего хода пусто, но мысли
+// предыдущего ответа ещё интересны — тогда показываем reasonLast. Раньше
+// нажатие после ответа упиралось в пустой буфер и отвечало «размышлений пока
+// нет», хотя текст был на экране минуту назад.
 func (a *app) toggleReason() {
 	if a.quiet {
 		return
@@ -756,19 +783,18 @@ func (a *app) toggleReason() {
 	a.reasonShown = true
 	hasAny := a.reasonAny
 	open := a.reasonOpen
-	// Модель ещё думает: переключаем показ. Уже открытый поток на экране —
-	// повод свернуть. Показывать нечего — значит нажали на середине первой
-	// секунды: тогда показ включаем, иначе человек так и прождёт всю мысль.
-	show := !hasAny || !a.reasonLive || !open
+	// Показать нечего: модель ещё думает, первый кусок не пришёл. Воля
+	// пользователя сохраняется — мысли пойдут на экран сами, — но поток на
+	// экране не открываем: печатать всё равно нечего.
 	if !hasAny {
-		// Показать нечего: воля пользователя сохраняется (он ждёт мыслей),
-		// но поток на экране не открываем — печатать всё равно нечего.
 		a.reasonLive = true
 		a.reasonMu.Unlock()
 		a.ui.Info("размышлений пока нет — модель ещё думает")
 		return
 	}
-	if show {
+	// Модель ещё думает: переключаем показ. Уже открытый поток на экране —
+	// повод свернуть. Показ был выключен — повод открыть.
+	if !a.reasonLive || !open {
 		a.reasonLive = true
 		fresh := ""
 		// Печатаем только невыведенное: повторное Ctrl+O не должен
@@ -796,6 +822,62 @@ func (a *app) toggleReason() {
 	a.ui.ThinkEnd()
 }
 
+// showLastReason — Ctrl+O между ходами: показать размышления последнего
+// завершённого хода. Отдельный путь, а не toggleReason: повторное нажатие
+// здесь должно печатать заново (мысли уже уехали вверх по экрану), а воля
+// показа «дальше» к будущему ходу отношения не имеет.
+//
+// Ждёт reasonPrint: пока идёт печать ответа, печатать мысли в её хвост
+// нельзя.
+func (a *app) showLastReason() {
+	if a.quiet {
+		return
+	}
+	a.reasonPrint.Lock()
+	defer a.reasonPrint.Unlock()
+
+	a.reasonMu.Lock()
+	text := a.reasonLast
+	open := a.reasonOpen
+	a.reasonShown = true
+	// На экране появился новый блок: REPL обязан перерисовать приглашение
+	// усадкой, иначе кот со строкой состояния ляжет прямо на мысли. Пустой
+	// блок и честное «пока нет» такой перерисовки не требуют.
+	a.reasonPast = open || strings.TrimSpace(text) != ""
+	a.reasonMu.Unlock()
+
+	if strings.TrimSpace(text) == "" {
+		if open {
+			a.closeThinkStream()
+			return
+		}
+		a.ui.Info("размышлений пока нет")
+		return
+	}
+	if !open {
+		a.ui.ThinkMarker()
+	}
+	a.ui.ThinkHidden(text)
+	a.closeThinkStream()
+}
+
+// reasonPastShown — печатал ли REPL вывод после последнего блока мыслей.
+// Флаг живёт вне reasonMu: его читает только REPL (единственный поток
+// управления, вызывающий ctrlO), писать его тоже только он.
+func (a *app) reasonPastShown() bool {
+	a.reasonMu.Lock()
+	defer a.reasonMu.Unlock()
+	return a.reasonPast
+}
+
+// clearReasonPast — REPL отрисовал приглашение поверх блока мыслей: с этого
+// момента анимациям и усадке снова можно работать как обычно.
+func (a *app) clearReasonPast() {
+	a.reasonMu.Lock()
+	a.reasonPast = false
+	a.reasonMu.Unlock()
+}
+
 // reasonShownAll — показывали ли уже весь накопленный блок в этом ходу
 // (чтобы не печатать один и тот же текст дважды).
 func (a *app) reasonShownAll() bool {
@@ -806,6 +888,11 @@ func (a *app) reasonShownAll() bool {
 
 // resetReason — новый ход: буфер и состояние хода обнуляются, воля
 // пользователя (reasonLive) сохраняется.
+//
+// Размышления ПРЕДЫДУЩЕГО хода (reasonLast) здесь не трогаем: они нужны
+// именно для просмотра между ходами, и обнулять их на старте нового хода
+// означало бы вернуть баг «после ответа посмотреть нечего». Обновляет их
+// конец хода (finishReason).
 func (a *app) resetReason() {
 	a.reasonMu.Lock()
 	a.reasonBuf.Reset()
@@ -817,13 +904,46 @@ func (a *app) resetReason() {
 	a.reasonMu.Unlock()
 }
 
-// turnWatcher — следить за горячими клавишами, пока идёт ход.
+// finishReason — ход закончился: размышления текущего хода становятся
+// «последними», и Ctrl+O между ходами покажет именно их.
 //
-// Единственный читатель keys: вне хода канал просто копит байты (см.
-// stdinReader.Keys), поэтому Ctrl+O, нажатый между ходами, не теряется и не
-// съедает первую букву запроса. Работает и в -p режиме, где stdin свободен.
-func (a *app) turnWatcher(done <-chan struct{}) {
-	if a.stdin == nil {
+// Модель могла не размышлять вовсе (быстрый ответ, вызов инструмента) —
+// тогда прошлые мысли остаются в силе: они всё ещё последние, что есть.
+func (a *app) finishReason() {
+	a.reasonPrint.Lock()
+	defer a.reasonPrint.Unlock()
+	a.reasonMu.Lock()
+	if a.reasonAny {
+		a.reasonLast = a.reasonBuf.String()
+	}
+	a.reasonMu.Unlock()
+}
+
+// ctrlO — единственная реакция на Ctrl+O.
+//
+// Идёт ход — переключаем показ размышлений текущего хода; ход закончен —
+// показываем мысли последнего завершённого (reasonLast). Разветвление по
+// a.running, а не по «есть ли что показать»: ход мог начаться, а первый кусок
+// размышлений ещё не пришёл, и a.reasonAny == false там ничего не говорит.
+func (a *app) ctrlO() {
+	a.mu.Lock()
+	running := a.running
+	a.mu.Unlock()
+	if running {
+		a.toggleReason()
+		return
+	}
+	a.showLastReason()
+}
+
+// watchKeys — читать горячие клавиши, пока жив done, и звать onCtrlO.
+//
+// Ровно один читатель keys на всё время работы: канал единственный, и два
+// конкурирующих читателя обработали бы одно нажатие дважды либо потеряли бы
+// его на границе ходов. Ввод строк не трогаем — его читает repl (см.
+// stdinReader), поэтому Ctrl+O не может доесть первую букву запроса.
+func (a *app) watchKeys(done <-chan struct{}, onCtrlO func()) {
+	if a.stdin == nil || onCtrlO == nil {
 		return
 	}
 	for {
@@ -835,10 +955,42 @@ func (a *app) turnWatcher(done <-chan struct{}) {
 				return
 			}
 			if b == ctrlO {
-				a.toggleReason()
+				onCtrlO()
 			}
 		}
 	}
+}
+
+// keyWatcher — горутина чтения горячих клавиш и её остановка.
+//
+// stop закрывают, чтобы прекратить чтение, done ждёт, чтобы убедиться, что
+// читатель действительно вышел.
+type keyWatcher struct {
+	stop chan struct{}
+	done chan struct{}
+	once sync.Once
+}
+
+// startWatcher — запустить читателя клавиш с заданной реакцией на Ctrl+O.
+func (a *app) startWatcher(onCtrlO func()) *keyWatcher {
+	w := &keyWatcher{stop: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(w.done)
+		a.watchKeys(w.stop, onCtrlO)
+	}()
+	return w
+}
+
+// stopWatcher — остановить читателя клавиш и дождаться его конца.
+//
+// Идемпотентна: её зовут и defer в main, и тесты по кругу, а второе
+// закрытие того же канала — паника.
+func (w *keyWatcher) stopWatcher() {
+	if w == nil {
+		return
+	}
+	w.once.Do(func() { close(w.stop) })
+	<-w.done
 }
 
 // turn — один ход: пользовательский ввод → агентный цикл.
@@ -861,6 +1013,12 @@ func (a *app) turn(text string) error {
 	// а не состояние хода.
 	a.resetReason()
 	defer func() {
+		// Сначала «закрываем» ход: размышления становятся последними, и Ctrl+O
+		// между ходами показывает именно их. Потом — running=false: держать
+		// ход открытым до конца сохранения сессии нельзя, иначе нажатие
+		// Ctrl+O в этот зазор смотрело бы в пустой буфер и отвечало «пока
+		// нет», хотя мысли уже есть.
+		a.finishReason()
 		a.mu.Lock()
 		a.running = false
 		a.cancel = nil
@@ -884,18 +1042,11 @@ func (a *app) turn(text string) error {
 		a.ui.SetSpinnerMascot(state)
 		a.ui.ShimmerStart(word, state)
 	}
-	// Ctrl+O работает весь ход: слушаем клавиши и с самого начала, иначе
-	// показать размышления первой секунды ожидания было бы нечем.
-	stopKeys := make(chan struct{})
-	keysDone := make(chan struct{})
-	go func() {
-		defer close(keysDone)
-		a.turnWatcher(stopKeys)
-	}()
-	defer func() {
-		close(stopKeys)
-		<-keysDone
-	}()
+	// Ctrl+O не держит своего читателя: он уже работает весь сеанс
+	// (см. main), иначе на границе ходов два конкурирующих читателя
+	// канала либо обработали бы одно нажатие дважды, либо потеряли бы
+	// его. Мысли хода отдаёт defer — так они успевают стать последними
+	// ещё до снятия флага running.
 	err := ag.Run(ctx, text)
 	a.ui.SpinnerStop()
 	a.ui.SetSpinnerMascot(ui.MascotWork)
@@ -1084,9 +1235,23 @@ func shortArgs(tc core.ToolCall) string {
 // забивается одинаковыми котами.
 func (a *app) repl() {
 	header := true
+	// Ctrl+O между ходами печатает мысли последнего хода отдельным
+	// блоком. Обычная усадка после этого нарисовала бы кота и строку
+	// состояния поверх мыслей, а анимация заикалась бы на только что
+	// дописанных строках. Поэтому пока стоит флаг reasonPast, рисуем
+	// скромное приглашение, а как только пользователь что-то ввёл или
+	// выполнил команду, блок считается отработанным.
 	for {
 		if !a.quiet {
-			if header {
+			switch {
+			case a.reasonPastShown():
+				// Блок размышлений уже напечатан: обычная усадка нарисовала бы
+				// второго кота и вторую строку состояния подряд. Повторно
+				// Ctrl+O оставляет в том же режиме — пока не напечатано новое.
+				a.ui.Prompt(a.sess.AgentMode)
+				a.clearReasonPast()
+				a.ui.MascotIdleStart()
+			case header:
 				a.ui.Println("")
 				// Кот усаживается НАД строкой состояния и живёт на простое:
 				// моргает, скучает, засыпает. На любой ввод — замирает.
@@ -1097,7 +1262,7 @@ func (a *app) repl() {
 				// строке приглашения, и перерисовка знает, где кот.
 				a.ui.Prompt(a.sess.AgentMode)
 				a.ui.MascotIdleStart()
-			} else {
+			default:
 				// Перепечатка приглашения после Enter: курсор уехал на
 				// строку ниже, старая привязка устарела — кот замирает
 				// до следующей усадки. Иначе «слепой» прыжок курсора

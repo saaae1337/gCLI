@@ -232,19 +232,123 @@ func TestResetReasonKeepsUserChoice(t *testing.T) {
 	}
 }
 
-// turnWatcher реагирует на Ctrl+O и молча уходит по stop.
-func TestTurnWatcherHandlesCtrlO(t *testing.T) {
+// finishReason отдаёт мысли хода в reasonLast: Ctrl+O между ходами должен
+// показать именно их, а не отвечать «размышлений пока нет».
+func TestFinishReasonKeepsLastBlock(t *testing.T) {
+	a, _ := reasonApp(t)
+	a.onReason("мысли хода")
+	a.finishReason()
+
+	a.reasonMu.Lock()
+	last := a.reasonLast
+	a.reasonMu.Unlock()
+	if last != "мысли хода" {
+		t.Errorf("reasonLast = %q, ждали мысли хода", last)
+	}
+}
+
+// Ход без размышлений (быстрый ответ, вызов инструмента) не стирает прошлые
+// мысли: они всё ещё последние, что есть.
+func TestFinishReasonWithoutThoughtsKeepsPrevious(t *testing.T) {
+	a, _ := reasonApp(t)
+	a.onReason("прошлые мысли")
+	a.finishReason()
+
+	a.resetReason() // новый ход, модель не размышляла
+	a.finishReason()
+
+	a.reasonMu.Lock()
+	last := a.reasonLast
+	a.reasonMu.Unlock()
+	if last != "прошлые мысли" {
+		t.Errorf("reasonLast = %q, прошлые мысли должны были уцелеть", last)
+	}
+}
+
+// Между ходами Ctrl+O показывает мысли последнего хода — тот самый баг,
+// из-за которого клавиша отвечала «размышлений пока нет».
+func TestCtrlOBetweenTurnsShowsLastReason(t *testing.T) {
+	a, buf := reasonApp(t)
+	a.onReason("мысли прошлого хода")
+	a.finishReason()
+	buf.Reset()
+
+	a.ctrlO() // running == false → путь между ходами
+
+	out := buf.String()
+	if !strings.Contains(out, "мысли прошлого хода") {
+		t.Errorf("Ctrl+O между ходами должен показать мысли последнего хода:\n%q", out)
+	}
+	if strings.Contains(out, "размышлений пока нет") {
+		t.Errorf("при непустом reasonLast отвечать «пока нет» нельзя:\n%q", out)
+	}
+	if !a.reasonPastShown() {
+		t.Error("после показа мыслей REPL должен перерисовать приглашение (reasonPast)")
+	}
+
+	// Повторное нажатие печатает заново: блок уехал вверх по экрану.
+	buf.Reset()
+	a.ctrlO()
+	if !strings.Contains(buf.String(), "мысли прошлого хода") {
+		t.Errorf("повторный Ctrl+O должен напечатать мысли снова:\n%q", buf.String())
+	}
+}
+
+// До первого хода показывать нечего — но воля пользователя сохраняется.
+func TestCtrlOBetweenTurnsWithoutAnyReason(t *testing.T) {
+	a, buf := reasonApp(t)
+	a.ctrlO()
+
+	if !strings.Contains(buf.String(), "размышлений пока нет") {
+		t.Errorf("нужно честно сказать, что показывать нечего:\n%q", buf.String())
+	}
+	if a.reasonPastShown() {
+		t.Error("пустой блок не требует перерисовки приглашения")
+	}
+}
+
+// ctrlO разводит ход и промежуток по a.running: во время хода работает
+// toggleReason (мысли текущего хода), после — showLastReason.
+func TestCtrlOBranchesOnRunning(t *testing.T) {
+	a, buf := reasonApp(t)
+	a.resetReason()
+	a.onReason("текущий ход")
+
+	a.mu.Lock()
+	a.running = true
+	a.mu.Unlock()
+	buf.Reset()
+	a.ctrlO()
+	out := buf.String()
+	if !strings.Contains(out, "текущий ход") {
+		t.Errorf("во время хода Ctrl+O должен показать мысли текущего хода:\n%q", out)
+	}
+	if strings.Contains(out, "размышлений пока нет") {
+		t.Errorf("во время хода отвечать «пока нет» нельзя:\n%q", out)
+	}
+	if a.reasonPastShown() {
+		t.Error("во время хода блок мыслей не «прошлый»: перерисовка не нужна")
+	}
+
+	a.mu.Lock()
+	a.running = false
+	a.mu.Unlock()
+}
+
+// Один watcher на весь сеанс: нажатие обрабатывается и ход гасит его
+// безопасно — повторный stopWatcher не паникует.
+func TestWatcherHandlesCtrlOAndStops(t *testing.T) {
 	a, _ := reasonApp(t)
 	keys := make(chan byte, 4)
 	a.stdin = &stdinReader{keys: keys}
 
 	a.onReason("накоплено")
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		a.turnWatcher(stop)
-	}()
+	// running = true, чтобы ctrlO пошёл по ветке хода: именно она включает
+	// показ, который мы ниже и проверяем.
+	a.mu.Lock()
+	a.running = true
+	a.mu.Unlock()
+	w := a.startWatcher(a.ctrlO)
 
 	keys <- ctrlO
 	// Нажатие должно быть обработано: ждём включения показа.
@@ -258,11 +362,53 @@ func TestTurnWatcherHandlesCtrlO(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	a.reasonMu.Lock()
+	live := a.reasonLive
+	a.reasonMu.Unlock()
+	if !live {
+		t.Fatal("watchKeys не отреагировал на Ctrl+O")
+	}
 
-	close(stop)
+	w.stopWatcher()
+	w.stopWatcher() // идемпотентно: defer в main зовёт второй раз
+}
+
+// Канал клавиш закрыт — watcher тихо выходит, не наследуя панику.
+func TestWatcherStopsOnClosedKeys(t *testing.T) {
+	a, _ := reasonApp(t)
+	keys := make(chan byte)
+	a.stdin = &stdinReader{keys: keys}
+
+	w := a.startWatcher(a.ctrlO)
+	close(keys)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.stopWatcher()
+	}()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("turnWatcher не завершился по stop")
+		t.Fatal("watcher не завершился после закрытия канала клавиш")
+	}
+}
+
+// Флаг reasonPast живёт между нажатием и перерисовкой приглашения, а
+// clearReasonPast возвращает REPL к обычной усадке.
+func TestReasonPastFlagLifecycle(t *testing.T) {
+	a, _ := reasonApp(t)
+	if a.reasonPastShown() {
+		t.Fatal("до первого Ctrl+O флаг перерисовки поднят быть не может")
+	}
+	a.onReason("мысли")
+	a.finishReason()
+	a.showLastReason()
+	if !a.reasonPastShown() {
+		t.Fatal("после показа мыслей флаг перерисовки должен стоять")
+	}
+	a.clearReasonPast()
+	if a.reasonPastShown() {
+		t.Error("после перерисовки приглашения флаг должен быть снят")
 	}
 }
