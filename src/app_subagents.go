@@ -155,6 +155,7 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 		Registry:  a.registryForSubagent,
 		Model:     a.model,
 		SubModel:  a.repo.Cfg.SubModel,
+		WorkDir:   a.workDir,
 		Think:     providers.ThinkState(a.repo.Cfg),
 		Memory:    a.memory.Collect,
 		Skills:    func() string { return a.tools.SkillsPromptBlock() },

@@ -21,8 +21,11 @@ type SubagentDeps struct {
 	Model    string
 	SubModel string
 	Think    string
-	Memory   func() string
-	Skills   func() string
+	// WorkDir — корень проекта. Нужен журналу доказательств: без него нельзя
+	// отличить «субагент выдумал файл» от «файл есть, но он его не открывал».
+	WorkDir string
+	Memory  func() string
+	Skills  func() string
 	// MaxIters — лимит итераций агентного цикла субагента.
 	MaxIters int
 	// SwitchModel — временно переключить модель на время работы субагента.
@@ -180,11 +183,20 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 	}
 
 	var toolCalls int
+	// Grounding — журнал доказательств: что субагент реально открывал и
+	// выполнял. Наполняется хуком OnToolDone и используется для проверки
+	// итогового отчёта перед возвратом главному агенту.
+	ground := subagents.NewGrounding(d.WorkDir)
 	ag.d.OnToolStart = func(tc core.ToolCall, tool *tools.Tool) {
 		toolCalls++
 		if d.OnEvent != nil {
 			d.OnEvent("tool", fmt.Sprintf("%s → %s", spec.Name, tc.Name))
 		}
+	}
+	ag.d.OnToolDone = func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
+		// Ошибка инструмента доказательством не является: после неудачного
+		// grep субагент физически не мог увидеть содержимое файла.
+		ground.Observe(tc.Name, tc.Args, res.Text, err == nil && res.Error == "")
 	}
 
 	if err := ag.Run(ctx, task); err != nil {
@@ -252,13 +264,120 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 			Usage: sess.usage,
 		}
 	}
+
+	// Проверка отчёта по журналу доказательств. Отчёт проверяется ОДИН раз,
+	// перед возвратом: субагент к этому моменту уже не может читать файлы,
+	// и повторная попытка «починить» текст без инструментов бесполезна —
+	// она только зря тратит ходы. Вместо повтора в отчёт попадает явная
+	// пометка о том, что именно не подтверждено.
+	audit := ground.Audit(full)
+	fixed := ag.RepairReport(ctx, full, audit)
+	if fixed != "" && fixed != full {
+		full = fixed
+		audit = ground.Audit(full)
+	}
 	return subagents.Outcome{
-		Full:    full,
+		Full:    full + ground.Report(audit),
 		Summary: subagents.Summarize(full),
 		Turns:   ag.Turns,
 		Tools:   toolCalls,
 		Usage:   sess.usage,
 	}
+}
+
+// repairBudget — сколько итераций даётся на адресную добивку отчёта.
+//
+// Ровно две: первая итерация уходит на открытие спорных мест, вторая — на
+// переписывание отчёта. Больше не нужно, а каждый лишний ход — это оплаченный
+// запрос к модели.
+const repairBudget = 2
+
+// RepairReport — адресная добивка отчёта: не «попробуй ещё раз», а конкретный
+// список мест, которые субагент упомянул, но не открывал.
+//
+// Зачем это нужно. Проверка «отчёт ссылается на непрочитанные строки» без
+// реакции бесполезна: главный агент получает непроверяемый текст и принимает
+// выдумку за факт. Дать субагенту открыть именно эти строки и переписать отчёт
+// дёшево и адресно: обычно достаточно одного точечного read_file. Если он и
+// после этого повторяет непроверенную ссылку, отчёт помечается, но всё равно
+// возвращается — частично верный результат лучше пустоты.
+//
+// Инструменты на этих ходах остаются включёнными (в отличие от CollectReport):
+// иначе «открой и проверь» превратится в «убери всё, чего не помнишь», и
+// модель выбросит вместе с выдумками настоящие находки.
+func (a *Agent) RepairReport(ctx context.Context, full string, audit *subagents.GroundingReport) string {
+	if audit == nil || audit.Trustworthy {
+		return ""
+	}
+	problems := audit.Problems()
+	if len(problems) == 0 {
+		return ""
+	}
+	// Если субагент вообще ничего не читал, «добивка» — это полноценное
+	// исследование с нуля, а не починка отчёта. Это уже работа для главного
+	// агента, и тратить на неё финальные ходы бессмысленно.
+	if audit.FilesRead == 0 {
+		return ""
+	}
+
+	// Свой таймаут: общий контекст может уже почти истечь, и тогда добивка
+	// съест остаток бюджета главного агента на вызов, который ничего не даст.
+	rctx, rcancel := context.WithTimeout(ctx, repairTimeout)
+	defer rcancel()
+
+	a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: repairDemand(problems, audit)})
+	// Цикл написан здесь, а не через a.Run, намеренно: Run на исчерпании
+	// лимита пишет снимок состояния на диск (autoHandoff), а при починке
+	// отчёта это лишний побочный эффект. Здесь нужен ровно один короткий цикл:
+	// открыть спорные места → переписать отчёт.
+	for i := 0; i < repairBudget; i++ {
+		assistant, err := a.callModel(rctx, a.BuildRequest(), true)
+		if err != nil {
+			break
+		}
+		a.Turns++
+		a.d.Session.AddMessage(assistant)
+		if len(assistant.ToolCalls) == 0 || !a.AgentMode {
+			break
+		}
+		for _, r := range a.execTools(rctx, assistant.ToolCalls) {
+			a.d.Session.AddMessage(core.Message{
+				Role:       core.RoleTool,
+				ToolCallID: r.tc.ID,
+				Name:       r.tc.Name,
+				Content:    r.text,
+			})
+		}
+	}
+	fixed := lastAssistantText(sessMessages(a))
+	if strings.TrimSpace(fixed) == "" || fixed == full || isNarrativeOnly(fixed) {
+		return ""
+	}
+	return fixed
+}
+
+// sessMessages — история сессии агента (нужна для последнего сообщения).
+func sessMessages(a *Agent) []core.Message {
+	if a == nil || a.d.Session == nil {
+		return nil
+	}
+	return a.d.Session.Messages()
+}
+
+// repairTimeout — потолок на всю добивку вместе с её ходами.
+const repairTimeout = 90 * time.Second
+
+// repairDemand — требование к добивке со списком проблемных мест.
+func repairDemand(problems []string, audit *subagents.GroundingReport) string {
+	var b strings.Builder
+	b.WriteString("[Система] Твой отчёт проверен автоматически. Часть ссылок не подтверждается.\n")
+	fmt.Fprintf(&b, "Прочитал ты %d файл(ов). Проблемные места:\n", audit.FilesRead)
+	for _, p := range problems {
+		b.WriteString("  - " + p + "\n")
+	}
+	b.WriteString("\nПерепиши ИТОГОВЫЙ ОТЧЁТ целиком: подтверди то, что видел, " +
+		"убери или честно помечай то, чего не видел. Ничего нового не выдумывай.")
+	return b.String()
 }
 
 // isNarrativeOnly — отчёт ли это, или модель просто «думала вслух».
