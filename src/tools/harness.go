@@ -1,8 +1,11 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +26,142 @@ import (
 // dry_run решает это один раз и навсегда: показывает, что инструмент
 // СДЕЛАЛ БЫ, ничего не делая. Для проверки самого инструмента этого
 // достаточно, а главное — не нужно трогать проект.
+
+// maxReadBytes — потолок размера файла для чтения целиком.
+//
+// Зачем. os.ReadFile на многогигабайтном логе съедает память агента и
+// контекст целиком, а модель всё равно не прочитает 4 ГБ. Раньше read_file
+// читал файл целиком, разбивал на строки и только потом усекал до limit —
+// то есть платил полную памятью за то, что выбросит. Проверяем размер ДО
+// чтения, а для больших файлов читаем начало файла и честно говорим, что
+// он обрезан: агент может попросить кусок через offset.
+const maxReadBytes = 4 << 20 // 4 МБ
+
+// maxInspectBytes — потолок для inspect: он показывает файл целиком в
+// escape-виде, поэтому потолок ниже.
+const maxInspectBytes = 512 << 10 // 512 КБ
+
+// readFileLimited — прочитать файл с учётом потолка размера.
+//
+// Возвращает (данные, total, обрезан, ошибка): вызывающему нужно знать не
+// только что показать, но и что файл больше показанного.
+func readFileLimited(p string, limit int64) (data []byte, total int64, truncated bool, err error) {
+	if limit <= 0 {
+		limit = maxReadBytes
+	}
+	if st, statErr := os.Stat(p); statErr == nil {
+		if st.IsDir() {
+			return nil, 0, false, fmt.Errorf("это каталог: %s", p)
+		}
+		total = st.Size()
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, total, false, err
+	}
+	defer f.Close()
+
+	// Читаем limit+1 байт: лишний байт — признак «файл длиннее потолка».
+	data, err = io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, total, false, err
+	}
+	if int64(len(data)) > limit {
+		return data[:limit], total, true, nil
+	}
+	return data, total, false, nil
+}
+
+// readLinesFrom — прочитать файл начиная со строки skip (0-based).
+//
+// Зачем не «прочитал целиком и разрезал»: при offset=50000 файл в 4 ГБ
+// пришлось бы сначала целиком затянуть в память, чтобы отдать одну строку.
+// Читаем потоком, пропуская ненужное, и уходим с диска сразу после нужного
+// куска.
+//
+// linesLimit — потолок строк в ответе; bytesLimit — потолок байт, чтобы
+// строка в 10 МБ (минифицированный js, base64 в одной строке) не съела память.
+func readLinesFrom(p string, skip, linesLimit int, bytesLimit int64) (data []byte, size int64, skippedToEOF bool, err error) {
+	if linesLimit <= 0 {
+		linesLimit = 2000
+	}
+	if bytesLimit <= 0 {
+		bytesLimit = maxReadBytes
+	}
+	if st, statErr := os.Stat(p); statErr == nil {
+		if st.IsDir() {
+			return nil, 0, false, fmt.Errorf("это каталог: %s", p)
+		}
+		size = st.Size()
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, size, false, err
+	}
+	defer f.Close()
+
+	br := bufio.NewReaderSize(f, 64*1024)
+	// Потолок на прочитанное: offset сам по себе уже ограничивает обход,
+	// но limit может быть огромным, а offset — нулевым.
+	maxRead := bytesLimit
+	if int64(skip) > 0 {
+		maxRead += int64(skip) * 256 // грубая оценка «строка тем длиннее, чем дальше»
+	}
+
+	var buf bytes.Buffer
+	read := 0
+	line := 0
+	kept := 0
+	for {
+		if int64(read) >= maxRead {
+			return buf.Bytes(), size, false, nil
+		}
+		b, err := br.ReadSlice('\n')
+		read += len(b)
+		if err == nil {
+			// Строка целиком в буфере. Счётчик line — это номер строки
+			// (1-based), поэтому «нужна» она при line > skip.
+			line++
+			if line > skip && kept < linesLimit {
+				buf.Write(b)
+				kept++
+			}
+			// Собрали запрошенное число строк — файл дальше можно не читать.
+			// atEOF=false: файл-то не кончился, мы просто остановились.
+			if kept >= linesLimit {
+				return buf.Bytes(), size, false, nil
+			}
+			continue
+		}
+		if err == bufio.ErrBufferFull {
+			// Строка длиннее буфера. Следующая строка имеет номер line+1,
+			// поэтому условие «нужна» здесь — line >= skip.
+			if line >= skip && kept < linesLimit {
+				buf.Write(b)
+				kept++
+			}
+			line++
+			if kept >= linesLimit {
+				return buf.Bytes(), size, false, nil
+			}
+			continue
+		}
+		if err == io.EOF {
+			if len(b) > 0 {
+				line++
+				if line > skip && kept < linesLimit {
+					buf.Write(b)
+					kept++
+				}
+			}
+			// Файл кончился. Если последняя строка попала в выборку —
+			// это честный конец файла; если не попала, значит offset
+			// ушёл за пределы и читать дальше нечего.
+			return buf.Bytes(), size, line <= skip, nil
+		}
+		return nil, size, false, err
+	}
+}
 
 // readFileSafe — прочитать файл с внятной ошибкой вместо системной.
 func readFileSafe(p string) ([]byte, error) {
@@ -409,7 +548,10 @@ func (r *Registry) hJob(_ context.Context, m map[string]any) (Result, error) {
 		}
 		dir := r.workDir
 		if wd := ArgStr(m, "workdir"); wd != "" {
-			dir = r.resolvePath(wd)
+			var err error
+			if dir, err = r.pathArg(wd); err != nil {
+				return Result{}, err
+			}
 		}
 		if r.env.Confirm != nil {
 			if !r.env.Confirm(ConfirmReq{Kind: ConfirmExec, Detail: cmd, Reason: "фоновый процесс"}) {

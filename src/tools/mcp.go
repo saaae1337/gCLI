@@ -326,6 +326,49 @@ func (r *Registry) mcpServerRegistered(name string) bool {
 	return false
 }
 
+// mcpTrusted — можно ли запускать MCP-сервер.
+//
+// Глобальный конфиг (~/.gcli/mcp.json) доверен: его писал пользователь.
+// Проектный (.gcli/mcp.json) требует согласия, запомненного по отпечатку
+// файла. Отпечаток берём по всему файлу, а не по одной записи сервера:
+// подтверждая «filesystem», пользователь должен подтвердить и то, что рядом
+// в том же файле появится другой сервер.
+//
+// Порядок обхода обратный (сначала проект), и это не косметика: LoadMCPConfig
+// отдаёт приоритет проектному конфигу, значит и проверять доверие надо по
+// тому файлу, из которого возьмётся определение. Иначе проектный сервер,
+// названный так же, как глобальный, выполнялся бы под крышкой глобального
+// доверия.
+func (r *Registry) mcpTrusted(name string) bool {
+	dirs := r.MCPDirs()
+	for i := len(dirs) - 1; i >= 0; i-- {
+		d := dirs[i]
+		data, err := os.ReadFile(d[0])
+		if err != nil {
+			continue
+		}
+		var cfg MCPConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			continue
+		}
+		srv, ok := cfg.Servers[name]
+		if !ok || strings.TrimSpace(srv.Command) == "" {
+			continue
+		}
+		if d[1] == "глобальный" {
+			return true
+		}
+		// Без хранилища доверия (тесты, неполная инициализация) проектный
+		// код не запускаем — причина подтверждения исчезла бы, а риск нет.
+		if r.env.Trust == nil {
+			return false
+		}
+		level, _ := r.env.Trust.Check("mcp", name, map[string]string{d[0]: string(data)})
+		return level == TrustProject
+	}
+	return false
+}
+
 // RegisterMCP — подключить все серверы из конфигов. Возвращает число
 // зарегистрированных инструментов и список предупреждений.
 func (r *Registry) RegisterMCP() (int, []string) {
@@ -353,6 +396,13 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 	for _, name := range names {
 		srv := cfg.Servers[name]
 		if srv.Enabled != nil && !*srv.Enabled {
+			continue
+		}
+		// Сервер из проекта без согласия не запускаем: это чужой код, и он
+		// стартует ДО первого вопроса пользователя. Подробности — /mcp trust.
+		if !r.mcpTrusted(name) {
+			warns = append(warns, fmt.Sprintf(
+				"MCP «%s»: сервер из проекта, требует подтверждения (/mcp trust %s)", name, name))
 			continue
 		}
 		if r.mcpServerRegistered(name) {
@@ -523,6 +573,11 @@ func (r *Registry) MCPStatus() (servers []string, tools int) {
 		state := "вкл"
 		if srv.Enabled != nil && !*srv.Enabled {
 			state = "выкл"
+		}
+		// Сервер из проекта без согласия не запускается — говорим об этом
+		// прямо, иначе «вкл» в списке выглядит как «работает», а не работает.
+		if state == "вкл" && !r.mcpTrusted(name) {
+			state = "требует подтверждения"
 		}
 		live := ""
 		if c := r.mcpConns[name]; c != nil && c.alive() {

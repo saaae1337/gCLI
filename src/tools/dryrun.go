@@ -62,6 +62,14 @@ func (r *Registry) hDryRun(_ context.Context, m map[string]any) (Result, error) 
 		} else if wd := ArgStr(m, "workdir"); wd != "" {
 			dir = r.resolvePath(wd)
 		}
+		// Показываем и то, что скажет песочница: предпросмотр не должен
+		// обещать запуск там, куда команда не дойдёт.
+		if abs, err := r.pathArg(dir); err != nil {
+			fmt.Fprintf(&b, "- каталог запуска: %s\n- песочница запретит запуск: %v\n", dir, err)
+			break
+		} else {
+			dir = abs
+		}
 		if cmd == "" {
 			b.WriteString("- команда не указана: будет подобрана автоматически (verify) либо нужно указать command\n")
 		} else {
@@ -205,7 +213,11 @@ func (r *Registry) multiBashDryRun(args string) string {
 	}
 	dir := r.workDir
 	if wd := ArgStr(am, "workdir"); wd != "" {
-		dir = r.resolvePath(wd)
+		if abs, err := r.pathArg(wd); err != nil {
+			return fmt.Sprintf("- каталог запуска запрещён песочницей: %v\n", err)
+		} else {
+			dir = abs
+		}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "- выполнится %d команд(ы) параллельно:\n", len(cmds))

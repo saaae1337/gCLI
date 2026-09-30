@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Сборка и тесты
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows — основная платформа разработки, Linux и macOS — где им
+        # пользуются. Минимальная версия из go.mod проверяет, что проект
+        # действительно собирается на 1.21, а не «случайно» использует новое.
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        go: ['1.21', 'stable']
+        exclude:
+          - os: macos-latest
+            go: '1.21'
+
+    defaults:
+      run:
+        # Модуль в src/, а не в корне: команды go выполняются оттуда.
+        working-directory: src
+        # shell: bash на всех ОС — один и тот же скрипт, без расхождений
+        # между PowerShell и sh. На Windows Git bash есть в образе образца.
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          # go.sum не нужен: у модуля нет внешних зависимостей, поэтому
+          # кешировать нечего, а ссылка на отсутствующий файл ломает шаг.
+          cache: false
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "неотформатированные файлы:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: Тесты
+        run: go test -count=1 ./...
+
+      # Гонки данных ловим отдельно: -race медленный, на «стабильной» версии
+      # Go достаточно одного прогона.
+      - name: Тесты с детектором гонок
+        if: matrix.go == 'stable'
+        run: go test -race -count=1 ./...
+
+      - name: Сборка
+        # Бинарник — во временный каталог: builds/ в .gitignore, и оставлять
+        # артефакты в дереве репозитория незачем.
+        run: go build -o "${RUNNER_TEMP}/gcli-ci" .

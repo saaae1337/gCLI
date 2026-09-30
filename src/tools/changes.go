@@ -120,6 +120,26 @@ func (l *changeLog) dropLast() {
 	}
 }
 
+// dropPath — убрать из журнала последнюю правку указанного файла.
+//
+// Нужна откату atomic-пачки: он возвращает файлы на диске в исходное
+// состояние, а записи в журнале остались бы, и changes/revert_last показывали
+// бы правки, которых нет. Удаляем только ПОСЛЕДНЮЮ запись по файлу (те, что
+// были до неё, принадлежат более ранним правкам и остаются в силе).
+func (l *changeLog) dropPath(p string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := len(l.list) - 1; i >= 0; i-- {
+		if l.list[i].Path == p {
+			l.list = append(l.list[:i], l.list[i+1:]...)
+			return
+		}
+	}
+}
+
+// dropChange — убрать из журнала последнюю правку файла.
+func (r *Registry) dropChange(p string) { r.change().dropPath(p) }
+
 // noteChange — записать правку в журнал. Вызывается из write_file/edit_file
 // после записи на диск.
 //

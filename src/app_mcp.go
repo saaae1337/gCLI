@@ -18,12 +18,11 @@ import (
 //	/mcp new        — создать шаблон .gcli/mcp.json;
 //	/mcp path       — показать пути конфигов.
 func (a *app) cmdMcp(rest string) {
-	parts := strings.Fields(rest)
+	parts0 := strings.Fields(rest)
 	sub := ""
-	if len(parts) > 0 {
-		sub = strings.ToLower(parts[0])
+	if len(parts0) > 0 {
+		sub = strings.ToLower(parts0[0])
 	}
-
 	switch sub {
 	case "new", "template", "шаблон":
 		path := filepath.Join(a.workDir, ".gcli", "mcp.json")
@@ -53,6 +52,16 @@ func (a *app) cmdMcp(rest string) {
 		}
 		a.ui.Println("")
 		return
+	case "trust", "доверять":
+		// trustCode ждёт parts[1] = имя, поэтому сюда попадает только хвост
+		// после «trust». Раньше сюда шли все слова rest, и parts[1]
+		// оказывался словом «trust» — /mcp trust <имя> искал сервер по
+		// имени «trust» и всегда падал в «не найден».
+		parts := []string{"trust"}
+		if len(parts0) > 1 {
+			parts = append(parts, parts0[1:]...)
+		}
+		a.trustCode("mcp", parts)
 	case "reload", "перезагрузить":
 		n, warns := a.tools.MCPReload()
 		for _, w := range warns {

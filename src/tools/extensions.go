@@ -31,6 +31,15 @@ type ExtTool struct {
 	NoConfirm  bool              `json:"no_confirm,omitempty"`
 	Workdir    string            `json:"workdir,omitempty"`
 	ReadOnly   bool              `json:"read_only,omitempty"`
+	// InputFile — имя переменной окружения, в которую кладётся вход.
+	//
+	// Вход нельзя подставлять в строку команды текстом: «{input}» внутри
+	// «git commit -m "{input}» — это готовая инъекция команд оболочкой
+	// (вход вида «"; rm -rf ~; #» выполнится). Поэтому расширение получает
+	// вход в переменной окружения (по умолчанию GCLI_INPUT) и читает её так,
+	// как удобно: "$GCLI_INPUT" в bash, %GCLI_INPUT% в cmd, $env:GCLI_INPUT
+	// в PowerShell. Если поле не задано, используется имя по умолчанию.
+	InputFile string `json:"input_env,omitempty"`
 }
 
 // Extension — манифест расширения.
@@ -89,16 +98,83 @@ func parseExtension(path string) (Extension, error) {
 	return ext, nil
 }
 
-const schemaExt = `{"type":"object","properties":{"input":{"type":"string","description":"Входные данные/аргументы. Подставляются вместо {input} в команду или запрос; также передаются на stdin."}},"required":[]}`
+const schemaExt = `{"type":"object","properties":{"input":{"type":"string","description":"Входные данные/аргументы. Для shell-инструментов приходят в переменную окружения (GCLI_INPUT) и stdin — в команде читай \"$GCLI_INPUT\"/\"%GCLI_INPUT%\", вставлять вход в строку команды нельзя. Для HTTP-инструментов подставляются в url/body как раньше."}},"required":[]}`
 
 // extToolCount — число подключённых инструментов расширений.
 var extToolCount int
+
+// extTrusted — можно ли подключать расширение.
+//
+// Расширение из глобального каталога доверено: его писал пользователь.
+// Расширение из проекта требует явного согласия, и оно уже было дано ранее
+// — тогда подключаем молча. Всё остальное пропускаем: подключать инструмент,
+// который сейчас никто не разрешал, нельзя, даже если он лежит рядом.
+func (r *Registry) extTrusted(ext Extension) (bool, string) {
+	// Находим манифест на диске: отпечаток считается по содержимому, а не
+	// по имени файла. Путь заодно говорит, чей это код.
+	path, kind := extManifestPath(r, ext.Name)
+	if path == "" {
+		return false, ""
+	}
+	if kind == "user" {
+		return true, ""
+	}
+	// Хранилища доверия нет (тесты, неполная инициализация) — согласие
+	// спросить и запомнить нечем, а подключать чужой код молча нельзя.
+	if r.env.Trust == nil {
+		return false, ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, ""
+	}
+	level, hash := r.env.Trust.Check("ext", ext.Name, map[string]string{path: string(data)})
+	if level == TrustProject {
+		return true, ""
+	}
+	return false, hash
+}
+
+// extManifestPath — путь к манифесту расширения и его уровень доверия.
+func extManifestPath(r *Registry, name string) (path, kind string) {
+	for _, d := range r.ExtDirs() {
+		ents, err := os.ReadDir(d[0])
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			p := filepath.Join(d[0], e.Name())
+			ext, err := parseExtension(p)
+			if err != nil || ext.Name != name {
+				continue
+			}
+			k := "ext"
+			if d[1] == "глобальный" {
+				k = "user"
+			}
+			return p, k
+		}
+	}
+	return "", ""
+}
 
 // LoadExtensionTools — зарегистрировать инструменты из расширений.
 func (r *Registry) LoadExtensionTools() (int, []string) {
 	var warns []string
 	count := 0
 	for _, ext := range r.LoadExtensions() {
+		ok, _ := r.extTrusted(ext)
+		if !ok {
+			// Молча пропускать нельзя: агент (и пользователь) должны знать,
+			// что инструменты из проекта не подключены. Подробности —
+			// в /ext и /permissions, а здесь короткая строка в лог старта.
+			warns = append(warns, fmt.Sprintf(
+				"расширение %s: из проекта, требует подтверждения (/ext trust %s)", ext.Name, ext.Name))
+			continue
+		}
 		for _, t := range ext.Tools {
 			if !reExtName.MatchString(t.Name) {
 				warns = append(warns, fmt.Sprintf("расширение %s: плохое имя инструмента «%s» (нужны a-z, 0-9, _, 3–31 символ)", ext.Name, t.Name))
@@ -131,11 +207,48 @@ func (r *Registry) LoadExtensionTools() (int, []string) {
 // ExtToolCount — количество инструментов расширений.
 func ExtToolCount() int { return extToolCount }
 
+// extInputEnv — переменная окружения с входом расширения.
+func extInputEnv(t ExtTool) string {
+	name := strings.TrimSpace(t.InputFile)
+	if name == "" {
+		return "GCLI_INPUT"
+	}
+	// Имя переменной приходит из манифеста расширения, то есть из файла на
+	// диске. Оставляем только безопасный набор символов: иначе расширение
+	// могло бы подсунуть «FOO=bar PATH=/tmp» и дописать в окружение процесса
+	// произвольные переменные.
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
+			return r
+		}
+		return -1
+	}, name)
+	if clean == "" {
+		return "GCLI_INPUT"
+	}
+	return clean
+}
+
 // extCmdHandler — shell-инструмент расширения.
 func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 	return func(ctx context.Context, m map[string]any) (Result, error) {
 		input := ArgStr(m, "input")
-		cmdStr := strings.ReplaceAll(t.Command, "{input}", input)
+		envName := extInputEnv(t)
+		// Вход не подставляется в строку команды: «{input}» в команде —
+		// это инъекция команд оболочкой. Вместо этого он кладётся в
+		// переменную окружения, а команда читает её как "$GCLI_INPUT"
+		// (bash), "%GCLI_INPUT%" (cmd) или "$env:GCLI_INPUT" (PowerShell).
+		// Если автор расширения написал {input} — говорим прямо, как
+		// переписать, вместо тихой склейки.
+		if strings.Contains(t.Command, "{input}") {
+			return Result{}, fmt.Errorf(
+				"расширение %s: вход нельзя вставлять в команду текстом — это позволяет "+
+					"выполнить что угодно (инъекция в shell). Перепиши команду так, чтобы она "+
+					"читала переменную окружения %s: bash → \"$%s\", cmd → \"%%%s%%\", "+
+					"PowerShell → \"$env:%s\"", ext.Name, envName, envName, envName, envName)
+		}
+		cmdStr := t.Command
 		if strings.TrimSpace(cmdStr) == "" {
 			return Result{}, fmt.Errorf("пустая команда")
 		}
@@ -159,7 +272,14 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		}
 		workdir := r.workDir
 		if t.Workdir != "" {
-			workdir = r.resolvePath(t.Workdir)
+			// Каталог расширения — это путь, который задал не пользователь
+			// в этот момент, а код на диске, поэтому песочница режет его так же,
+			// как любой другой путь от «модели».
+			abs, err := r.pathArg(t.Workdir)
+			if err != nil {
+				return Result{}, err
+			}
+			workdir = abs
 		}
 
 		cctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
@@ -167,6 +287,9 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		shell, sargs := ShellCommand(cmdStr)
 		cmdEx := exec.CommandContext(cctx, shell, sargs...)
 		cmdEx.Dir = workdir
+		// Вход едет и в переменную окружения, и в stdin: переменная нужна
+		// командам вида «echo "$GCLI_INPUT"», stdin — тем, кто читает построчно.
+		cmdEx.Env = append(os.Environ(), envName+"="+input, "GCLI=1")
 		if input != "" {
 			cmdEx.Stdin = strings.NewReader(input + "\n")
 		}
@@ -207,6 +330,12 @@ func (r *Registry) extHTTPHandler(ext Extension, t ExtTool) Handler {
 			}
 		}
 		u := strings.ReplaceAll(t.URL, "{input}", url.QueryEscape(input))
+		// SSRF: URL расширения — это текст из манифеста плюс вход модели.
+		// Соблазн «дай мне любой адрес» должен упираться в ту же проверку,
+		// что и web_fetch, иначе расширение становится обходом фильтра.
+		if err := checkSSRF(u); err != nil {
+			return Result{}, err
+		}
 		var rdr io.Reader
 		body := strings.ReplaceAll(t.Body, "{input}", input)
 		if body != "" {

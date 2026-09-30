@@ -122,7 +122,10 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 
 	// Локальный файл → file:// URL.
 	if !strings.Contains(target, "://") {
-		p := r.resolvePath(target)
+		p, err := r.pathArg(target)
+		if err != nil {
+			return Result{}, err
+		}
 		if _, err := os.Stat(p); err != nil {
 			return Result{}, fmt.Errorf("файл не найден: %s", p)
 		}
@@ -189,7 +192,11 @@ func (r *Registry) hReadImage(_ context.Context, m map[string]any) (Result, erro
 	if p == "" {
 		return Result{}, fmt.Errorf("укажи path — путь к изображению")
 	}
-	return r.attachImageFile(r.resolvePath(p), "read_image")
+	abs, err := r.pathArg(p)
+	if err != nil {
+		return Result{}, err
+	}
+	return r.attachImageFile(abs, "read_image")
 }
 
 // attachImageFile — прочитать файл изображения и приложить к результату.

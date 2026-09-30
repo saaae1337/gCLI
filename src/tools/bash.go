@@ -108,7 +108,11 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 	timeout := core.Clamp(ArgInt(m, "timeout_sec", 60), 5, 600)
 	workdir := r.workDir
 	if wd := ArgStr(m, "workdir"); wd != "" {
-		workdir = r.resolvePath(wd)
+		abs, err := r.pathArg(wd)
+		if err != nil {
+			return Result{}, err
+		}
+		workdir = abs
 	}
 
 	if r.env.Confirm != nil {

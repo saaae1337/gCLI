@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gcli/core"
@@ -143,9 +144,19 @@ func (r *Registry) hReadFile(ctx context.Context, m map[string]any) (Result, err
 	if raw == "" {
 		return Result{}, fmt.Errorf("укажи path")
 	}
-	p := r.resolvePath(raw)
-	data, err := os.ReadFile(p)
+	p, err := r.pathArg(raw)
 	if err != nil {
+		return Result{}, err
+	}
+	// Читаем только нужный кусок: offset=50000 на файле в 4 ГБ раньше стоил
+	// полного чтения в память, а limit всё равно показывал бы 2000 строк.
+	off := core.Max(1, ArgInt(m, "offset", 1))
+	lim := core.Clamp(ArgInt(m, "limit", 2000), 1, 5000)
+	data, size, atEOF, err := readLinesFrom(p, off-1, lim, maxReadBytes)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Result{}, fmt.Errorf("файл не найден: %s", p)
+		}
 		return Result{}, err
 	}
 	markRead(r.env.ReadFiles, p)
@@ -164,38 +175,41 @@ func (r *Registry) hReadFile(ctx context.Context, m map[string]any) (Result, err
 		}, nil
 	}
 
+	if strings.TrimSpace(string(data)) == "" {
+		if atEOF {
+			return Result{Text: fmt.Sprintf("Файл: %s (пустой)", p), Summary: "пустой файл"}, nil
+		}
+		return Result{
+			Text:    fmt.Sprintf("Файл: %s (%s) — строк начиная с %d нет, файл короче", p, core.HumanSize(int(size)), off),
+			Summary: "нет строк с " + strconv.Itoa(off),
+		}, nil
+	}
+
 	lines := core.SplitLines(string(data))
-	if len(lines) == 0 {
-		return Result{Text: fmt.Sprintf("Файл: %s (пустой)", p), Summary: "пустой файл"}, nil
-	}
-
-	off := core.Max(1, ArgInt(m, "offset", 1))
-	lim := ArgInt(m, "limit", 2000)
-	if lim < 1 {
-		lim = 2000
-	}
-	if lim > 5000 {
-		lim = 5000
-	}
-
 	var b strings.Builder
 	total := 0
-	for i := off - 1; i < len(lines) && total < lim; i++ {
-		l := lines[i]
+	for i, l := range lines {
+		if total >= lim {
+			break
+		}
 		if len([]rune(l)) > 2000 {
 			l = string([]rune(l)[:2000]) + " …"
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, l)
+		fmt.Fprintf(&b, "%6d\t%s\n", off+i, l)
 		total++
 	}
+	// Говорим ровно о том, что агент не увидит: конец файла или потолок
+	// выборки. Молчаливое усечение выглядит так, будто прочитал всё.
 	note := ""
-	if off > 1 || off-1+total < len(lines) {
-		note = fmt.Sprintf("\n[показано строк: %d из %d; далее используй offset=%d]", total, len(lines), off+total)
+	if atEOF {
+		note = fmt.Sprintf("\n[файл закончился на строке %d, показано строк: %d]", off+total-1, total)
+	} else {
+		note = fmt.Sprintf("\n[показано строк: %d начиная с %d; далее offset=%d]", total, off, off+total)
 	}
 	rel := core.RelToWD(r.workDir, p)
 	return Result{
-		Text:    fmt.Sprintf("Файл: %s (%d строк)\n\n%s%s", p, len(lines), b.String(), note),
-		Summary: fmt.Sprintf("%s — %d строк", rel, len(lines)),
+		Text:    fmt.Sprintf("Файл: %s (%s)\n\n%s%s", p, core.HumanSize(int(size)), b.String(), note),
+		Summary: fmt.Sprintf("%s — %s, строк %d с %d", rel, core.HumanSize(int(size)), total, off),
 	}, nil
 }
 
@@ -205,7 +219,10 @@ func (r *Registry) hListDir(_ context.Context, m map[string]any) (Result, error)
 	if raw == "" {
 		raw = "."
 	}
-	p := r.resolvePath(raw)
+	p, err := r.pathArg(raw)
+	if err != nil {
+		return Result{}, err
+	}
 	depth := core.Clamp(ArgInt(m, "depth", 1), 1, 4)
 
 	type row struct {
@@ -286,7 +303,10 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 	if r.env.ReadOnly {
 		return Result{Error: "режим «только чтение»: изменение файлов запрещено"}, nil
 	}
-	p := r.resolvePath(raw)
+	p, err := r.pathArg(raw)
+	if err != nil {
+		return Result{}, err
+	}
 	content := ArgStr(m, "content")
 
 	var old string
@@ -337,7 +357,10 @@ func (r *Registry) editFileLabeled(m map[string]any, label string) (Result, erro
 	if r.env.ReadOnly {
 		return Result{Error: "режим «только чтение»: изменение файлов запрещено"}, nil
 	}
-	p := r.resolvePath(raw)
+	p, err := r.pathArg(raw)
+	if err != nil {
+		return Result{}, err
+	}
 	if !wasRead(r.env.ReadFiles, p) {
 		return Result{}, fmt.Errorf("сначала прочитай файл через read_file: %s", core.RelToWD(r.workDir, p))
 	}
@@ -470,21 +493,32 @@ func (r *Registry) hGlob(_ context.Context, m map[string]any) (Result, error) {
 
 	maxRes := core.Clamp(ArgInt(m, "max_results", 200), 1, 2000)
 
-	// Определяем корень обхода: часть до первого wildcard.
+	// Корень обхода — литеральный префикс шаблона, то есть часть до первого
+	// wildcard. Так glob «C:\gcli\src\*.go» обходит src, а не весь диск:
+	// иначе шаблон раскрывался бы в C:\, песочница ругалась бы на законный
+	// запрос (или, хуже, обход ушёл бы мимо неё), а обход диска стоил бы
+	// сотни тысяч шагов впустую.
 	root := "."
-	if isAbs(normPat) {
-		root = filepath.VolumeName(r.resolvePath(pat))
-		if root == "" {
-			root = "/"
-		} else {
-			root += string(filepath.Separator)
-		}
-	} else if idx := strings.IndexAny(normPat, "*?["); idx > 0 {
-		if d := filepath.Dir(normPat[:idx]); d != "." && d != "" {
-			root = d
-		}
+	prefix := normPat
+	if idx := strings.IndexAny(normPat, "*?["); idx > 0 {
+		prefix = normPat[:idx]
 	}
-	rootAbs := r.resolvePath(root)
+	// idx == 0 — шаблон начинается с wildcard («*.go», «**/main.go»):
+	// обходить больше нечего, берём рабочий каталог.
+	if isAbs(normPat) {
+		// Префикс оканчивается разделителем, поэтому Dir срезает именно
+		// последний компонент-каталог, а не букву тома.
+		root = filepath.Dir(prefix)
+		if root == "" {
+			root = filepath.VolumeName(prefix) + string(filepath.Separator)
+		}
+	} else if d := filepath.Dir(prefix); d != "." && d != "" {
+		root = d
+	}
+	rootAbs, err := r.pathArg(root)
+	if err != nil {
+		return Result{}, err
+	}
 
 	var out []string
 	steps := 0
@@ -509,6 +543,12 @@ func (r *Registry) hGlob(_ context.Context, m map[string]any) (Result, error) {
 		}
 		candidate = strings.ReplaceAll(candidate, "\\", "/")
 		if re.MatchString(candidate) {
+			// Проверяем найденное песочницей: обход не ходит по симлинкам,
+			// но «внутри корня» ещё не значит «можно читать» — файл может
+			// оказаться в закрытом поддереве.
+			if r.env.Sandbox.Check(path) != nil {
+				return nil
+			}
 			out = append(out, core.RelToWD(r.workDir, path))
 		}
 		return nil
@@ -538,7 +578,10 @@ func (r *Registry) hGrep(_ context.Context, m map[string]any) (Result, error) {
 	}
 	root := r.workDir
 	if rp := ArgStr(m, "path"); rp != "" {
-		root = r.resolvePath(rp)
+		root, err = r.pathArg(rp)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	incl := ArgStr(m, "include")
 	var inclRe *regexp.Regexp
@@ -560,12 +603,25 @@ func (r *Registry) hGrep(_ context.Context, m map[string]any) (Result, error) {
 			return errStopWalk
 		}
 		if d.IsDir() {
-			if core.ShouldSkipDir(d.Name()) {
+			if path != root && core.ShouldSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			// Закрытое песочницей поддерево пропускаем целиком, а не
+			// файлы по одному: иначе обход всё равно будет ходить по
+			// закрытому каталогу и проверять каждый файл впустую.
+			if path != root && r.env.Sandbox.Check(path) != nil {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if inclRe != nil && !inclRe.MatchString(d.Name()) {
+			return nil
+		}
+		// Проверяем каждый файл песочницей, а не только корень обхода.
+		// Корень бывает широкий (домашний каталог), и закрытое поддерево
+		// внутри него — это ровно тот случай, ради которого deny существует:
+		// без проверки содержимое ~/.ssh уходило бы в совпадения целиком.
+		if r.env.Sandbox.Check(path) != nil {
 			return nil
 		}
 		if info, err := d.Info(); err == nil && info.Size() > 2<<20 {

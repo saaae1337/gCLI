@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"gcli/core"
 	"gcli/providers"
@@ -199,7 +200,13 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 				Usage: sess.usage,
 			}
 		}
-		report := ag.CollectReport(context.Background())
+		// Не context.Background(): если сессию прерывает Ctrl+C или по
+		// истечении общего таймаута, «собрать отчёт» не должно было
+		// обойти отмену и висеть на сети ещё минуту. Даём короткий
+		// собственный бюджет поверх того контекста, который пришёл.
+		rctx, rcancel := context.WithTimeout(ctx, 45*time.Second)
+		defer rcancel()
+		report := ag.CollectReport(rctx)
 		if strings.TrimSpace(report) == "" {
 			return subagents.Outcome{
 				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
@@ -224,7 +231,9 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		if subagents.AssessReport(full) == subagents.ReportOK {
 			break
 		}
-		report := ag.CollectReport(context.Background())
+		rctx, rcancel := context.WithTimeout(ctx, 45*time.Second)
+		defer rcancel()
+		report := ag.CollectReport(rctx)
 		if strings.TrimSpace(report) == "" || report == full {
 			break
 		}

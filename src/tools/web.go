@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -21,9 +22,21 @@ type HTTPClient struct {
 }
 
 // NewHTTPClient — создать клиент с таймаутом и User-Agent.
+//
+// Транспорт с проверкой адреса: dialer не подключается к внутренним адресам,
+// поэтому DNS-rebinding (ответ «внешний» на проверку, «127.0.0.1» на
+// соединение) не проходит. Проверять в checkSSRF мало: между проверкой и
+// подключением DNS отвечает заново.
 func NewHTTPClient() *HTTPClient {
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	tr := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           ssrfDialContext(dialer),
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 20 * time.Second,
+	}
 	return &HTTPClient{
-		Client:  &http.Client{Timeout: 30 * time.Second},
+		Client:  &http.Client{Timeout: 30 * time.Second, Transport: tr},
 		Version: core.Version,
 	}
 }
@@ -209,6 +222,11 @@ func (r *Registry) hWebFetch(ctx context.Context, m map[string]any) (Result, err
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return Result{}, fmt.Errorf("плохой URL: %s", raw)
+	}
+	// SSRF: модель ходит по ссылкам из вывода поиска и из файлов репозитория,
+	// а ответ со внутреннего адреса утекает в контекст. Проверяем ДО запроса.
+	if err := checkSSRF(raw); err != nil {
+		return Result{}, err
 	}
 	if r.env.Confirm != nil && !r.env.Confirm(ConfirmReq{Kind: ConfirmNet, Detail: raw, Reason: "загрузка страницы"}) {
 		return Result{Text: "Загрузка отменена пользователем", Summary: "отменено"}, nil

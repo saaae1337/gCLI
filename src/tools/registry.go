@@ -146,6 +146,14 @@ type Env struct {
 	ReadFiles map[string]bool
 	// ReadOnly — режим «только чтение» (субагент-исследователь).
 	ReadOnly bool
+	// Sandbox — граница файловой системы. nil или выключенная песочница
+	// означает «пути не ограничены»: это режим по умолчанию, он не ломает
+	// привычную работу, а включается флагом -sandbox.
+	Sandbox *Sandbox
+	// Trust — пометки «пользователь разрешил этот код из проекта».
+	// Без них расширение или MCP-сервер из клонированного репозитория
+	// подключился бы молча и выполнился бы до первого вопроса.
+	Trust *trustStore
 	// HTTPClient — клиент для сетевых инструментов.
 	HTTPClient *HTTPClient
 	// OnProgress — живой прогресс пакетной операции (multi_*). Вызывается из
@@ -347,6 +355,30 @@ func (r *Registry) Names() []string {
 // Get — найти инструмент по имени.
 func (r *Registry) Get(name string) *Tool { return r.byName[name] }
 
+// Register — добавить инструмент в реестр.
+//
+// Нужен внешнему коду (тестам агента, сторонним обёрткам), который строит
+// реестр вокруг своих обработчиков. Повторная регистрация того же имени
+// заменяет инструмент: пересборка реестра после смены песочницы не должна
+// оставлять в нём копии прошлых обработчиков.
+func (r *Registry) Register(t *Tool) {
+	if t == nil || t.Def.Name == "" {
+		return
+	}
+	if old, ok := r.byName[t.Def.Name]; ok {
+		for i, cur := range r.tools {
+			if cur == old {
+				r.tools[i] = t
+				break
+			}
+		}
+		r.byName[t.Def.Name] = t
+		return
+	}
+	r.tools = append(r.tools, t)
+	r.byName[t.Def.Name] = t
+}
+
 // Count — количество инструментов.
 func (r *Registry) Count() int { return len(r.tools) }
 
@@ -428,9 +460,30 @@ func toSet(names []string) map[string]bool {
 	return m
 }
 
+// isWriteTool — инструмент, меняющий состояние.
+//
+// Список не «кажется», а полон: сюда входят все, кто способен создать,
+// изменить или удалить файл, запустить процесс или отправить что-то наружу.
+// Раньше здесь стояли пять имён файловых инструментов, из-за чего режим
+// «только чтение» (субагент-исследователь) пропускал bash — а bash
+// создаёт файлы свободно. Функция решает не «как выглядит инструмент», а
+// «может ли он что-то изменить», поэтому сюда попадает всё, что исполняется
+// или пишет наружу.
 func isWriteTool(name string) bool {
 	switch name {
-	case "write_file", "edit_file", "multi_edit", "task_note", "todo_write":
+	case // правка файлов
+		"write_file", "edit_file", "multi_edit",
+		// исполнение команды: bash умеет и создавать файлы, и менять мир
+		"bash", "multi_bash", "job", "dry_run", "verify",
+		// исполнение кода проекта
+		"screenshot", "load_skill",
+		// исходящая сеть
+		"web_fetch", "web_search",
+		// состояние агента и сессии
+		"task_note", "todo_write", "remember", "handoff", "spawn_agent", "spawn_agents",
+		"ask_user",
+		// доверие к коду: MCP-серверы и расширения
+		"mcp", "ext":
 		return true
 	}
 	return false
@@ -660,6 +713,22 @@ func ArgStrSlice(m map[string]any, k string) []string {
 // должны оставаться как есть, а не склеиваться с рабочим каталогом.
 func (r *Registry) resolvePath(p string) string {
 	return core.AbsPath(r.workDir, p)
+}
+
+// pathArg — путь от модели, проверенный песочницей.
+//
+// Здесь, а не в resolvePath, потому что resolvePath вызывается и для
+// служебных путей (каталог журнала, workdir команды), которые песочница
+// не должна резать. Все инструменты, принимающие путь от модели, идут
+// через эту funciónцию — иначе правило «путь вне рабочего каталога запрещён»
+// пришлось бы дублировать в каждом обработчике и рано или поздно забыли бы
+// в одном из них.
+func (r *Registry) pathArg(p string) (string, error) {
+	abs := r.resolvePath(p)
+	if err := r.env.Sandbox.Check(abs); err != nil {
+		return "", err
+	}
+	return abs, nil
 }
 
 // reExtName — валидное имя инструмента расширения.

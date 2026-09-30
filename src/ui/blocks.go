@@ -216,6 +216,9 @@ func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 }
 
 // tableWidths — автоширина столбцов: максимум из заголовка и ячеек.
+//
+// Ширина считается в колонках терминала: иначе колонка с японским текстом или
+// эмодзи выходила вдвое шире отведённой и таблица разъезжалась.
 func tableWidths(cols []Column, rows [][]string) []int {
 	out := make([]int, len(cols))
 	for i := range cols {
@@ -223,10 +226,10 @@ func tableWidths(cols []Column, rows [][]string) []int {
 			out[i] = cols[i].Width
 			continue
 		}
-		w := runeLen(cols[i].Title)
+		w := cellWidth(cols[i].Title)
 		for _, r := range rows {
-			if i < len(r) && runeLen(r[i]) > w {
-				w = runeLen(r[i])
+			if i < len(r) && cellWidth(r[i]) > w {
+				w = cellWidth(r[i])
 			}
 		}
 		out[i] = w

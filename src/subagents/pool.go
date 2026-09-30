@@ -157,13 +157,26 @@ type PoolOptions struct {
 }
 
 // Enabled — разрешены ли субагенты.
-func (p *Pool) Enabled() bool { return p.enabled && p.maxDepth > 0 }
+//
+// enabled читается и пишется под mu: переключатель /agents on|off приходит
+// из UI-потока, а Enabled зовут агентные горутины из Spawn, и без блокировки
+// это data race. Блокировка безопасна: держится только вокруг чтения поля,
+// Runner под mu не выполняется никогда (см. Spawn).
+func (p *Pool) Enabled() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.enabled && p.maxDepth > 0
+}
 
 // MaxDepth — максимальная глубина вложенности.
 func (p *Pool) MaxDepth() int { return p.maxDepth }
 
 // SetEnabled — включить/выключить субагентов.
-func (p *Pool) SetEnabled(on bool) { p.enabled = on }
+func (p *Pool) SetEnabled(on bool) {
+	p.mu.Lock()
+	p.enabled = on
+	p.mu.Unlock()
+}
 
 // Running — сколько субагентов работает сейчас.
 func (p *Pool) Running() int {

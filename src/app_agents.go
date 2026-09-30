@@ -423,6 +423,14 @@ func (a *app) cmdExt(rest string) {
 			a.ui.Println("")
 			return
 		}
+		// Кто ждёт подтверждения: показываем это прямо в списке, иначе
+		// расширение выглядит рабочим, хотя его инструменты не подключены.
+		pending := map[string]bool{}
+		for _, w := range a.tools.ScanProjectCode() {
+			if w.Kind == "ext" {
+				pending[w.Name] = true
+			}
+		}
 		for _, ext := range exts {
 			rows := make([][]string, 0, len(ext.Tools))
 			for _, t := range ext.Tools {
@@ -436,6 +444,10 @@ func (a *app) cmdExt(rest string) {
 				}
 				rows = append(rows, []string{t.Name, kind, core.Truncate(core.OneLine(t.Desc), 40), note})
 			}
+			subtitle := ext.Desc
+			if pending[ext.Name] {
+				subtitle = a.ui.Yellow("не подтверждено (/ext trust "+ext.Name+")") + " · " + ext.Desc
+			}
 			a.ui.Table([]ui.Column{
 				{Title: "инструмент", Width: 20},
 				{Title: "тип", Width: 6},
@@ -443,7 +455,7 @@ func (a *app) cmdExt(rest string) {
 				{Title: "", Width: 18},
 			}, rows, ui.BlockOpts{
 				Title:    ext.Name,
-				Subtitle: ext.Desc,
+				Subtitle: subtitle,
 			})
 		}
 		a.ui.Println("  " + a.ui.Gray("подключено инструментов: "+strconv.Itoa(a.tools.ExtCount())+" · перечитать: /ext reload"))
@@ -475,6 +487,8 @@ func (a *app) cmdExt(rest string) {
 		a.ui.Ok("создан шаблон: " + p)
 		a.ui.Hint("отредактируй tools и подключи: /ext reload")
 
+	case parts[0] == "trust" || parts[0] == "доверять":
+		a.trustCode("ext", parts)
 	case parts[0] == "reload" || parts[0] == "перезагрузить":
 		warns := a.tools.RegisterExtTools()
 		for _, w := range warns {
@@ -483,8 +497,127 @@ func (a *app) cmdExt(rest string) {
 		a.ui.Ok(fmt.Sprintf("инструменты перечитаны: всего %d (расширения: %d)",
 			a.tools.Count(), a.tools.ExtCount()))
 	default:
-		a.ui.Warn("не понял: " + rest + " — доступно: /ext · /ext new <имя> · /ext reload")
+		a.ui.Warn("не понял: " + rest + " — доступно: /ext · /ext new <имя> · /ext trust [<имя>] · /ext reload")
 	}
+}
+
+// ---------- Доверие коду из проекта ----------
+
+// trustCode — показать недоверенный код проекта и запомнить согласие.
+//
+// Согласие всегда явное и всегда по конкретному файлу: пользователь видит,
+// что именно будет выполняться, и может отказаться. Подтверждение «на всё»
+// здесь означало бы то же самое, что автозапуск кода из клона, — поэтому его и
+// нет. Массовый сброс — /permissions reset.
+func (a *app) trustCode(kind string, parts []string) {
+	pending := a.tools.ScanProjectCode()
+	// Показываем только код нужного вида: иначе список расширений засорён
+	// серверами MCP и наоборот.
+	want := kind
+	filtered := pending[:0:0]
+	for _, w := range pending {
+		if w.Kind == want {
+			filtered = append(filtered, w)
+		}
+	}
+	pending = filtered
+
+	if len(pending) == 0 {
+		label := "расширений"
+		cmd := "/ext trust"
+		if kind == "mcp" {
+			label = "MCP-серверов"
+			cmd = "/mcp trust"
+		}
+		a.ui.Println("")
+		a.ui.Info("недоверенного кода из проекта нет — " + label + " подключены все")
+		a.ui.Hint("свои расширения: /ext new <имя> · список: " + cmd)
+		a.ui.Println("")
+		return
+	}
+
+	if len(parts) < 2 {
+		a.showPendingCode(pending, kind)
+		return
+	}
+
+	name := parts[1]
+	w, ok := a.tools.FindPendingCode(kind, name)
+	if !ok {
+		a.ui.Err("не найден недоверенный " + kind + " «" + name + "»")
+		a.showPendingCode(pending, kind)
+		return
+	}
+	if !a.askTrustCode(w) {
+		a.ui.Info("не подтверждено — " + w.Label() + " остаётся отключённым")
+		return
+	}
+	a.tools.TrustCode(w)
+	// Сразу подключаем: иначе пришлось бы ещё раз перезапускать сессию.
+	a.buildTools()
+	if n := a.tools.ExtCount(); kind == "ext" && n > 0 {
+		a.ui.Ok(w.Label() + ": доверено, подключено инструментов расширений — " + strconv.Itoa(n))
+	} else {
+		a.ui.Ok(w.Label() + ": доверено")
+	}
+	a.ui.Hint("сбросить все согласия: /permissions reset")
+}
+
+// askTrustCode — показать, что именно запускается, и спросить подтверждение.
+func (a *app) askTrustCode(w tools.ProjectCodeWarning) bool {
+	a.ui.Println("")
+	kindWord := "расширение"
+	if w.Kind == "mcp" {
+		kindWord = "MCP-сервер"
+	}
+	a.ui.Println("  " + a.ui.Accent("◆") + " " + a.ui.Bold(w.Label()) +
+		a.ui.Gray("  · код из проекта: "+w.Path))
+	if w.What != "" {
+		a.ui.Println("    " + a.ui.Gray("выполнит: "+core.Truncate(core.OneLine(w.What), 100)))
+	}
+	if w.Kind == "ext" && w.Count > 0 {
+		a.ui.Println("    " + a.ui.Gray(fmt.Sprintf("даст инструментов: %d", w.Count)))
+	}
+	if w.Hash != "" {
+		a.ui.Println("    " + a.ui.Gray("отпечаток: "+core.Truncate(w.Hash, 16)))
+	}
+	if a.quiet {
+		// В машинном режиме (один запрос, CI) подтверждать чужой код нельзя:
+		// некому ответить, а «молча доверять» — ровно то, от чего мы защищаем.
+		return false
+	}
+	a.ui.Prompt2(fmt.Sprintf("Доверять и подключить (%s)?", kindWord), "[y]да [n]нет: ")
+	return a.readAns(false, false) == confirmYes
+}
+
+// showPendingCode — список недоверенного кода без подтверждения.
+func (a *app) showPendingCode(pending []tools.ProjectCodeWarning, kind string) {
+	cmd := "/ext trust"
+	what := "расширения"
+	if kind == "mcp" {
+		cmd = "/mcp trust"
+		what = "MCP-серверы"
+	}
+	a.ui.Println("")
+	a.ui.Section("Код проекта без подтверждения: " + what)
+	rows := make([][]string, 0, len(pending))
+	for _, w := range pending {
+		rows = append(rows, []string{
+			w.Name,
+			w.Path,
+			core.Truncate(core.OneLine(w.What), 60),
+			core.Truncate(w.Hash, 10),
+		})
+	}
+	a.ui.Table([]ui.Column{
+		{Title: "имя", Width: 22},
+		{Title: "файл", Width: 34},
+		{Title: "что выполнит", Width: 40},
+		{Title: "отпечаток", Width: 12},
+	}, rows, ui.BlockOpts{})
+	a.ui.Hint("подтвердить: " + cmd + " <имя>   ·   всё подключено: /ext trust, /mcp trust по одному")
+	a.ui.Hint("сбросить согласия: /permissions reset")
+	a.ui.Println("")
 }
 
 // ---------- Экспорт, сжатие, диагностика ----------

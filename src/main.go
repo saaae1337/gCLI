@@ -79,9 +79,23 @@ type app struct {
 	// чтобы агент видел свой настоящий системный промпт, а не базовый.
 	lastAgent *agent.Agent
 
-	// setupNotes — замечания при старте (подключённые MCP-серверы и т.п.),
-	// показываются под баннером одной группой.
+	// setupNotes — замечания при старте, показываются под баннером одной
+	// группой. Снимок startupNotes на момент последней сборки реестра.
 	setupNotes []string
+
+	// startupNotes — то, что не относится к реестру и должно печататься под
+	// баннером: например, включённая песочница. Список реестра (setupNotes)
+	// buildTools пересобирает начисто, а эти замечания при пересборке
+	// терялись бы: после /sandbox on пользователь не увидел бы слова
+	// «Песочница: пути ограничены…».
+	startupNotes []string
+
+	// sandbox — граница файловой системы для инструментов. По умолчанию
+	// выключена: пользователь обычно работает в своём проекте и лишний
+	// вопрос «а можно ли выйти из каталога?» только мешает. Но в чужом
+	// репозитории (клон, распакованный архив) песочница — единственное,
+	// что не даст агенту унести ключи из ~/.gcli.
+	sandbox *tools.Sandbox
 
 	// Размышления модели. По умолчанию они НЕ печатаются: в ходе работы
 	// они шумят, а читать их заранее всё равно нельзя. Но они копятся в
@@ -124,6 +138,7 @@ func main() {
 		flagProv         = flag.String("provider", "", "провайдер: zai | openrouter | openai | anthropic | ollama | свой id")
 		flagAgent        = flag.String("agent", "", "агентный режим: on | off")
 		flagYolo         = flag.Bool("yolo", false, "не спрашивать подтверждений (кроме опасных команд)")
+		flagSandbox      = flag.String("sandbox", "", "песочница файлов: on | off (ограничить доступ рабочим каталогом)")
 		flagAutopilot    = flag.String("autopilot", "", "автопилот: on | off (сам одобряет безопасные действия)")
 		flagAutopilotAll = flag.String("autopilot-all", "", "автопилот повышенного риска: on | off (одобряет всё)")
 		flagSetup        = flag.Bool("setup", false, "мастер настройки: провайдер → ключ → модель")
@@ -159,6 +174,9 @@ func main() {
 	if *flagSubagent != "" {
 		a.repo.Cfg.Subagents = *flagSubagent != "off"
 	}
+	// Песочница включается флагом или переменной окружения. Сначала
+	// собираем Env: без него buildTools не увидит песочницу.
+	a.sandbox = a.setupSandbox(*flagSandbox)
 	if a.repo.Cfg.Compact || *flagCompact {
 		a.ui.SetCompact(true)
 	}
@@ -397,9 +415,15 @@ func (a *app) saveSession() {
 
 // buildTools — собрать реестр инструментов.
 func (a *app) buildTools() {
+	// Замечания относятся к конкретной сборке реестра. Без сброса повторная
+	// сборка (смена песочницы, /ext trust) дописывала бы их в конец старого
+	// списка, и пользователь увидел бы предупреждение о коде, который уже
+	// подтвердили. Замечания самого запуска (песочница) переживают сборку.
+	a.setupNotes = append([]string(nil), a.startupNotes...)
 	env := tools.Env{
 		WorkDir:    a.workDir,
 		ReadFiles:  map[string]bool{},
+		Sandbox:    a.sandbox,
 		Depth:      0,
 		MaxDepth:   core.Clamp(a.repo.Cfg.SubMaxDepth, 1, 3),
 		HTTPClient: tools.NewHTTPClient(),
@@ -414,6 +438,9 @@ func (a *app) buildTools() {
 		Ask:        a.askUser,
 		Self:       a.selfReport,
 		OnProgress: a.onProgress,
+		// Доверие к коду из проекта. Хранилище всегда есть, даже если файл
+		// согласий пуст: тогда «нет согласия» и «хранилища нет» — одно и то же.
+		Trust: tools.NewTrustStore(a.store.Root),
 	}
 	a.tools = tools.New(env)
 	a.tools.RegisterSkills()
@@ -429,6 +456,70 @@ func (a *app) buildTools() {
 			a.setupNotes = append(a.setupNotes, w)
 		}
 	}
+	a.reportPendingCode()
+}
+
+// reportPendingCode — сказать при старте, что код из проекта ждёт подтверждения.
+//
+// Молчать нельзя: иначе выглядит так, будто расширений и MCP-серверов просто
+// нет, а на самом деле их инструменты не подключены — и агент будет
+// уверенно говорить «такого инструмента у меня нет».
+func (a *app) reportPendingCode() {
+	if a.quiet {
+		return
+	}
+	pending := a.tools.ScanProjectCode()
+	if len(pending) == 0 {
+		return
+	}
+	names := make([]string, 0, len(pending))
+	for _, w := range pending {
+		names = append(names, w.Label())
+	}
+	kind := "/ext trust"
+	if len(pending) == 1 && pending[0].Kind == "mcp" {
+		kind = "/mcp trust"
+	}
+	a.setupNotes = append(a.setupNotes, fmt.Sprintf(
+		"код из проекта ждёт подтверждения: %s (подтвердить: %s <имя>)",
+		core.Truncate(strings.Join(names, ", "), 70), kind))
+}
+
+// setupSandbox — решить, включать ли песочницу, и собрать её.
+//
+// Три источника, по убыванию приоритета: флаг -sandbox, переменная
+// GCLI_SANDBOX, значение из конфига. Пока режим не задан явно, песочница
+// выключена: ломать привычное поведение без просьбы нельзя, а вот для
+// чужого репозитория её включают руками (-sandbox on) или переменной
+// окружения, чтобы не набирать флаг каждый раз.
+func (a *app) setupSandbox(flagVal string) *tools.Sandbox {
+	mode := strings.ToLower(strings.TrimSpace(flagVal))
+	if mode == "" {
+		mode = strings.ToLower(strings.TrimSpace(os.Getenv("GCLI_SANDBOX")))
+	}
+	if mode == "" {
+		if a.repo.Cfg.Sandbox {
+			mode = "on"
+		} else {
+			return nil
+		}
+	}
+	if mode == "off" || mode == "0" || mode == "false" || mode == "выкл" {
+		return nil
+	}
+
+	sb := tools.NewSandbox(a.workDir).WithDeny(tools.DefaultDeny()...)
+	// Каталог данных gcli закрываем всегда, даже когда он внутри проекта:
+	// там config.json с ключами API, и песочница не должна превращаться в
+	// возможность его прочитать.
+	if home := a.store.Root; home != "" {
+		sb.WithDeny(home)
+	}
+	if !a.quiet {
+		a.startupNotes = append(a.startupNotes,
+			"Песочница: пути ограничены рабочим каталогом, секреты закрыты (выход: /sandbox off)")
+	}
+	return sb
 }
 
 // buildPool — собрать пул субагентов.

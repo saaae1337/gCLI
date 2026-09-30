@@ -120,8 +120,14 @@ func (r *Registry) hInspect(_ context.Context, m map[string]any) (Result, error)
 	if raw == "" {
 		return Result{}, fmt.Errorf("укажи path")
 	}
-	p := r.resolvePath(raw)
-	data, err := readFileSafe(p)
+	p, err := r.pathArg(raw)
+	if err != nil {
+		return Result{}, err
+	}
+	// inspect показывает файл целиком (в escape-виде), поэтому потолок ниже,
+	// чем у read_file, и обрезка здесь объявляется явно: агент должен знать,
+	// что «невидимых символов не найдено» может означать «я смотрел не всё».
+	data, size, truncated, err := readFileLimited(p, maxInspectBytes)
 	if err != nil {
 		return Result{}, err
 	}
@@ -132,6 +138,13 @@ func (r *Registry) hInspect(_ context.Context, m map[string]any) (Result, error)
 	rep := DetectInvisible(p, content)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Точное содержимое: %s\n\n%s\n\n", rep.Path, rep.Text())
+	if truncated {
+		// Молчаливое усечение здесь особенно опасно: агент приходит в inspect
+		// именно затем, чтобы найти «невидимый символ», и, не найдя его на
+		// первых 512 КБ, решит, что его нет вовсе.
+		fmt.Fprintf(&b, "[внимание: файл больше %s, показано начало; ищи нужное место через read_file {offset}]\n\n",
+			core.HumanSize(int(size)))
+	}
 
 	// Участок: либо по номерам строк, либо вокруг искомого текста.
 	off, lim := ArgInt(m, "offset", 1), ArgInt(m, "limit", 40)

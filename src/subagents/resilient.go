@@ -262,6 +262,10 @@ func Wrap(r Runner, rs Resilience) Runner {
 	return func(ctx context.Context, spec Spec) (Outcome, error) {
 		var lastErr error
 		var lastQ Quality = ReportOK
+		// lastOut — результат последней попытки. После исчерпания попыток
+		// возвращаем именно его: даже негодный отчёт полезен главному
+		// агенту, который сам разберётся, что делать дальше.
+		var lastOut Outcome
 
 		for attempt := 1; attempt <= rs.Attempts; attempt++ {
 			if err := ctx.Err(); err != nil {
@@ -277,6 +281,7 @@ func Wrap(r Runner, rs Resilience) Runner {
 			}
 
 			out, err := r(ctx, cur)
+			lastOut = out
 
 			if err == nil {
 				q := AssessReport(out.Full)
@@ -314,21 +319,20 @@ func Wrap(r Runner, rs Resilience) Runner {
 			}
 		}
 
-		// Попытки исчерпаны. Не возвращаем пустоту: главный агент должен
-		// понимать, что произошло, иначе он решит, будто субагент молчал.
-		out, err := r(ctx, spec)
-		if err != nil {
-			if lastErr != nil {
-				err = lastErr
-			}
-		} else {
-			q := AssessReport(out.Full)
-			out.Retries = rs.Attempts - 1
-			if q != ReportOK {
-				out.Full = degradedReport(out.Full, spec, err, lastErr, q, rs.Attempts)
-			}
+		// Попытки исчерпаны. Дополнительного вызова раннера здесь НЕТ:
+		// он был бы девятым «повтором», который не считается, платится
+		// провайдеру и делает поле Retries бессмысленным. Вместо этого
+		// возвращаем результат последней попытки, помечая его как
+		// негодный: главный агент должен понимать, что произошло, иначе
+		// он решит, будто субагент молчал.
+		out := lastOut
+		out.Retries = rs.Attempts - 1
+		if out.Full == "" {
+			out.Full = degradedReport(out.Full, spec, nil, lastErr, ReportEmpty, rs.Attempts)
+			return out, firstErr(lastErr, errors.New("субагент не вернул отчёт после всех попыток"))
 		}
-		return out, err
+		out.Full = degradedReport(out.Full, spec, lastErr, nil, AssessReport(out.Full), rs.Attempts)
+		return out, lastErr
 	}
 }
 
@@ -342,6 +346,21 @@ func firstErr(errs ...error) error {
 	return nil
 }
 
+// pluralAttempts — «2 попытки», «5 попыток», «1 попытка».
+//
+// Отдельная функция, а не условие на месте: этот текст читает и человек, и
+// модель, а опечатка в объяснении сбоя стоит дороже трёх строк кода.
+func pluralAttempts(n int) string {
+	switch {
+	case n%10 == 1 && n%100 != 11:
+		return fmt.Sprintf("%d попытка", n)
+	case n%10 >= 2 && n%10 <= 4 && (n%100 < 12 || n%100 > 14):
+		return fmt.Sprintf("%d попытки", n)
+	default:
+		return fmt.Sprintf("%d попыток", n)
+	}
+}
+
 // degradedReport — собрать внятный отчёт вместо пустоты.
 func degradedReport(full string, spec Spec, err, lastErr error, q Quality, attempts int) string {
 	var b strings.Builder
@@ -349,8 +368,11 @@ func degradedReport(full string, spec Spec, err, lastErr error, q Quality, attem
 		b.WriteString(strings.TrimSpace(full))
 		b.WriteString("\n\n---\n")
 	}
-	fmt.Fprintf(&b, "⚠ Отчёт неполный: субагент «%s» не смог сдать результат после %d попыток.\n",
-		spec.Type.Label(), attempts)
+	// Согласование обязательно: «после 2 попыток» читается как опечатка,
+	// а этот текст главный агент показывает пользователю как объяснение,
+	// почему субагент не справился.
+	fmt.Fprintf(&b, "⚠ Отчёт неполный: субагент «%s» не смог сдать результат после %s.\n",
+		spec.Type.Label(), pluralAttempts(attempts))
 	if err != nil {
 		fmt.Fprintf(&b, "Причина: %s\n", core.Truncate(err.Error(), 300))
 	} else if lastErr != nil {

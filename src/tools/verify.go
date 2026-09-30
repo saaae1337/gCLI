@@ -509,7 +509,11 @@ func (r *Registry) hVerify(ctx context.Context, m map[string]any) (Result, error
 	timeout := core.Clamp(ArgInt(m, "timeout_sec", 300), 10, 1800)
 	runDir := r.workDir
 	if wd := ArgStr(m, "workdir"); wd != "" {
-		runDir = r.resolvePath(wd)
+		abs, err := r.pathArg(wd)
+		if err != nil {
+			return Result{}, err
+		}
+		runDir = abs
 	}
 
 	// Команды проверки читают и меняют кэш сборки, но пользователь запускал

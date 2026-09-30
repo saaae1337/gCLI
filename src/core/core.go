@@ -202,6 +202,12 @@ type Config struct {
 	SubTimeoutMin int    `json:"sub_timeout_min,omitempty"` // потолок времени на субагента, минут (0 = 10)
 	SubRetries    int    `json:"sub_retries,omitempty"`     // попытки запуска субагента при сбое (1..3, 0 = 2)
 	ParallelTools bool   `json:"parallel_tools,omitempty"`  // выполнять параллельные вызовы инструментов
+	// Sandbox — песочница файловой системы: ограничить инструменты
+	// рабочим каталогом. По умолчанию выключена, потому что в своём
+	// проекте ограничение только мешает; в чужом репозитории её
+	// включают руками, и это единственная защита от чтения ~/.gcli
+	// с ключами API.
+	Sandbox bool `json:"sandbox,omitempty"`
 }
 
 // DefaultConfig — конфигурация по умолчанию.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -68,6 +69,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdExport()
 	case "/permissions":
 		a.cmdPerms(rest)
+	case "/sandbox":
+		a.cmdSandbox(rest)
 	case "/usage":
 		a.cmdUsage()
 	case "/tools":
@@ -127,6 +130,7 @@ func (a *app) cmdHelp() {
 			{"/agent on|off", "агентный режим (инструменты)"},
 			{"/plan on|off", "режим планирования: сначала план — потом код"},
 			{"/autopilot on|off|all", "автопилот: одобрять безопасные действия самому"},
+			{"/sandbox on|off", "песочница файлов: пути вне рабочего каталога запрещены"},
 			{"/yolo", "без подтверждений (кроме опасных команд)"},
 			{"/tools", "список инструментов агента"},
 			{"/todos", "план текущей задачи"},
@@ -134,8 +138,8 @@ func (a *app) cmdHelp() {
 		}},
 		{"Расширение", [][2]string{
 			{"/skills, /skill", "навыки; new, on|off, показать"},
-			{"/ext", "расширения; new, reload"},
-			{"/mcp", "MCP-серверы; reload, new, path"},
+			{"/ext", "расширения; new, trust, reload"},
+			{"/mcp", "MCP-серверы; trust, reload, new, path"},
 			{"/init", "создать GCLI.md — память проекта"},
 			{"/memory", "файлы памяти проекта"},
 		}},
@@ -146,7 +150,7 @@ func (a *app) cmdHelp() {
 			{"/clear", "новая сессия"},
 			{"/export", "экспорт диалога в Markdown"},
 			{"/undo", "отменить последнюю правку файла"},
-			{"/permissions [reset]", "разрешения сессии"},
+			{"/permissions [reset]", "разрешения сессии, доверие коду, сброс"},
 		}}, {"Сервис", [][2]string{
 			{"/doctor [key]", "диагностика окружения и ключа"},
 			{"/copy", "скопировать последний ответ (OSC52)"},
@@ -619,6 +623,7 @@ func (a *app) cmdPerms(rest string) {
 	a.ui.Println("")
 	a.ui.KVPairs([][2]string{
 		{"автопилот", autopilotStatus(a)},
+		{"песочница файлов", sandboxStatus(a.sandbox)},
 		{"запись файлов без подтверждения", yesNo(a.sess.Perms.FileWrite)},
 		{"любые bash-команды без подтверждения", yesNo(a.sess.Perms.BashAll)},
 		{"сетевые запросы без подтверждения", yesNo(a.sess.Perms.WebFetch)},
@@ -631,18 +636,127 @@ func (a *app) cmdPerms(rest string) {
 			a.ui.Println("    " + a.ui.Gray("· "+c))
 		}
 	}
+	if sb := a.sandbox; sb.Enabled() {
+		a.ui.Println("")
+		a.ui.Println("  " + a.ui.Gray("песочница разрешает:"))
+		for _, p := range sb.Roots() {
+			a.ui.Println("    " + a.ui.Gray("· "+p))
+		}
+		if d := sb.Deny(); len(d) > 0 {
+			a.ui.Println("")
+			a.ui.Println("  " + a.ui.Gray("песочница запрещает (даже внутри корня):"))
+			for _, p := range d {
+				a.ui.Println("    " + a.ui.Gray("· "+p))
+			}
+		}
+	}
+	// Код проекта, которому пользователь разрешил выполняться. Показываем тем
+	// же списком, что и /ext trust: одно место, где видно, что именно будет
+	// запущено и кто это разрешил.
+	if trusted := a.tools.TrustedList(); len(trusted) > 0 {
+		a.ui.Println("")
+		a.ui.Println("  " + a.ui.Gray("доверенный код проекта:"))
+		keys := make([]string, 0, len(trusted))
+		for k := range trusted {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			a.ui.Println("    " + a.ui.Gray("· "+k+"  отпечаток "+core.Truncate(trusted[k], 12)))
+		}
+	}
+	if pending := a.tools.ScanProjectCode(); len(pending) > 0 {
+		a.ui.Println("")
+		a.ui.Println("  " + a.ui.Gray("ждёт подтверждения:"))
+		for _, w := range pending {
+			a.ui.Println("    " + a.ui.Gray("· "+w.Label()+" — "+w.Path))
+		}
+	}
 	if strings.TrimSpace(rest) == "reset" {
 		a.sess.Perms = core.Perms{BashExact: map[string]bool{}}
 		a.repo.Cfg.Autopilot = false
 		a.repo.Cfg.AutopilotAll = false
 		a.saveConfig()
 		a.saveSession()
+		// Согласия на код — тоже разрешение: сброс должен их убрать. Иначе
+		// «сбросить» оставило бы расширения и MCP-серверы включёнными.
+		forgotten := a.tools.UntrustCode()
+		// Реестр пересобираем сразу: пока инструменты проекта висят в старом
+		// Registry, они продолжают работать, и «сброс» ничего не отключал
+		// бы. MCP-процессы гасим ДО сборки, иначе они бы остались
+		// запущенными сиротами (реестр их уже не держит).
+		a.tools.MCPShutdown()
+		extBefore, mcpBefore := a.tools.ExtCount(), a.tools.MCPToolCount()
+		a.buildTools()
+
 		a.ui.Ok("разрешения сброшены")
+		if forgotten > 0 {
+			a.ui.Hint(fmt.Sprintf("забыто подтверждений кода: %d", forgotten))
+		}
+		if n := extBefore + mcpBefore; n > 0 {
+			a.ui.Hint(fmt.Sprintf("отключено инструментов проекта: %d (расширения: %d, MCP: %d)",
+				n, extBefore, mcpBefore))
+		}
+		if pending := a.tools.ScanProjectCode(); len(pending) > 0 {
+			a.ui.Hint("код из проекта снова ждёт подтверждения: /ext trust <имя> · /mcp trust <имя>")
+		}
 	} else {
 		a.ui.Println("")
-		a.ui.Println("  " + a.ui.Gray("автопилот: /autopilot on|off|all · сброс: /permissions reset"))
+		a.ui.Println("  " + a.ui.Gray("автопилот: /autopilot on|off|all · сброс: /permissions reset · песочница: /sandbox on|off"))
+		a.ui.Println("  " + a.ui.Gray("код проекта: /ext trust <имя> · /mcp trust <имя>"))
 	}
 	a.ui.Println("")
+}
+
+// sandboxStatus — строка состояния песочницы для /permissions и /status.
+func sandboxStatus(sb *tools.Sandbox) string {
+	if !sb.Enabled() {
+		return "выключена (файлы видны где угодно)"
+	}
+	return "включена: " + core.Truncate(strings.Join(sb.Roots(), ", "), 60)
+}
+
+// cmdSandbox — переключить песочницу файловой системы: on | off | status.
+//
+// Переключение пересобирает реестр инструментов: песочница живёт в Env, а не
+// внутри инструментов, поэтому без пересборки команда «включила» бы
+// песочницу, а инструменты продолжили бы работать по-старому.
+func (a *app) cmdSandbox(rest string) {
+	mode := strings.ToLower(strings.TrimSpace(rest))
+	if mode == "" {
+		mode = "status"
+	}
+	switch mode {
+	case "status", "показать":
+		if a.sandbox.Enabled() {
+			a.ui.Ok("песочница включена: пути ограничены рабочим каталогом, секреты закрыты")
+			for _, p := range a.sandbox.Roots() {
+				a.ui.Println("    " + a.ui.Gray("· "+p))
+			}
+		} else {
+			a.ui.Println("песочница выключена — инструменты видят всю файловую систему")
+		}
+		return
+	case "off", "0", "false", "выкл", "отключить":
+		a.sandbox = nil
+		a.repo.Cfg.Sandbox = false
+	case "on", "1", "true", "вкл", "включить":
+		a.sandbox = tools.NewSandbox(a.workDir).WithDeny(tools.DefaultDeny()...)
+		if home := a.store.Root; home != "" {
+			a.sandbox.WithDeny(home)
+		}
+		a.repo.Cfg.Sandbox = true
+	default:
+		a.ui.Warn("не понял: " + rest + " — /sandbox on | off | status")
+		return
+	}
+	a.saveConfig()
+	a.buildTools()
+	if a.sandbox.Enabled() {
+		a.ui.Ok("песочница включена — пути вне рабочего каталога запрещены")
+	} else {
+		a.ui.Ok("песочница выключена")
+	}
 }
 
 func yesNo(b bool) string {

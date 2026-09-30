@@ -297,6 +297,23 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 	t0 := time.Now()
 	showReason := a.d.Think != "off"
 
+	// Учёт токенов — на любом выходе, а не только на успешном.
+	//
+	// Раньше счётчик пополнялся в самом конце функции, то есть только когда
+	// всё прошло хорошо. Прерванный по Ctrl+C запрос, обрыв сети на середине
+	// ответа, 500 от провайдера — всё это стоило пользователю денег, но в
+	// счётчике не появлялось: /usage врал, а оценка контекста в /context
+	// занижалась, и сжатие не срабатывало вовремя.
+	defer func() {
+		if quiet || a.d.Session == nil {
+			return
+		}
+		a.d.Session.AddUsage(usage)
+		if a.d.OnUsage != nil {
+			a.d.OnUsage(usage, time.Since(t0))
+		}
+	}()
+
 	for attempt := 1; ; attempt++ {
 		var pText, pReason, pSig string
 		pAcc := map[int]*core.ToolCall{}
@@ -309,8 +326,17 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 		rctx, rcancel := context.WithTimeout(ctx, 10*time.Minute)
 		ch := make(chan core.Delta, 512)
 		var streamErr error
+		// recover обязателен именно здесь: это единственная горутина на
+		// пути к провайдеру, и паника в парсере ответа (кривой SSE, битый
+		// ответ вебхука) без него убивала бы весь процесс вместе с
+		// сессией — вместе с историей, которая уже оплачена.
 		go func() {
 			defer close(ch)
+			defer func() {
+				if r := recover(); r != nil {
+					streamErr = fmt.Errorf("паника при разборе потока провайдера: %v", r)
+				}
+			}()
 			streamErr = providers.Stream(rctx, a.d.Providers, a.d.Provider, creq, a.d.Think, ch)
 		}()
 
@@ -424,22 +450,18 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 	for _, idx := range order {
 		msg.ToolCalls = append(msg.ToolCalls, *acc[idx])
 	}
-	if !quiet {
-		a.d.Session.AddUsage(usage)
-		if a.d.OnUsage != nil {
-			a.d.OnUsage(usage, time.Since(t0))
-		}
-	}
 	return msg, nil
 }
 
 // Run — выполнить ход агента целиком.
-func (a *Agent) Run(ctx context.Context, userText string) error {
+func (a *Agent) Run(ctx context.Context, userText string) (err error) {
+	// Пользовательский recover на весь ход: спокойная замена паники понятным
+	// текстом. Раньше он молча проглатывал панику (тело состояло из
+	// условия и пустого return), и ход выглядел как «агент молча закончил
+	// работу», хотя ответ не был получен вовсе.
 	defer func() {
 		if r := recover(); r != nil {
-			if a.d.OnToolDone == nil {
-				return
-			}
+			err = fmt.Errorf("внутренняя ошибка агента: %v", r)
 		}
 	}()
 
@@ -619,56 +641,76 @@ type toolResult struct {
 
 // execTools — выполнить вызовы инструментов (параллельно, если безопасно).
 func (a *Agent) execTools(ctx context.Context, calls []core.ToolCall) []toolResult {
-	out := make([]toolResult, 0, len(calls))
+	// Результат на каждый вызов, строго по его позиции в ответе модели.
+	//
+	// Порядок обязателен: tool-сообщения идут в историю в порядке вызовов,
+	// иначе модель сопоставляет результат с чужим инструментом. Раньше
+	// параллельные результаты добавлялись в порядке завершения горутин, то
+	// есть случайно, — при шести read_file в multi_read это была лотерея.
+	out := make([]toolResult, len(calls))
+	for i, tc := range calls {
+		out[i] = toolResult{tc: tc}
+	}
 
 	// Разделяем на последовательные и параллельные.
 	//
 	// spawn_agent параллелится всегда, независимо от флага ParallelTools:
 	// именно это делает делегирование нескольких независимых подзадач
 	// быстрым, а пул всё равно ограничивает число одновременных запусков.
-	var sequential []core.ToolCall
-	var parallel []core.ToolCall
-	for _, tc := range calls {
+	type slot struct {
+		pos int
+		tc  core.ToolCall
+	}
+	var sequential, parallel []slot
+	for i, tc := range calls {
+		s := slot{pos: i, tc: tc}
 		if a.canRunParallel(tc.Name) && (a.d.Parallel || tc.Name == "spawn_agent") {
-			parallel = append(parallel, tc)
+			parallel = append(parallel, s)
 		} else {
-			sequential = append(sequential, tc)
+			sequential = append(sequential, s)
 		}
 	}
 
 	if len(parallel) > 0 {
 		limit := core.Clamp(a.d.MaxParallelTools, 1, 8)
 		sem := make(chan struct{}, limit)
-		done := make(chan toolResult, len(parallel))
-		for _, tc := range parallel {
-			tc := tc
+		type res struct {
+			pos int
+			r   toolResult
+		}
+		done := make(chan res, len(parallel))
+		for _, s := range parallel {
+			s := s
 			sem <- struct{}{}
 			go func() {
 				defer func() { <-sem }()
-				done <- a.execOne(ctx, tc)
+				done <- res{pos: s.pos, r: a.execOne(ctx, s.tc)}
 			}()
 		}
-		got := map[string]string{}
-		order := make([]string, 0, len(parallel))
+		// Кладём результат по номеру вызова, а не «как пришли» и не по ID.
+		//
+		// По ID нельзя: два вызова с одинаковым (или пустым) ID схлопывались
+		// бы в один элемент map, и второй результат либо терялся, либо
+		// дублировался — в истории появлялись два tool-сообщения с одним
+		// tool_call_id, и провайдер отвергал следующий запрос целиком.
+		//
+		// Раньше здесь собиралось только text, а images терялись совсем:
+		// скриншот в параллельном пакете молча исчезал, и модель получала
+		// «инструмент отработал, а картинки нет».
 		for range parallel {
 			r := <-done
-			got[r.tc.ID] = r.text
-			order = append(order, r.tc.ID)
-		}
-		for _, tc := range parallel {
-			out = append(out, toolResult{tc: tc, text: got[tc.ID]})
-		}
-	} else {
-		for _, tc := range parallel {
-			out = append(out, a.execOne(ctx, tc))
+			out[r.pos] = r.r
 		}
 	}
 
-	for _, tc := range sequential {
+	for _, s := range sequential {
 		if ctx.Err() != nil {
-			break
+			// Оставшиеся вызовы всё равно должны получить ответ: tool-вызов
+			// без tool-сообщения ломает следующий запрос к API.
+			out[s.pos].text = "Ошибка: ход прерван, инструмент не выполнен"
+			continue
 		}
-		out = append(out, a.execOne(ctx, tc))
+		out[s.pos] = a.execOne(ctx, s.tc)
 	}
 	return out
 }
@@ -738,6 +780,14 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 	if text == "" {
 		text = "(инструмент не вернул результат)"
 	}
+	// Сокрытие секретов — здесь, а не в каждом инструменте.
+	//
+	// Маскировать нужно всё, что уходит в контекст модели: результат grep
+	// по «api_key», вывод `env` в CI, содержимое .env. Правило «каждый
+	// инструмент помнит про секреты» не работает: инструментов тридцать, и
+	// забудут все, кроме того, который написан последним. Здесь — одна точка
+	// на весь результат, и забыть её уже нельзя.
+	text = tools.RedactSecrets(text)
 	text = a.clampResult(text)
 
 	res.text = text

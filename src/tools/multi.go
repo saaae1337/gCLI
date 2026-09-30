@@ -425,7 +425,15 @@ func (r *Registry) runAtomicEdits(ctx context.Context, edits []multiEdit, par in
 			if ctx.Err() != nil || failed() {
 				return
 			}
-			p := prepared{e: edits[i], path: r.resolvePath(edits[i].Path)}
+			// Путь — через pathArg, а не resolvePath: песочница обязана
+			// проверить и цели atomic-пачки, иначе atomic:true стал бы
+			// обходом песочницы «в один вызов».
+			abs, err := r.pathArg(edits[i].Path)
+			if err != nil {
+				fail(fmt.Errorf("%s: %v", edits[i].Path, err))
+				return
+			}
+			p := prepared{e: edits[i], path: abs}
 			cur, err := os.ReadFile(p.path)
 			if err != nil {
 				fail(fmt.Errorf("%s: %v", core.RelToWD(r.workDir, p.path), err))
@@ -489,22 +497,84 @@ func (r *Registry) runAtomicEdits(ctx context.Context, edits []multiEdit, par in
 
 	var b strings.Builder
 	applied := 0
+	// Откат. atomic обещает «всё или ничего», а пока файлы пишутся по одному,
+	// сбой на пятом (диск полон, файл заблокирован антивирусом) оставлял бы
+	// первые четыре изменёнными — то есть обещание было бы ложью ровно в том
+	// случае, когда пользователю важнее всего. Поэтому запоминаем применённое
+	// и при первой неудаче возвращаем всё на место.
+	//
+	// Ошибки восстановления НЕ глотаем: раньше os.Remove и WriteAtomic
+	// игнорировались, а отчёт затем безусловно рапортовал «файлы вернулись в
+	// исходное состояние». Пользователь после такого оставался с частично
+	// изменённым проектом, зная об обратном.
+	var done []prepared
+	// rollbackOk — довёл ли откат до конца. Иначе обещание «всё или ничего»
+	// в отчёте было бы ложью ровно в том случае, когда пользователю нужнее
+	// всего.
+	rollbackOk := true
+	rollback := func(reason error) {
+		var failed []string
+		for i := len(done) - 1; i >= 0; i-- {
+			p := done[i]
+			if !p.exist {
+				if err := os.Remove(p.path); err != nil && !os.IsNotExist(err) {
+					failed = append(failed, fmt.Sprintf("%s: %v", core.RelToWD(r.workDir, p.path), err))
+				}
+				continue
+			}
+			if err := core.WriteAtomic(p.path, []byte(p.old), 0o644); err != nil {
+				failed = append(failed, fmt.Sprintf("%s: %v", core.RelToWD(r.workDir, p.path), err))
+			}
+		}
+		rollbackOk = len(failed) == 0
+		// Журнал правок тоже врёт после отката: он уже нарисовал изменения,
+		// которых не осталось. Чистим записи применённых файлов — но только
+		// при успешном откате, иначе /undo «отменит» правку, которой на
+		// диске уже нет.
+		if rollbackOk {
+			for _, p := range done {
+				r.dropChange(p.path)
+			}
+		}
+		fmt.Fprintf(&b, "- ОТКАТ: %s (изменено обратно файлов: %d из %d)\n", reason, len(done)-len(failed), len(done))
+		if len(failed) > 0 {
+			fmt.Fprintf(&b, "- ОТКАТ НЕ ЗАВЕРШЁН, эти файлы остались изменёнными — проверь их вручную:\n")
+			for _, f := range failed {
+				fmt.Fprintf(&b, "  - %s\n", f)
+			}
+		}
+	}
 	for i, p := range prep {
 		if p.path == "" {
 			continue
 		}
 		if ctx.Err() != nil {
-			fmt.Fprintf(&b, "- %s: не применена (прервано)\n", edits[i].Path)
-			continue
+			rollback(ctx.Err())
+			break
 		}
 		r.record(p.path, "multi_edit")
 		if err := core.WriteAtomic(p.path, []byte(p.new), 0o644); err != nil {
 			fmt.Fprintf(&b, "- %s: ОШИБКА записи: %v\n", edits[i].Path, err)
-			continue
+			rollback(err)
+			break
 		}
 		r.noteChange(p.path, "multi_edit", p.old, p.new, p.exist)
+		done = append(done, p)
 		applied++
 		fmt.Fprintf(&b, "- %s: изменён\n", core.RelToWD(r.workDir, p.path))
+	}
+	if applied != len(edits) || len(done) != len(prep) {
+		// Хотя бы одна запись не прошла — обещание «всё или ничего» нарушено,
+		// отчёт обязан это сказать прямо. Откат при этом может быть неполным,
+		// и об этом тоже: иначе пользователь поверит словам «изменений нет».
+		head := "откат выполнен, файлы вернулись в исходное состояние"
+		if !rollbackOk {
+			head = "откат НЕ завершён: часть файлов осталась изменённой, см. список ниже"
+		}
+		return Result{
+			Text:    fmt.Sprintf("# multi_edit (atomic)\n\nНЕ ПРИМЕНЕНО: %s\n%s", head, strings.TrimRight(b.String(), "\n")),
+			Summary: "atomic: откат, изменений нет",
+		}, nil
 	}
 	r.progress(ProgressEvent{Title: "multi_edit", Label: "atomic: применено",
 		Done: len(edits), Total: len(edits), Ok: true, Final: true})

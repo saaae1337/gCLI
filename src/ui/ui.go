@@ -822,49 +822,16 @@ func (u *UI) clearSpinLocked() {
 // runeLen — длина строки в рунах.
 func runeLen(s string) int { return len([]rune(s)) }
 
-// runeWidth — грубая ширина строки в терминальных колонках
-// (кириллица и CJK считаются как 1, экранированные последовательности — 0).
-func runeWidth(s string) int {
-	w := 0
-	inEsc := false
-	for _, r := range s {
-		if inEsc {
-			if r == 'm' {
-				inEsc = false
-			}
-			continue
-		}
-		if r == '\033' {
-			inEsc = true
-			continue
-		}
-		w++
-	}
-	return w
-}
+// runeWidth — ширина строки в терминальных колонках.
+//
+// Кириллица даёт 1 колонку, CJK и эмодзи — 2, экранированные
+// последовательности — 0. Раньше здесь был тупой подсчёт рун, из-за чего
+// таблицы с японским текстом и эмодзи разъезжались, а padRight дописывал
+// меньше пробелов, чем нужно, и колонки наезжали друг на друга.
+func runeWidth(s string) int { return cellWidth(s) }
 
 // visibleWidth — ширина строки без ANSI-последовательностей.
-func visibleWidth(s string) int {
-	var b strings.Builder
-	b.Grow(len(s))
-	inEsc := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if inEsc {
-			// ESC-последовательность заканчивается буквой (обычно 'm').
-			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-				inEsc = false
-			}
-			continue
-		}
-		if c == 0x1B {
-			inEsc = true
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return runeLen(b.String())
-}
+func visibleWidth(s string) int { return cellWidth(s) }
 
 // padRight — дополнить строку (учитывая ANSI) пробелами до ширины w.
 func padRight(s string, w int) string {
@@ -892,20 +859,8 @@ func padTo(s string, w int) string {
 	return s
 }
 
-// truncate — обрезать строку до n рун с многоточием.
-func truncate(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 3 {
-		return string(r[:n])
-	}
-	return string(r[:n-3]) + "..."
-}
+// truncate — обрезать строку до n колонок с многоточием.
+func truncate(s string, n int) string { return truncateCellsEll(s, n) }
 
 // center — центрировать строку в ширине w.
 func center(s string, w int) string {
@@ -918,6 +873,10 @@ func center(s string, w int) string {
 }
 
 // wrap — разбить текст на строки по ширине (с учётом переносов по словам).
+//
+// Считаем в колонках, а не в рунах: строка из японского текста в 40 колонок
+// содержит 20 иероглифов, и обрезка по рунам давала вдвое более длинные
+// строки, которые переносились уже терминалом — ломая рамки таблиц.
 func wrap(text string, width int) []string {
 	if width < 10 {
 		width = 10
@@ -930,19 +889,26 @@ func wrap(text string, width int) []string {
 		}
 		line := ""
 		for _, word := range strings.Fields(para) {
-			for runeLen(word) > width {
-				// Слово длиннее строки — режем по границам рун.
-				r := []rune(word)
+			for cellWidth(word) > width {
+				// Слово шире строки — режем по границам колонок.
 				if line != "" {
 					out = append(out, line)
 					line = ""
 				}
-				out = append(out, string(r[:width]))
-				word = string(r[width:])
+				cut := truncateCells(word, width)
+				if cut == "" {
+					// Широкий символ не помещается даже в пустую строку:
+					// отступаем, иначе получился бы бесконечный цикл.
+					// Целиком кластер, а не первый рун: иначе ZWJ-семья
+					// распалась бы на две строки.
+					cut = firstCluster(word)
+				}
+				out = append(out, cut)
+				word = strings.TrimPrefix(word, cut)
 			}
 			if line == "" {
 				line = word
-			} else if runeLen(line)+1+runeLen(word) <= width {
+			} else if cellWidth(line)+1+cellWidth(word) <= width {
 				line += " " + word
 			} else {
 				out = append(out, line)

@@ -8,7 +8,10 @@ gcli-*
 # Go
 *.test
 *.out
+coverage.*
 vendor/
+go.work
+go.work.sum
 
 # Системное
 .DS_Store
@@ -23,3 +26,8 @@ desktop.ini
 
 # Локальные данные gcli в проекте (сессии не коммитим)
 .gcli/sessions/
+.gcli/checkpoints/
+.gcli/trusted.json
+
+# Скриншоты и временное
+.gcli/screenshots/
