@@ -356,35 +356,43 @@ type PromptContext struct {
 // allow — белый список (nil = все встроенные), deny — чёрный список.
 // spawn_agent запрещён всем: вложенная рекурсия ограничена main-агентом.
 func ToolsFor(t Type) (allow []string, deny []string) {
-	readBase := []string{"read_file", "list_dir", "glob", "grep", "think", "load_skill"}
+	// ask_user, spawn_agent и spawn_agents запрещены всем: вложенная
+	// рекурсия ограничена главным агентом, а вопрос пользователю из
+	// субагента ведёт в тупик. spawn_agents запрещён по той же причине, что
+	// spawn_agent: если бы пачка была доступна субагенту, три уровня вложенности
+	// размножились бы в 6×6×6 задач.
+	noMeta := []string{"write_file", "edit_file", "bash", "spawn_agent", "spawn_agents", "ask_user"}
+
+	readBase := []string{"read_file", "list_dir", "glob", "grep", "think", "load_skill",
+		"multi_read", "multi_grep"}
 	switch t {
 	case TypeExplorer:
-		return append(readBase, "web_fetch"),
-			[]string{"write_file", "edit_file", "bash", "spawn_agent", "ask_user"}
+		return append(readBase, "web_fetch"), append([]string{}, noMeta...)
 	case TypeReviewer:
-		return readBase,
-			[]string{"write_file", "edit_file", "bash", "spawn_agent", "ask_user"}
+		return readBase, append([]string{}, noMeta...)
 	case TypePlanner:
-		return append(readBase, "web_search", "web_fetch"),
-			[]string{"write_file", "edit_file", "bash", "spawn_agent", "ask_user"}
+		return append(readBase, "web_search", "web_fetch"), append([]string{}, noMeta...)
 	case TypeResearcher:
-		return []string{"web_search", "web_fetch", "read_file", "list_dir", "think", "load_skill"},
-			[]string{"write_file", "edit_file", "bash", "spawn_agent", "ask_user"}
+		return []string{"web_search", "web_fetch", "read_file", "list_dir", "think", "load_skill", "multi_read"},
+			append([]string{}, noMeta...)
 	case TypeTester:
-		return []string{"read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "bash", "think", "load_skill", "todo_write"},
-			[]string{"spawn_agent", "ask_user"}
+		return []string{"read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "bash", "think", "load_skill", "todo_write", "multi_read", "multi_edit", "multi_bash"},
+			[]string{"spawn_agent", "spawn_agents", "ask_user"}
 	case TypeFrontend:
-		return []string{"read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "bash", "screenshot", "read_image", "think", "load_skill"},
-			[]string{"spawn_agent", "ask_user"}
+		return []string{"read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "bash", "screenshot", "read_image", "think", "load_skill", "multi_read", "multi_grep", "multi_bash"},
+			[]string{"spawn_agent", "spawn_agents", "ask_user"}
 	case TypeDocs:
-		return []string{"read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "bash", "think"},
-			[]string{"spawn_agent", "ask_user"}
+		return []string{"read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "bash", "think", "multi_read", "multi_grep", "multi_edit"},
+			[]string{"spawn_agent", "spawn_agents", "ask_user"}
 	case TypeCoder, TypeGeneral, TypeCustom:
-		return nil, []string{"spawn_agent", "ask_user"}
+		return nil, []string{"spawn_agent", "spawn_agents", "ask_user"}
 	default:
-		return nil, []string{"spawn_agent", "ask_user"}
+		return nil, []string{"spawn_agent", "spawn_agents", "ask_user"}
 	}
 }
+
+// BatchTools — инструменты пакетного (параллельного) режима.
+func BatchTools() []string { return []string{"multi_read", "multi_edit", "multi_grep", "multi_bash"} }
 
 // ---------- Пользовательские агенты (.gcli/agents/*.md) ----------
 

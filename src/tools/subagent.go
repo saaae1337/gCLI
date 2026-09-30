@@ -17,6 +17,9 @@ func (r *Registry) registerSubagentTools() {
 		schemaSpawn, "agent", false, func(r *Registry) Handler { return r.hSpawnAgent })
 	r.registerBound("agent_status", "Сводка по субагентам: status — что сейчас работает, list — все запуски сессии, result — итог по имени.",
 		schemaAgents, "agent", false, func(r *Registry) Handler { return r.hAgentStatus })
+	r.registerBound("spawn_agents", "Запустить пачку субагентов параллельно — независимые подзадачи одним вызовом вместо N последовательных. "+
+		"Каждому передай task (что сделать и что вернуть) и по возможности name. Порядок отчётов совпадает с порядком в agents.",
+		schemaSpawnMany, "agent", false, func(r *Registry) Handler { return r.hSpawnAgents })
 	r.registerBound("ask_user", "Задать вопрос пользователю, когда без его решения задачу нельзя продолжить. Используй редко — только для развилок.",
 		schemaAsk, "agent", false, func(r *Registry) Handler { return r.hAskUser })
 }
@@ -73,6 +76,117 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 			res.Name, args.Type, summary, res.Name),
 		Summary: fmt.Sprintf("%s: %s", res.Name, coreTruncate(coreOneLine(res.Full), 90)),
 	}, nil
+}
+
+// spawnMaxAgents — максимум субагентов в одной пачке.
+//
+// Ограничение не про ресурсы (пул всё равно ограничен SubMaxPar), а про
+// контекст: шесть отчётов по 800 символов — это уже половина окна, и модель
+// начинает выбирать «самый громкий» отчёт вместо того, чтобы прочитать все.
+const spawnMaxAgents = 6
+
+// hSpawnAgents — запустить пачку субагентов.
+//
+// Отчёты собираются в порядке аргументов, а не в порядке завершения: модель
+// сопоставляет их с поставленными задачами по номеру, и перестановка
+// «случайно» сделала бы вывод бессмысленным.
+func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, error) {
+	if r.env.Spawn == nil {
+		return Result{Error: "субагенты отключены — включи: /agents on"}, nil
+	}
+	raw, _ := m["agents"].([]any)
+	if len(raw) == 0 {
+		return Result{}, fmt.Errorf("укажи agents — массив задач для субагентов (до %d)", spawnMaxAgents)
+	}
+	if len(raw) > spawnMaxAgents {
+		return Result{}, fmt.Errorf("слишком много субагентов: %d, максимум %d за вызов — разбей на два вызова",
+			len(raw), spawnMaxAgents)
+	}
+	// Глубина — та же проверка, что у одиночного запуска: пачка на предельной
+	// глубине это N отказов вместо одного.
+	if r.env.Depth >= r.env.MaxDepth {
+		return Result{
+			Text: fmt.Sprintf("Достигнута максимальная глубина вложенности (%d) — выполни задачи самостоятельно. "+
+				"Если нужны параллельная работа или свежий взгляд, скажи об этом пользователю.", r.env.MaxDepth),
+			Summary: "лимит глубины",
+		}, nil
+	}
+
+	var specs []target
+	for i, v := range raw {
+		am, ok := v.(map[string]any)
+		if !ok {
+			return Result{}, fmt.Errorf("agents[%d]: ожидался объект {type, task, name}", i)
+		}
+		typ := strings.ToLower(ArgStr(am, "type"))
+		if typ == "" {
+			typ = "explorer"
+		}
+		task := ArgStr(am, "task")
+		if strings.TrimSpace(task) == "" {
+			return Result{}, fmt.Errorf("agents[%d]: нужна задача (task)", i)
+		}
+		name := ArgStr(am, "name")
+		label := name
+		if label == "" {
+			label = typ + fmt.Sprintf("#%d", i+1)
+		}
+		args := SpawnArgs{
+			Type:     typ,
+			Task:     task,
+			Name:     name,
+			Model:    ArgStr(am, "model"),
+			ReadOnly: ArgBool(am, "read_only"),
+			Depth:    r.env.Depth + 1,
+		}
+		specs = append(specs, target{
+			label: label,
+			run: func(ctx context.Context) (Result, error) {
+				res, err := r.env.Spawn(ctx, args)
+				if err != nil {
+					return Result{}, err
+				}
+				body := res.Summary
+				if body == "" {
+					body = coreTruncate(coreOneLine(res.Full), 800)
+				}
+				return Result{
+					Text: body,
+					Summary: fmt.Sprintf("%s (%s): %s", res.Name, args.Type,
+						coreTruncate(coreOneLine(res.Full), 90)),
+				}, nil
+			},
+		})
+	}
+
+	return r.runBatch(ctx, "spawn_agents", r.parallelism(m), specs,
+		func(items []batchItem) (string, string) {
+			return renderSpawnBatch(items)
+		})
+}
+
+// renderSpawnBatch — собрать отчёты пачки субагентов.
+func renderSpawnBatch(items []batchItem) (string, string) {
+	var b strings.Builder
+	ok, failed := 0, 0
+	b.WriteString(fmt.Sprintf("# spawn_agents: %d субагентов\n\n", len(items)))
+	for i, it := range items {
+		n := i + 1
+		b.WriteString(fmt.Sprintf("## [%d] %s\n", n, it.label))
+		switch {
+		case it.Failed():
+			failed++
+			fmt.Fprintf(&b, "ОШИБКА: %v\n\n", it.err)
+		case strings.TrimSpace(it.warn) != "":
+			failed++
+			fmt.Fprintf(&b, "%s\n\n", it.warn)
+		default:
+			ok++
+			fmt.Fprintf(&b, "%s\n\n", it.res.Text)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"),
+		fmt.Sprintf("%d готовы, %d с ошибкой", ok, failed)
 }
 
 // hAgentStatus — сводка по субагентам.
