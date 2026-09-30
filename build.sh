@@ -14,8 +14,14 @@ set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/src"
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/builds"
-VERSION="${GCLI_VERSION:-5.0.3}"
+VERSION="${GCLI_VERSION:-5.2.0}"
 LDFLAGS="-s -w -X main.buildVersion=$VERSION"
+
+# Версия в core/core.go — источник правды для всего, что читает core.Version:
+# User-Agent, MCP handshake, баннер без ldflags. Если она разошлась с
+# $VERSION, в бинарнике окажутся два разных номера: имя файла и -v скажут одно,
+# а User-Agent и MCP-сервер — другое. Ловим это до сборки, а не после.
+core_version() { grep -oE '^var Version = "[^"]+"' "$SRC_DIR/core/core.go" | grep -oE '[0-9][^"]*' || true; }
 
 # GOOS/GOARCH/имя файла. Первые четыре — то, что реально отдаётся пользователю.
 TARGETS=(
@@ -80,13 +86,38 @@ cmd_one() {
 
 cmd_all() {
   echo "▎ Сборка $VERSION"
+  local cv
+  cv="$(core_version)"
+  if [ -z "$cv" ]; then
+    echo "Не нашёл Version в core/core.go — проверь строку 'var Version = ...'"; return 1
+  fi
+  if [ "$cv" != "$VERSION" ]; then
+    echo "Версии разошлись: core/core.go = $cv, сборка = $VERSION"
+    echo "Поправь одну из них (или задай GCLI_VERSION=$cv) и повтори."
+    return 1
+  fi
   mkdir -p "$OUT_DIR"
+  # Бинарники прошлых версий — не артефакты этого релиза. Без этого в
+  # SHA256SUMS.txt попали бы и 5.0.3, и 5.1.0, и проверка сумм у пользователя
+  # ругалась бы на файлы, которых он не качал.
+  drop_other_versions "$VERSION"
   for t in "${TARGETS[@]}"; do
     # shellcheck disable=SC2086
     set -- $t
     cmd_one "$1" "$2"
   done
   write_sums
+}
+
+# drop_other_versions — убрать из builds/ бинарники с версией не этой сборки.
+drop_other_versions() {
+  local keep="$1" stale
+  stale="$(cd "$OUT_DIR" && ls -1 2>/dev/null | grep -E '^gcli-[0-9]' | grep -vE "^gcli-$keep[-~]" || true)"
+  if [ -n "$stale" ]; then
+    echo "$stale" | while read -r f; do
+      [ -n "$f" ] && rm -f "$OUT_DIR/$f" && echo "  удалён устаревший $f"
+    done
+  fi
 }
 
 write_sums() {
