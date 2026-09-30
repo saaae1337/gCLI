@@ -100,6 +100,13 @@ const (
 	ReportNarrative
 	// ReportTruncated — отчёт оборвался на полуслове (нет завершения).
 	ReportTruncated
+	// ReportNoSections — отчёт читаемый, но без обязательных секций формата.
+	// Для главного агента это почти то же, что обрывок: непонятно, что
+	// сделано, что осталось и что вообще проверялось.
+	ReportNoSections
+	// ReportUnverified — форма в порядке, но утверждения не подтверждены
+	// журналом инструментов: субагент сослался на то, чего не открывал.
+	ReportUnverified
 )
 
 // AssessReport — оценить пригодность отчёта.
@@ -204,12 +211,25 @@ func QualityText(q Quality) string {
 		return "Предыдущая попытка закончилась мыслью вслух, а не отчётом."
 	case ReportTruncated:
 		return "Предыдущая попытка оборвалась на полуслове."
+	case ReportNoSections:
+		return "Предыдущая попытка дала текст без обязательных секций отчёта."
+	case ReportUnverified:
+		return "Предыдущий отчёт не подтвердился: часть ссылок субагент не открывал."
 	}
 	return ""
 }
 
 // RetryHint — добавка к задаче при повторной попытке.
 func RetryHint(err error, q Quality) string {
+	return RetryHintAudit(err, q, nil)
+}
+
+// RetryHintAudit — RetryHint плюс адресный список неподтверждённых мест.
+//
+// Отдельная функция, потому что слой прочности видит вердикт проверки, а не сам журнал: подсказка «открой pool.go:39» стоит
+// больше, чем общие слова «пиши аккуратнее». Без списка модель не догадается,
+// в чём именно ошибкась, и повтор воспроизводит тот же текст.
+func RetryHintAudit(err error, q Quality, audit *GroundingReport) string {
 	var b strings.Builder
 	b.WriteString("\n\n[Система] Это повторная попытка. ")
 	if err != nil {
@@ -224,6 +244,7 @@ func RetryHint(err error, q Quality) string {
 	b.WriteString("3. Пиши отчёт сразу: конкретно, по фактам, со ссылками на файлы и строки.\n")
 	b.WriteString("4. Отчёт обязан быть самодостаточным: заказчик не видит твоего контекста.\n")
 	b.WriteString("5. Если часть работы не удалась — так и напиши, что именно не вышло, и не выдавай это за успех.")
+	b.WriteString(GroundHint(audit))
 	return b.String()
 }
 
@@ -277,14 +298,16 @@ func Wrap(r Runner, rs Resilience) Runner {
 
 			cur := spec
 			if attempt > 1 {
-				cur.RetryHint = RetryHint(lastErr, lastQ)
+				// lastOut, а не out: подсказка составляется по результату
+				// ПРЕДЫДУЩЕЙ попытки, а текущий out появится только ниже.
+				cur.RetryHint = RetryHintAudit(lastErr, lastQ, lastOut.Audit)
 			}
 
 			out, err := r(ctx, cur)
 			lastOut = out
 
 			if err == nil {
-				q := AssessReport(out.Full)
+				q := JudgeReport(spec, out)
 				if q == ReportOK {
 					out.Retries = attempt - 1
 					return out, nil
@@ -331,7 +354,7 @@ func Wrap(r Runner, rs Resilience) Runner {
 			out.Full = degradedReport(out.Full, spec, nil, lastErr, ReportEmpty, rs.Attempts)
 			return out, firstErr(lastErr, errors.New("субагент не вернул отчёт после всех попыток"))
 		}
-		out.Full = degradedReport(out.Full, spec, lastErr, nil, AssessReport(out.Full), rs.Attempts)
+		out.Full = degradedReport(out.Full, spec, lastErr, nil, JudgeReport(spec, out), rs.Attempts)
 		return out, lastErr
 	}
 }

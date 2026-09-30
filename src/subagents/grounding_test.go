@@ -426,3 +426,41 @@ func TestExecAndWebEvidence(t *testing.T) {
 		t.Fatal("команда не должна подтверждать строки исходника")
 	}
 }
+
+// ---------- Приложение: блок проверки в отчёте ----------
+
+// TestReportBlockOnPhantomWithoutLineRef — фантом, упомянутый БЕЗ номера
+// строки, всё равно обязан попасть в блок проверки.
+//
+// Регрессия на конкретное решение в Report: условие «проверять было нечего»
+// стояло только на Checked == 0 и проглатывало отчёт, где субагент выдумал
+// файл, но ни одной ссылки «файл:строка» не оставил. Такой отчёт уходил
+// наверх как чистый — с самой грубой галлюцинацией внутри и без единого
+// предупреждения.
+func TestReportBlockOnPhantomWithoutLineRef(t *testing.T) {
+	g, _ := mkGrounding(t)
+	g.Observe("read_file", `{"path":"real.go"}`, readFull("real.go", 10), true)
+
+	rep := g.Audit("Всё логично в real.go, но фикс почему-то в utils/handler.go.")
+	if len(rep.Phantoms) != 1 {
+		t.Fatalf("фантомы: %+v, ждали [utils/handler.go]", rep.Phantoms)
+	}
+	if rep.Checked != 0 {
+		t.Fatalf("ссылок с номером строки %d, ждали 0 — тест обязан быть phantom-only", rep.Checked)
+	}
+	block := g.Report(rep)
+	if !strings.Contains(block, "Проверка отчёта") || !strings.Contains(block, "utils/handler.go") {
+		t.Fatalf("блок проверки не сообщил о фантоме:\n%s", block)
+	}
+}
+
+// Обратный случай: без ссылок и без фантомов блока быть не должно —
+// иначе в каждом отчёте главного агента будет шум.
+func TestReportNoBlockWhenNothingToCheck(t *testing.T) {
+	g, _ := mkGrounding(t)
+	g.Observe("read_file", `{"path":"real.go"}`, readFull("real.go", 10), true)
+
+	if block := g.Report(g.Audit("Отчёт без ссылок на код.")); block != "" {
+		t.Fatalf("блок проверки без замечаний — это шум:\n%s", block)
+	}
+}
