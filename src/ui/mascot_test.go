@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -192,6 +193,120 @@ func TestShimmerWord(t *testing.T) {
 	}
 	if n := runeLen(StripANSI(w0)); n != runeLen("thinking...") {
 		t.Errorf("перелив изменил длину слова: %d", n)
+	}
+}
+
+// Перелив не должен гаснуть: фронт волны ходит по кольцу длиной в слово и
+// никогда не покидает его, поэтому на любой секунде ожидания в слове есть
+// яркий символ — хоть на третьей минуте.
+func TestShimmerNeverGoesStatic(t *testing.T) {
+	word := "thinking..."
+	for _, grade := range []ColorLevel{Color16, Color256, ColorRGB} {
+		u, _ := uiAt(grade, 60)
+		for sec := 0.0; sec < 120; sec += 0.05 {
+			frame := u.shimmerWord(word, sec)
+			if StripANSI(frame) != word {
+				t.Fatalf("grade=%v, t=%.2f: слово искажено: %q", grade, sec, StripANSI(frame))
+			}
+			if !shimmerHasHighlight(frame) {
+				t.Fatalf("grade=%v, t=%.2f: перелив погас — слово стало статичным: %q",
+					grade, sec, StripANSI(frame))
+			}
+		}
+	}
+}
+
+// Перелив должен быть не просто «не серым», а контрастным: фронт волны
+// виден как яркое пятно на фоне слова. Прежний ход «вправо с разворотом»
+// держал яркую точку на фоне серого кирпича, и глаз переставал читать
+// движение; кольцевой ход возвращает кадры, где ярко и тускло чередуются.
+//
+// Меряем настоящий разброс кадра: не «есть хоть один не-серый символ», а
+// сколько символов заметно отличаются от самого тусклого.
+func TestShimmerHasVisibleContrast(t *testing.T) {
+	word := "thinking..."
+	for _, grade := range []ColorLevel{Color16, ColorRGB} {
+		u, _ := uiAt(grade, 60)
+		for sec := 0.0; sec < 30; sec += 0.1 {
+			levels := shimmerLevels(u, word, sec)
+			min, max := 1.0, 0.0
+			for _, k := range levels {
+				if k < min {
+					min = k
+				}
+				if k > max {
+					max = k
+				}
+			}
+			if max < 0.9 {
+				t.Errorf("grade=%v, t=%.1f: нет яркого ядра волны (макс %.2f)", grade, sec, max)
+			}
+			// Хвост кометы держит градиент: без него кадр состоит из
+			// яркого пятна и ровного фона, и перелив читается как мигание.
+			if min > 0.75 {
+				t.Errorf("grade=%v, t=%.1f: нет тусклой части слова (мин %.2f) — перелив мигает, а не переливается",
+					grade, sec, min)
+			}
+		}
+	}
+}
+
+// shimmerLevels — яркость каждого символа слова в кадре (пересчёт той же
+// формулы, что в shimmerWord). Нужен тестам: сравнивать цвета по escape-
+// кодам нельзя, они не упорядочены, а нам важна ширина градиента.
+func shimmerLevels(u *UI, word string, t float64) []float64 {
+	r := []rune(word)
+	n := len(r)
+	ring := float64(n)
+	front := math.Mod(math.Mod(t*shimmerSpeed, ring)+ring, ring)
+	second := math.Mod(front-ring/2, ring)
+	out := make([]float64, 0, n)
+	for i := range r {
+		if r[i] == ' ' {
+			continue
+		}
+		x := float64(i)
+		d := math.Abs(front - x)
+		if d > ring/2 {
+			d = ring - d
+		}
+		k := gauss(d / shimmerSigma)
+		behind := math.Mod(front-x, ring)
+		k += shimmerTailK * gauss((behind-shimmerTail)/(shimmerSigma*2.4))
+		d2 := math.Abs(second - x)
+		if d2 > ring/2 {
+			d2 = ring - d2
+		}
+		k += shimmerSecondK * gauss(d2/(shimmerSigma*2.0))
+		if k > 1 {
+			k = 1
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
+// shimmerHasHighlight — есть ли в кадре символ ярче базового (не камень).
+// Считаем escape-последовательности: у кадра есть и цветной код, и сброс,
+// а серое основание — это ровно серый код на каждой букве.
+func shimmerHasHighlight(frame string) bool {
+	const grayCode = "\033[90m"
+	// Все символы слова серые, кроме, может быть, последнего перед сбросом.
+	return strings.Count(frame, grayCode) < runeLen(StripANSI(frame))
+}
+
+// Перелив цикличен: кадры периода совпадают, а не «уехали и замерли».
+func TestShimmerIsCyclic(t *testing.T) {
+	u, _ := uiAt(ColorRGB, 60)
+	period := shimmerPeriod("thinking...")
+	a := u.shimmerWord("thinking...", 0)
+	b := u.shimmerWord("thinking...", period)
+	if a != b {
+		t.Errorf("через полный период кадр должен повториться:\n%q\n%q", a, b)
+	}
+	c := u.shimmerWord("thinking...", period/2)
+	if a == c {
+		t.Error("в середине периода кадр должен отличаться — волна прошла половину слова")
 	}
 }
 

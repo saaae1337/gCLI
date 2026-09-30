@@ -129,10 +129,9 @@ func TestEmberTable(t *testing.T) {
 	}
 }
 
-// Размышления: спиннер до первого куска, затем маркер события.
+// Размышления: поток открывается маркером, дальше идёт текст.
 func TestEmberThinking(t *testing.T) {
 	u, buf := emberUI()
-	u.ThinkStart()
 	u.ThinkChunk("мысль")
 	u.ThinkEnd()
 	out := StripANSI(buf.String())
@@ -141,6 +140,36 @@ func TestEmberThinking(t *testing.T) {
 	}
 	if !strings.Contains(out, "мысль") {
 		t.Errorf("кусочек размышлений потерян:\n%s", out)
+	}
+}
+
+// ThinkChunk открывает поток сам, если маркера не было: без заголовка
+// куски размышлений выглядели бы как обычный ответ модели.
+func TestThinkChunkOpensMarker(t *testing.T) {
+	u, buf := emberUI()
+	u.ThinkChunk("первая мысль")
+	u.ThinkChunk("вторая")
+	out := StripANSI(buf.String())
+	if n := strings.Count(out, "размышления"); n != 1 {
+		t.Errorf("маркер потока должен быть один, напечатано %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "первая мысль") || !strings.Contains(out, "вторая") {
+		t.Errorf("куски размышлений потеряны:\n%s", out)
+	}
+}
+
+// Показ разовым блоком: маркер печатается один раз, даже если блок уже был
+// открыт раньше — иначе на экране появлялось бы второе «размышления».
+func TestThinkHiddenNoSecondMarker(t *testing.T) {
+	u, buf := emberUI()
+	u.ThinkChunk("старое")
+	u.ThinkHidden("новое")
+	out := StripANSI(buf.String())
+	if n := strings.Count(out, "размышления"); n != 1 {
+		t.Errorf("маркер потока должен быть один, напечатано %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "новое") {
+		t.Errorf("разовый блок не показан:\n%s", out)
 	}
 }
 
