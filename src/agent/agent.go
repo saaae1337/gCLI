@@ -24,6 +24,16 @@ const (
 	DefaultAutoCompact = 80_000
 	// defaultMaxTokens — потолок ответа модели.
 	defaultMaxTokens = 8192
+	// thinkMaxTokens — потолок для ходов с размышлениями.
+	//
+	// Размышления тратят тот же бюджет max_tokens, что и ответ. На 8k
+	// модель с thinking на сложной задаче успевает размышлять до конца и
+	// не отдаёт ни слова: приходит finish_reason=length, пустой content,
+	// а провайдер оборачивает это в «Provider returned an empty response».
+	// Лечится бюджетом, а не ретраем того же запроса.
+	thinkMaxTokens = 32768
+	// retryMaxTokens — потолок для повтора, которому уже не хватило.
+	retryMaxTokens = 65536
 	// finalizeTurns — сколько дополнительных ходов даётся агенту после
 	// исчерпания лимита, чтобы он всё-таки сдал результат.
 	//
@@ -185,7 +195,7 @@ func (a *Agent) BuildRequest() core.ChatRequest {
 		Model:     a.d.Model,
 		System:    a.SystemPrompt(),
 		Messages:  a.d.Session.Messages(),
-		MaxTokens: defaultMaxTokens,
+		MaxTokens: a.maxTokens(),
 		Temp:      0.4,
 	}
 	if a.AgentMode {
@@ -211,6 +221,19 @@ func (a *Agent) BuildRequest() core.ChatRequest {
 	return creq
 }
 
+// maxTokens — потолок ответа для текущего запроса.
+//
+// Размышления съедают тот же бюджет, что и ответ, поэтому для моделей с
+// thinking 8k не хватает на сложной задаче: модель молча размышляет до
+// конца и не отдаёт ни слова ответа. Таким моделям даём заведомо
+// достаточный потолок сразу — дешевле, чем платить за проваленный ход.
+func (a *Agent) maxTokens() int {
+	if a.d.Think == "off" {
+		return defaultMaxTokens
+	}
+	return thinkMaxTokens
+}
+
 func (a *Agent) memoryBlock() string {
 	if a.d.Memory == nil {
 		return ""
@@ -223,6 +246,38 @@ func (a *Agent) skillsBlock() string {
 		return ""
 	}
 	return a.d.SkillsPrompt()
+}
+
+// isTruncatedFinish — генерация оборвалась по лимиту токенов.
+//
+// OpenAI-совместимые endpoint-ы пишут «length», Anthropic — «max_tokens».
+// Размышления идут в том же бюджете, что и ответ, поэтому именно этот
+// finish reason означает «модель думала, но не успела сказать».
+func isTruncatedFinish(finish string) bool {
+	switch strings.ToLower(strings.TrimSpace(finish)) {
+	case "length", "max_tokens":
+		return true
+	}
+	return false
+}
+
+// growTokens — следующий потолок ответа после неудачного по длине.
+//
+// Растём быстро: обрезанный размышлениями ответ стоит полного повтора
+// запроса, а 8192 → 16384 в второй раз могло бы не спасти снова. Потолок
+// жёсткий, иначе модель с неограниченным thinking утащит ход в вечность.
+func growTokens(cur, attempt int) int {
+	next := cur * 4
+	if next < thinkMaxTokens {
+		next = thinkMaxTokens
+	}
+	if attempt >= 2 && next < retryMaxTokens {
+		next = retryMaxTokens
+	}
+	if next > retryMaxTokens {
+		next = retryMaxTokens
+	}
+	return next
 }
 
 // callModel — один проход стриминга с накоплением текста и вызовов инструментов.
@@ -247,6 +302,9 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 		pAcc := map[int]*core.ToolCall{}
 		var pOrder []int
 		gotAny := false
+		// finishReason — чем закончилась генерация. Уходит в диагностику
+		// обрезанных ответов: по нему видно, что кончился max_tokens.
+		var finishReason string
 
 		rctx, rcancel := context.WithTimeout(ctx, 10*time.Minute)
 		ch := make(chan core.Delta, 512)
@@ -296,6 +354,9 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 				}
 				tc.Args += d.TCArgs
 			}
+			if d.Finish != "" {
+				finishReason = d.Finish
+			}
 			if d.Usage != nil {
 				usage.PromptTokens = core.Max(usage.PromptTokens, d.Usage.PromptTokens)
 				usage.CompletionTokens = core.Max(usage.CompletionTokens, d.Usage.CompletionTokens)
@@ -304,6 +365,16 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 		rcancel()
 
 		if streamErr == nil {
+			// Модель размышляла впустую: потратила весь max_tokens на
+			// reasoning и не отдала ни слова ответа. Так выглядит «Provider
+			// returned an empty response» — и лечится бюджетом, а не повтором
+			// того же запроса. Пробуем ещё раз с увеличенным потолком, и
+			// размышления уже показанного хода не дублируем.
+			if pText == "" && len(pAcc) == 0 && pReason != "" &&
+				isTruncatedFinish(finishReason) && attempt < 3 && ctx.Err() == nil {
+				creq.MaxTokens = growTokens(creq.MaxTokens, attempt)
+				continue
+			}
 			text += pText
 			reason += pReason
 			sig += pSig
@@ -334,6 +405,15 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			sig += pSig
 			msg.Content = text
 			return msg, nil
+		}
+
+		// Провайдер прямо сказал, что ответ пуст, — это известная картина
+		// «размышления съели max_tokens». Текста всё равно нет, поэтому повтор
+		// ничего не испортит: меняем бюджет и пробуем снова. Второй шанс,
+		// не бесконечный.
+		if errors.Is(streamErr, providers.ErrEmptyResponse) && attempt < 3 && ctx.Err() == nil {
+			creq.MaxTokens = growTokens(creq.MaxTokens, attempt)
+			continue
 		}
 		return msg, streamErr
 	}

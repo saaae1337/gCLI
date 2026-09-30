@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -216,7 +217,7 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 			return nil
 		}
 		if ch.Error != nil && ch.Error.Message != "" {
-			return fmt.Errorf("API: %s", ch.Error.Message)
+			return apiError(ch.Error.Message)
 		}
 		if ch.Usage != nil {
 			out <- core.Delta{Usage: &core.Usage{
@@ -248,6 +249,32 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 		return nil
 	})
 }
+
+// apiError — понятно объяснить ошибку, пришедшую от провайдера.
+//
+// Голые «API: …» строки бесполезны: половина таких ошибок — это не поломка,
+// а следствие настройки. Отдельно разбираем пустой ответ: почти всегда это
+// размышления, изъевшие весь max_tokens (finish_reason=length), и лечится
+// увеличением бюджета, а не сменой ключа. Сам текст размышлений в ошибку
+// не попадает — это приватная кухня модели, пользователю она не нужна.
+func apiError(msg string) error {
+	wrapped := fmt.Errorf("API: %s", msg)
+	if !strings.Contains(strings.ToLower(msg), "empty response") {
+		return wrapped
+	}
+	hint := "провайдер вернул пустой ответ. Чаще всего размышления " +
+		"изъели весь лимит токенов ответа: попробуй /think off или модель без thinking. " +
+		"Если не помогло — проверь, что у модели есть лимит на ответ " +
+		"(max_tokens) и что она не отдаёт только thinking без текста"
+	return fmt.Errorf("%w (%s): %w", ErrEmptyResponse, hint, wrapped)
+}
+
+// ErrEmptyResponse — провайдер не отдал ни текста, ни вызовов инструментов.
+//
+// Метка, а не разбор строки: агенту нужно отличить этот случай от прочих
+// ошибок, чтобы повторить ход с другим бюджетом. Само сообщение провайдера
+// может быть любым, а проверять его каждый раз по подстроке хрупко.
+var ErrEmptyResponse = errors.New("пустой ответ модели")
 
 // applyThinkingOA — добавить параметры размышлений под конкретный endpoint.
 func applyThinkingOA(p *Provider, body *oaRequest, model, think string) {
