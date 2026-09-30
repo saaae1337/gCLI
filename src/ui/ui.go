@@ -104,8 +104,13 @@ type UI struct {
 	spinT0   time.Time
 	// spinShimmer — непустое слово включает режим перелива: строка
 	// ожидания рисуется как «( -.- ) thinking...» с цветной волной,
-	// бегущей слева направо, вместо классического «кадр + метка».
+	// бегущей по слову, вместо классического «кадр + метка».
 	spinShimmer string
+	// spinHint — короткая подсказка справа от слова, например
+	// «(Ctrl+O — показать размышления)». Показывается, только если
+	// модель действительно присылает размышления, и исчезает сама,
+	// как только модель перешла к ответу.
+	spinHint string
 
 	// Потоковый markdown.
 	fence  bool
@@ -229,7 +234,33 @@ func (u *UI) Mascot() bool { return u.mascot }
 
 // SetSpinnerMascot — задать состояние маскота в спиннере:
 // MascotThink, пока модель думает, MascotWork, пока идут инструменты.
-func (u *UI) SetSpinnerMascot(s MascotState) { u.spinMascot = s }
+//
+// Под мьютексом: состояние читает горутина строки ожидания. Раньше запись
+// шла без блокировки, и гонка портила кадр (кот думал, пока уже работал).
+func (u *UI) SetSpinnerMascot(s MascotState) {
+	u.mu.Lock()
+	u.spinMascot = s
+	u.mu.Unlock()
+}
+
+// SetSpinHint — подсказка справа от слова на строке ожидания
+// («(Ctrl+O — показать размышления)»).
+//
+// Ставится, когда модель действительно присылает размышления: до первого
+// куска подсказка была бы враньём, а после него строка ожидания гаснет
+// сама. Под мьютексом — строку ожидания рисует отдельная горутина.
+func (u *UI) SetSpinHint(h string) {
+	u.mu.Lock()
+	u.spinHint = h
+	u.mu.Unlock()
+}
+
+// SpinHint — текущая подсказка строки ожидания (для тестов и отладки).
+func (u *UI) SpinHint() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.spinHint
+}
 
 // Glyphs — текущий набор псевдографики.
 func (u *UI) Glyphs() Glyphs { return u.g }
@@ -627,6 +658,7 @@ func (u *UI) SpinnerStart(label string) {
 	u.spin = true
 	u.spinLbl = label
 	u.spinShimmer = ""
+	u.spinHint = ""
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
 	u.spinDone = make(chan struct{})
@@ -671,19 +703,35 @@ func (u *UI) SpinnerStart(label string) {
 
 // ShimmerStart — строка ожидания с котом и переливом:
 //
-//	( -.- ) thinking...
+//	( -.- ) thinking... 4s  (Ctrl+O — показать размышления)
 //
-// Слово переливается цветом от левого края к правому (shimmerWord).
-// Пока маскот выключен, работает обычный спиннер с тем же словом.
-// Остановка — общий SpinnerStop; любая содержательная печать через
-// Write гасит строку сама (clearSpinLocked останавливает анимацию).
+// Слово переливается цветом по кругу (shimmerWord): фронт ходит по кольцу
+// длиной в слово и никогда не покидает его, поэтому строка жива всё время
+// ожидания, а не первые секунды. Пока маскот выключен, работает обычный
+// спиннер с тем же словом. Остановка — общий SpinnerStop; любая
+// содержательная печать через Write гасит строку сама (clearSpinLocked
+// останавливает анимацию).
 func (u *UI) ShimmerStart(word string, state MascotState) {
+	u.ShimmerHint(word, state, "")
+}
+
+// ShimmerHint — ShimmerStart с подсказкой справа от слова.
+//
+// Подсказка нужна, когда модель молчит в размышления, а пользователь ещё не
+// знает, что их можно посмотреть. Показывается только пока строка жива;
+// SpinnerStop и clearSpinLocked обнуляют её вместе с анимацией.
+func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 	u.SetSpinnerMascot(state)
 	if !u.mascot {
 		u.SpinnerStart(word)
 		return
 	}
 	if !u.opts.Animations || !u.opts.Color || u.quiet {
+		// Без анимаций и цвета перелива нет — но слово «thinking...»
+		// пользователь всё равно должен увидеть, иначе ход выглядит
+		// зависшим. Печатаем один раз и уходим: без перерисовки таймер
+		// ожидания тут незачем.
+		u.Println("  " + word)
 		return
 	}
 	u.mu.Lock()
@@ -694,6 +742,7 @@ func (u *UI) ShimmerStart(word string, state MascotState) {
 	u.spin = true
 	u.spinLbl = ""
 	u.spinShimmer = word
+	u.spinHint = hint
 	u.spinMascot = state
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
@@ -716,8 +765,20 @@ func (u *UI) ShimmerStart(word string, state MascotState) {
 					return
 				}
 				face := u.mascotInline(u.spinMascot, int(time.Since(u.spinT0)/(300*time.Millisecond)))
-				line := "\r" + cReset + "\033[K" + face + cReset + " " +
-					u.shimmerWord(u.spinShimmer, time.Since(u.spinT0).Seconds())
+				el := time.Since(u.spinT0)
+				word := u.shimmerWord(u.spinShimmer, el.Seconds())
+				// Счётчик секунд показывает, что ожидание не зависло.
+				line := "\r" + cReset + "\033[K" + face + cReset + " " + word + " " +
+					u.c(u.pal.Muted, shimmerElapsed(el))
+				// Подсказка про Ctrl+O идёт последней и уступает место
+				// переливу на узком терминале: без неё строка бессмысленна,
+				// с ней — просто теснее.
+				if h := u.spinHint; h != "" {
+					withHint := line + u.c(u.pal.Muted, "  "+h)
+					if visibleWidth(withHint) <= u.opts.Width {
+						line = withHint
+					}
+				}
 				_, _ = u.out.Write([]byte(line))
 				u.mu.Unlock()
 			}

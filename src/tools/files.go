@@ -50,6 +50,8 @@ const (
 
 	schemaAsk = `{"type":"object","properties":{"question":{"type":"string","description":"Вопрос пользователю, требующий решения"},"options":{"type":"array","items":{"type":"string"},"description":"Варианты ответа, если их немного"}},"required":["question"]}`
 
+	schemaSpawnMany = `{"type":"object","properties":{"agents":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string","description":"Тип субагента или имя агента из .gcli/agents/*.md"},"task":{"type":"string","description":"Чёткая задача: что сделать и что вернуть"},"name":{"type":"string","description":"Имя субагента — по нему потом искать результат"},"model":{"type":"string","description":"Модель (необязательно, по умолчанию текущая)"},"read_only":{"type":"boolean","description":"Запретить изменения файлов"}},"required":["task"]},"description":"Список субагентов (до 6). Независимые подзадачи запускаются параллельно, один вызов вместо N."},"sequential":{"type":"boolean","description":"true — по очереди (для зависимых задач и отладки)"}},"required":["agents"]}`
+
 	schemaChanges = `{"type":"object","properties":{"path":{"type":"string","description":"Показать правки только по этому файлу"},"detail":{"type":"boolean","description":"Приложить diff последних правок"}}}`
 
 	schemaRevert = `{"type":"object","properties":{"path":{"type":"string","description":"Файл должен совпадать с последней правкой — иначе откат откажется"},"dry_run":{"type":"boolean","description":"Показать diff отката, ничего не применяя"},"show":{"type":"boolean","description":"То же, что dry_run"}}}`
@@ -116,6 +118,21 @@ func (r *Registry) registerBuiltins() {
 		schemaJob, "exec", true, func(r *Registry) Handler { return r.hJob })
 	r.registerBound("ask_trace", "Что я спрашивал у пользователя и что получил в ответ. Проверяй, если кажется, что ждёшь ответа, которого не было: отсутствие следа означает, что вопрос не был задан.",
 		schemaAskTrace, "plan", false, func(r *Registry) Handler { return r.hAskTrace })
+
+	// ---- Пакетный режим: одно действие вместо N ----
+	//
+	// Обычный агентный цикл выполняет десяток вызовов из одного ответа
+	// модели последовательно: пять read_file — это пять ожиданий подряд.
+	// multi_* делают то же самое одним вызовом, параллельно, с одним общим
+	// бюджетом вывода и одной карточкой в UI.
+	r.registerBound("multi_read", "Прочитать пачку файлов параллельно. Один вызов вместо N read_file: те же файлы, но одновременно, с общим бюджетом символов на всю пачку и дедупликацией путей. Пути повторяться не должны.",
+		schemaMultiRead, "read", false, func(r *Registry) Handler { return r.hMultiRead })
+	r.registerBound("multi_edit", "Применить пачку правок параллельно. Один вызов вместо N edit_file. Один файл — один элемент массива: две параллельные правки одного файла конфликтуют (проверяется). atomic:true — сначала проверяются все правки, и только потом применяются; при первой ошибке не пишется ничего.",
+		schemaMultiEdit, "write", true, func(r *Registry) Handler { return r.hMultiEdit })
+	r.registerBound("multi_grep", "Один и тот же поиск по регулярному выражению в нескольких каталогах параллельно. Один вызов вместо N grep; совпадения из перекрывающихся каталогов дедуплицируются.",
+		schemaMultiGrep, "read", false, func(r *Registry) Handler { return r.hMultiGrep })
+	r.registerBound("multi_bash", "Выполнить несколько shell-команд параллельно: один вызов вместо N bash. Каждая команда — со своим кодом возврата и своим таймаутом; порядок в отчёте совпадает с порядком команд. Команды НЕ должны зависеть друг от друга.",
+		schemaMultiBash, "exec", true, func(r *Registry) Handler { return r.hMultiBash })
 }
 
 // ---------- Инструменты чтения ----------
@@ -304,6 +321,15 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 
 // hEditFile — точечная замена фрагмента.
 func (r *Registry) hEditFile(_ context.Context, m map[string]any) (Result, error) {
+	return r.editFileLabeled(m, "edit_file")
+}
+
+// editFileLabeled — правка файла с явной меткой журнала.
+//
+// Метка — не украшение: по ней пользователь и revert-разбор отличают
+// одиночную правку от пакетной. Не выносить это в аргументы инструмента —
+// служебное поле там рано или поздно попадёт в схему и в подсказку модели.
+func (r *Registry) editFileLabeled(m map[string]any, label string) (Result, error) {
 	raw := ArgStr(m, "path")
 	if raw == "" {
 		return Result{}, fmt.Errorf("укажи path")
@@ -349,11 +375,11 @@ func (r *Registry) hEditFile(_ context.Context, m map[string]any) (Result, error
 	if !r.confirmWrite(p, content, updated) {
 		return Result{Text: "Изменение отменено пользователем", Summary: "отменено"}, nil
 	}
-	r.record(p, "edit_file")
+	r.record(p, label)
 	if err := core.WriteAtomic(p, []byte(updated), 0o644); err != nil {
 		return Result{}, err
 	}
-	r.noteChange(p, "edit_file", content, updated, true)
+	r.noteChange(p, label, content, updated, true)
 	rel := core.RelToWD(r.workDir, p)
 	return Result{
 		Text:    fmt.Sprintf("Файл обновлён: %s (замен: %d)", rel, replaced),

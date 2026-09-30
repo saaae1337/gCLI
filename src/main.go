@@ -15,7 +15,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -47,12 +46,11 @@ func version() string {
 
 // app — всё состояние приложения.
 type app struct {
-	repo     *core.Repo
-	ui       *ui.UI
-	store    *core.Store
-	workDir  string
-	stdin    *bufio.Scanner
-	stdinRaw bool
+	repo    *core.Repo
+	ui      *ui.UI
+	store   *core.Store
+	workDir string
+	stdin   *stdinReader
 
 	registry *providers.Registry
 	client   *providers.Client
@@ -84,7 +82,37 @@ type app struct {
 	// setupNotes — замечания при старте (подключённые MCP-серверы и т.п.),
 	// показываются под баннером одной группой.
 	setupNotes []string
+
+	// Размышления модели. По умолчанию они НЕ печатаются: в ходе работы
+	// они шумят, а читать их заранее всё равно нельзя. Но они копятся в
+	// reasonBuf целиком, и Ctrl+O показывает их на лету либо выводит
+	// уже накопленные задним числом.
+	//
+	// reasonLive — воля пользователя, она переживает ходы: нажал
+	// «показать» — значит показывать дальше, пока не свернёт. Остальное —
+	// состояние текущего хода, обнуляется в resetReason.
+	reasonMu  sync.Mutex
+	reasonBuf strings.Builder
+	// reasonPrint — порядок печати. Стриминг и Ctrl+O печатают в один и тот
+	// же буфер, и без этого мьютекса они перемешиваются: Ctrl+O напечатает
+	// накопленное, а пришедший следом кусок допишется перед ним, и отметка
+	// «показано всё» съест кусок, который на экране так и не появился.
+	// Порядок блокировок всегда reasonPrint → reasonMu → мьютекс UI,
+	// обратный порядок приводит к дедлоку со строкой ожидания.
+	reasonPrint sync.Mutex
+	reasonLive  bool // пользователь хочет видеть размышления (после Ctrl+O)
+	reasonShown bool // размышления уже показывались в этом ходу
+	reasonOpen  bool // на экране открыт поток размышлений (нужен перевод строки)
+	reasonAny   bool // модель вообще присылала размышления в этом ходу
+	// reasonHinted — подсказка про Ctrl+O уже показана в этом ходу.
+	reasonHinted bool
+	// reasonPrintedLen — сколько байт буфера уже показано на экране.
+	// Нужно, чтобы задним числом не напечатать один блок дважды.
+	reasonPrintedLen int
 }
+
+// reasonHint — подсказка на строке ожидания.
+const reasonHint = "(Ctrl+O — показать размышления)"
 
 func main() {
 	flag.Usage = usage
@@ -140,8 +168,7 @@ func main() {
 	a.buildPool()
 	a.applyMascot()
 
-	a.stdin = bufio.NewScanner(os.Stdin)
-	a.stdin.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	a.stdin = newStdin()
 
 	// Сессия.
 	a.sess = a.loadInitialSession(*flagResume, *flagContinue)
@@ -386,6 +413,7 @@ func (a *app) buildTools() {
 		Agents:     a.agentsInfo,
 		Ask:        a.askUser,
 		Self:       a.selfReport,
+		OnProgress: a.onProgress,
 	}
 	a.tools = tools.New(env)
 	a.tools.RegisterSkills()
@@ -501,6 +529,227 @@ func (a *app) notesText() string {
 	return subagents.Notes(a.notes)
 }
 
+// ---------- Размышления: копятся молча, показывает пользователь ----------
+//
+// Правила показа, коротко:
+//
+//	состояние           meaning
+//	reasonLive          пользователь хочет видеть размышления (Ctrl+O)
+//	reasonOpen          на экране открыт поток (маркер напечатан)
+//	reasonPrintedLen    сколько байт буфера уже на экране
+//
+// Печать всегда под reasonPrint: ею пользуются и стриминг, и Ctrl+O.
+// reasonOpen держим честным — он равен «маркер напечатан и ещё не закрыт»,
+// а не «пользователь что-то просил»: строка ожидания могла уже погаснуть
+// сама, и тогда ThinkChunk в ThinkMarker поставит лишний заголовок.
+
+// onReason — кусок размышлений модели.
+//
+// Показ по умолчанию выключен. Куски всегда копятся в буфере (иначе показать
+// их задним числом было бы нечем), а на экран попадают только если
+// пользователь включил показ по Ctrl+O. Показать накопленное целиком —
+// работа toggleReason; здесь мы дописываем кусок в буфер и, если показ уже
+// включён, печатаем его в открытый поток.
+//
+// Метод зовётся из горутины стриминга, поэтому всё состояние — под
+// reasonMu, порядок печати — под reasonPrint.
+func (a *app) onReason(s string) {
+	if s == "" || a.quiet {
+		return
+	}
+	a.reasonPrint.Lock()
+	defer a.reasonPrint.Unlock()
+
+	a.reasonMu.Lock()
+	a.reasonBuf.WriteString(s)
+	a.reasonAny = true
+	live := a.reasonLive
+	open := a.reasonOpen
+	a.reasonMu.Unlock()
+
+	if !live {
+		// Пользователь ещё не просил показывать: молча копим и подсказываем,
+		// что посмотреть можно. Подсказку ставим даже при свернутом показе —
+		// свернул он сам, значит знает про Ctrl+O.
+		a.hintReason()
+		return
+	}
+	if !open {
+		// Пользователь нажал Ctrl+O до первого куска: поток ещё не открыт,
+		// печатать в него рано — сначала маркер, иначе мысль уйдёт в строку
+		// ответа без заголовка.
+		a.openThinkStream()
+	}
+	a.ui.ThinkChunk(s)
+	a.markReasonPrinted(len(s))
+}
+
+// openThinkStream — открыть на экране поток размышлений: погасить строку
+// ожидания и напечатать маркер события. Дальше текст печатается через
+// ThinkChunk, и перевод строки закрывает ThinkEnd.
+//
+// reasonPrint здесь уже взят: блокировки строго в порядке
+// reasonPrint → reasonMu → UI, поэтому вложиться в свой же мьютекс нельзя.
+func (a *app) openThinkStream() {
+	a.reasonMu.Lock()
+	already := a.reasonOpen
+	a.reasonOpen = true
+	a.reasonMu.Unlock()
+	if already {
+		return
+	}
+	a.ui.ThinkMarker()
+}
+
+// closeThinkStream — свернуть открытый на экране поток размышлений.
+//
+// Модель перешла к ответу (или к следующей итерации с инструментами):
+// закрываем поток переводом строки, иначе ответ допишется в хвост мысли.
+// Накопленное не выбрасываем — Ctrl+O покажет его снова целиком.
+//
+// Здесь reasonPrint не нужен: перевод строки ничего не печатает из буфера,
+// а закрыть поток после живого куска нельзя — кусок приходит из другой
+// горутины, и «свернуть» против неё бессмысленно.
+func (a *app) closeThinkStream() {
+	a.reasonMu.Lock()
+	open := a.reasonOpen
+	a.reasonOpen = false
+	a.reasonMu.Unlock()
+	if open && !a.quiet {
+		a.ui.ThinkEnd()
+	}
+}
+
+// hintReason — показать на строке ожидания подсказку про Ctrl+O, один раз.
+func (a *app) hintReason() {
+	a.reasonMu.Lock()
+	if a.reasonHinted || a.reasonShown {
+		a.reasonMu.Unlock()
+		return
+	}
+	a.reasonHinted = true
+	a.reasonMu.Unlock()
+	a.ui.SetSpinHint(reasonHint)
+}
+
+// markReasonPrinted — отметить, что в конец буфера показано n байт.
+func (a *app) markReasonPrinted(n int) {
+	a.reasonMu.Lock()
+	defer a.reasonMu.Unlock()
+	a.reasonPrintedLen += n
+}
+
+// reasonText — накопленные размышления текущего хода.
+func (a *app) reasonText() string {
+	a.reasonMu.Lock()
+	defer a.reasonMu.Unlock()
+	return a.reasonBuf.String()
+}
+
+// toggleReason — Ctrl+O: показать размышления или свернуть их обратно.
+//
+// Первое нажатие показывает накопленное и включает показ дальше по ходу,
+// повторное сворачивает поток и останавливает показ. Накопленное при этом
+// не выбрасывается: «скрыть» значит «убрать с глаз», а не «выбросить».
+func (a *app) toggleReason() {
+	if a.quiet {
+		return
+	}
+	// Ждём конца текущей печати: иначе Ctrl+O напечатает накопленное, а
+	// пришедший следом кусок допишется в начало потока, а отметка
+	// «показано N байт» окажется оптимистичной.
+	a.reasonPrint.Lock()
+	defer a.reasonPrint.Unlock()
+
+	a.reasonMu.Lock()
+	a.reasonShown = true
+	hasAny := a.reasonAny
+	open := a.reasonOpen
+	// Модель ещё думает: переключаем показ. Уже открытый поток на экране —
+	// повод свернуть. Показывать нечего — значит нажали на середине первой
+	// секунды: тогда показ включаем, иначе человек так и прождёт всю мысль.
+	show := !hasAny || !a.reasonLive || !open
+	if !hasAny {
+		// Показать нечего: воля пользователя сохраняется (он ждёт мыслей),
+		// но поток на экране не открываем — печатать всё равно нечего.
+		a.reasonLive = true
+		a.reasonMu.Unlock()
+		a.ui.Info("размышлений пока нет — модель ещё думает")
+		return
+	}
+	if show {
+		a.reasonLive = true
+		fresh := ""
+		// Печатаем только невыведенное: повторное Ctrl+O не должен
+		// печатать заново то, что уже висело на экране.
+		full := a.reasonBuf.String()
+		if from := a.reasonPrintedLen; from < len(full) {
+			fresh = full[from:]
+			a.reasonPrintedLen = len(full)
+		}
+		a.reasonOpen = true
+		a.reasonMu.Unlock()
+		if !open {
+			// Поток мог быть ещё не открыт: маркер нужен здесь, иначе
+			// ThinkHidden откроет его сам и заголовок встанет не туда.
+			a.ui.ThinkMarker()
+		}
+		if fresh != "" {
+			a.ui.ThinkHidden(fresh)
+		}
+		return
+	}
+	a.reasonLive, a.reasonOpen = false, false
+	a.reasonMu.Unlock()
+	// Перевод строки обязателен: иначе ответ модели допишется в хвост мысли.
+	a.ui.ThinkEnd()
+}
+
+// reasonShownAll — показывали ли уже весь накопленный блок в этом ходу
+// (чтобы не печатать один и тот же текст дважды).
+func (a *app) reasonShownAll() bool {
+	a.reasonMu.Lock()
+	defer a.reasonMu.Unlock()
+	return a.reasonAny && a.reasonPrintedLen >= a.reasonBuf.Len()
+}
+
+// resetReason — новый ход: буфер и состояние хода обнуляются, воля
+// пользователя (reasonLive) сохраняется.
+func (a *app) resetReason() {
+	a.reasonMu.Lock()
+	a.reasonBuf.Reset()
+	a.reasonShown = false
+	a.reasonAny = false
+	a.reasonHinted = false
+	a.reasonOpen = false
+	a.reasonPrintedLen = 0
+	a.reasonMu.Unlock()
+}
+
+// turnWatcher — следить за горячими клавишами, пока идёт ход.
+//
+// Единственный читатель keys: вне хода канал просто копит байты (см.
+// stdinReader.Keys), поэтому Ctrl+O, нажатый между ходами, не теряется и не
+// съедает первую букву запроса. Работает и в -p режиме, где stdin свободен.
+func (a *app) turnWatcher(done <-chan struct{}) {
+	if a.stdin == nil {
+		return
+	}
+	for {
+		select {
+		case <-done:
+			return
+		case b, ok := <-a.stdin.Keys():
+			if !ok {
+				return
+			}
+			if b == ctrlO {
+				a.toggleReason()
+			}
+		}
+	}
+}
+
 // turn — один ход: пользовательский ввод → агентный цикл.
 func (a *app) turn(text string) error {
 	if os.Getenv("GCLI_DEBUG_BODY") != "" {
@@ -516,6 +765,10 @@ func (a *app) turn(text string) error {
 	a.cancel = cancel
 	a.running = true
 	a.mu.Unlock()
+	// Размышления нового хода начинаются с чистого листа; включённость
+	// показа (Ctrl+O) при этом сохраняется — она настройка пользователя,
+	// а не состояние хода.
+	a.resetReason()
 	defer func() {
 		a.mu.Lock()
 		a.running = false
@@ -540,6 +793,18 @@ func (a *app) turn(text string) error {
 		a.ui.SetSpinnerMascot(state)
 		a.ui.ShimmerStart(word, state)
 	}
+	// Ctrl+O работает весь ход: слушаем клавиши и с самого начала, иначе
+	// показать размышления первой секунды ожидания было бы нечем.
+	stopKeys := make(chan struct{})
+	keysDone := make(chan struct{})
+	go func() {
+		defer close(keysDone)
+		a.turnWatcher(stopKeys)
+	}()
+	defer func() {
+		close(stopKeys)
+		<-keysDone
+	}()
 	err := ag.Run(ctx, text)
 	a.ui.SpinnerStop()
 	a.ui.SetSpinnerMascot(ui.MascotWork)
@@ -576,18 +841,13 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 				}
 				thinking = false
 			}
+			// Ответ пошёл — поток размышлений закрыт. Дальше модель
+			// размышляет уже по ходу инструментов (в agent-режиме), и
+			// Ctrl+O снова покажет накопленное.
+			a.closeThinkStream()
 			stream.Write(s)
 		},
-		OnReason: func(s string) {
-			if quiet || a.quiet {
-				return
-			}
-			if !thinking {
-				a.ui.ThinkStart()
-				thinking = true
-			}
-			a.ui.ThinkChunk(s)
-		},
+		OnReason:    a.onReason,
 		OnToolStart: a.onToolStart,
 		OnToolDone:  a.onToolDone,
 		OnUsage:     a.onUsage,
@@ -618,6 +878,27 @@ func (a *app) autoCompactLimit() int {
 	}
 	// По умолчанию — 70% мягкого лимита контекста модели.
 	return a.prov.CtxSoftLimit()
+}
+
+// onProgress — живой прогресс пакетных операций (multi_*, spawn_agents).
+//
+// События приходят из горутий инструментов, поэтому здесь только перевод
+// типа и передача в UI: тот под своим мьютексом сам разберётся с порядком и
+// с гашением строки ожидания. Накапливать события в app здесь нельзя —
+// список состояния сессии тоже пишется из разных горутин.
+func (a *app) onProgress(ev tools.ProgressEvent) {
+	if a.ui == nil {
+		return
+	}
+	a.ui.Progress(ui.ProgressUpdate{
+		Title: ev.Title,
+		Label: ev.Label,
+		Done:  ev.Done,
+		Total: ev.Total,
+		Ok:    ev.Ok,
+		Err:   ev.Err,
+		Final: ev.Final,
+	})
 }
 
 // onToolStart — показать карточку инструмента.

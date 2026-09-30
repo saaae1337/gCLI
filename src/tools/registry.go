@@ -148,6 +148,38 @@ type Env struct {
 	ReadOnly bool
 	// HTTPClient — клиент для сетевых инструментов.
 	HTTPClient *HTTPClient
+	// OnProgress — живой прогресс пакетной операции (multi_*). Вызывается из
+	// горутин инструмента, поэтому обработчик обязан быть потокобезопасным.
+	OnProgress func(ev ProgressEvent)
+}
+
+// ProgressEvent — событие прогресса пакетной операции.
+type ProgressEvent struct {
+	// Title — имя операции: multi_read, multi_bash, spawn_agents.
+	Title string
+	// Label — что именно выполняется: путь, команда, имя субагента.
+	Label string
+	// Done / Total — сколько целей завершено из скольких.
+	Done  int
+	Total int
+	// Ok — цель выполнена без ошибки.
+	Ok bool
+	// Err — текст ошибки цели (пусто, если Ok).
+	Err string
+	// Final — операция завершена целиком (последнее событие).
+	Final bool
+}
+
+// Short — короткая подпись события для UI.
+func (e ProgressEvent) Short() string {
+	s := e.Label
+	if e.Err != "" {
+		s = s + ": " + e.Err
+	}
+	if len([]rune(s)) > 60 {
+		s = string([]rune(s)[:60]) + "…"
+	}
+	return s
 }
 
 // ConfirmReq — запрос подтверждения.
@@ -398,7 +430,7 @@ func toSet(names []string) map[string]bool {
 
 func isWriteTool(name string) bool {
 	switch name {
-	case "write_file", "edit_file", "task_note", "todo_write":
+	case "write_file", "edit_file", "multi_edit", "task_note", "todo_write":
 		return true
 	}
 	return false

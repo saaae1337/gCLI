@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -44,6 +45,10 @@ func (r *Registry) hDryRun(_ context.Context, m map[string]any) (Result, error) 
 	switch tool {
 	case "write_file", "edit_file", "revert_last":
 		b.WriteString(r.writeDryRun(t, args))
+	case "multi_edit":
+		b.WriteString(r.multiEditDryRun(args))
+	case "multi_bash":
+		b.WriteString(r.multiBashDryRun(args))
 	case "bash", "job", "verify":
 		cmd := parseArgString(args, "command")
 		if cmd == "" {
@@ -153,4 +158,71 @@ func (r *Registry) writeDryRun(t *Tool, args string) string {
 // parseArgString — достать строковое поле из JSON-аргументов (для dry_run).
 func parseArgString(args, key string) string {
 	return ArgStr(ParseArgs(args), key)
+}
+
+// multiEditDryRun — что изменит пакетная правка.
+//
+// Показываем по каждому файлу тот же результат замены, что даёт
+// writeDryRun для одиночного edit_file: предпросмотр пачки, который
+// показывает только «применится 3 правки», бесполезен — именно по нему
+// решают, не затрёт ли старый_string чужую работу.
+func (r *Registry) multiEditDryRun(args string) string {
+	am := ParseArgs(args)
+	raw, _ := am["edits"].([]any)
+	if len(raw) == 0 {
+		return "- не указаны правки (edits: пуст)\n"
+	}
+	var b strings.Builder
+	t := &Tool{Def: ToolDef{Name: "edit_file"}}
+	for i, v := range raw {
+		em, ok := v.(map[string]any)
+		if !ok {
+			fmt.Fprintf(&b, "- edits[%d]: не объект\n", i)
+			continue
+		}
+		one, _ := json.Marshal(em)
+		fmt.Fprintf(&b, "\nПравка %d:\n%s", i+1, r.writeDryRun(t, string(one)))
+	}
+	if ArgBool(am, "atomic") {
+		b.WriteString("\n- atomic: сначала проверяются все правки, применяются они все сразу; " +
+			"при первой ошибке не пишется ничего\n")
+	}
+	b.WriteString("\n- файлы выполняются параллельно; повтор одного файла в edits будет отклонён\n")
+	return b.String()
+}
+
+// multiBashDryRun — что выполнит пакетная команда.
+func (r *Registry) multiBashDryRun(args string) string {
+	am := ParseArgs(args)
+	cmds := ArgStrSlice(am, "commands")
+	if len(cmds) == 0 {
+		if c := ArgStr(am, "command"); c != "" {
+			cmds = []string{c}
+		}
+	}
+	if len(cmds) == 0 {
+		return "- команды не указаны\n"
+	}
+	dir := r.workDir
+	if wd := ArgStr(am, "workdir"); wd != "" {
+		dir = r.resolvePath(wd)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "- выполнится %d команд(ы) параллельно:\n", len(cmds))
+	for i, c := range cmds {
+		mark := "  "
+		if IsDangerous(c) {
+			mark = "⚠ "
+		}
+		fmt.Fprintf(&b, "  %s%d. %s\n", mark, i+1, core.Truncate(core.OneLine(c), 200))
+	}
+	fmt.Fprintf(&b, "- каталог запуска: %s", dir)
+	if dir != r.workDir {
+		b.WriteString(" (не равен рабочему каталогу)")
+	}
+	b.WriteString("\n- команды выполняются одновременно и НЕ должны зависеть друг от друга\n")
+	if r.env.Confirm != nil {
+		b.WriteString("- спросит подтверждения пользователя\n")
+	}
+	return b.String()
 }
