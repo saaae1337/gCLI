@@ -25,17 +25,30 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	if !a.pool.Enabled() {
 		return tools.SpawnResult{}, fmt.Errorf("субагенты отключены — включи: /agents on")
 	}
-	t, hint := subagents.ParseType(args.Type)
-	if hint != "" {
-		return tools.SpawnResult{}, fmt.Errorf("%s", hint)
+	// Имена пользовательских агентов читаются один раз: список нужен и для
+	// разбора типа, и для проверки «а не пользовательский ли это агент», а
+	// LoadCustomAgents ходит в файлы при каждом вызове.
+	customs := a.customAgents()
+	customNames := make([]string, 0, len(customs))
+	for i := range customs {
+		customNames = append(customNames, customs[i].Name)
 	}
+	// Автовыбор роли: если модель не указала тип, он выводится из текста
+	// задачи. Раньше тут стоял молчаливый дефолт explorer — то есть любая
+	// задача без явного типа уходила в роль без инструментов записи.
+	t, dv := subagents.ResolveType(args.Type, args.Task, customNames)
+	hint := ""
+	if args.Type == "" {
+		hint = dv.Reason()
+	}
+
 	// Пользовательские агенты: имя из .gcli/agents/*.md перекрывает
 	// универсальный custom — промпт и инструменты берутся из файла.
 	var custom *subagents.CustomAgent
 	if args.Type != "" {
-		for i := range a.customAgents() {
-			if strings.EqualFold(a.customAgents()[i].Name, strings.TrimSpace(args.Type)) {
-				custom = &a.customAgents()[i]
+		for i := range customs {
+			if strings.EqualFold(customs[i].Name, strings.TrimSpace(args.Type)) {
+				custom = &customs[i]
 				break
 			}
 		}
@@ -44,6 +57,13 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 				"тип «%s» не найден; типы: %s — или создай своего: /agents new <имя>",
 				args.Type, strings.Join(subagents.TypeNames(), ", "))
 		}
+	}
+	// Автовыбор не должен подменять роль, если задача очевидно пишущая, а
+	// выбранная роль только читает: тогда доводить работу нечем. Понижаем до
+	// general, а не возвращаем отказ — задача-то обычно выполнима.
+	if custom == nil && args.Type == "" && t.ReadOnly() && !args.ReadOnly {
+		t = subagents.TypeGeneral
+		hint += "; роль только для чтения понижена до general — задаче нужен исполнитель"
 	}
 	readOnly := args.ReadOnly || t.ReadOnly()
 	if custom != nil {
@@ -59,6 +79,9 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Summary:  a.taskSummary(),
 		Notes:    a.notesText(),
 		MaxTurns: core.Clamp(a.repo.Cfg.SubMaxTurns, 1, 60),
+	}
+	if hint != "" {
+		spec.Notes = strings.TrimSpace(spec.Notes + "\n\n[Подбор роли] " + hint)
 	}
 	if custom != nil {
 		spec.Prompt = subagents.CustomPrompt(custom.Prompt, subagents.PromptContext{
@@ -115,12 +138,17 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		return tools.SpawnResult{}, err
 	}
 	return tools.SpawnResult{
-		Name:     runName,
-		Summary:  out.Summary,
-		Full:     out.Full,
-		Usage:    core.Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens},
-		Turns:    out.Turns,
-		ToolCall: out.Tools,
+		Name: runName,
+		Type: string(t),
+		// Помечаем автовыбор, а не любой вызов без type: в hSpawnAgent это
+		// единственный способ отличить «модель выбрала general сама» от
+		// «роль вывел диспетчер».
+		Dispatched: args.Type == "",
+		Summary:    out.Summary,
+		Full:       out.Full,
+		Usage:      core.Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens},
+		Turns:      out.Turns,
+		ToolCall:   out.Tools,
 	}, nil
 }
 

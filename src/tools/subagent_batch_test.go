@@ -70,6 +70,93 @@ func TestSpawnAgentsReportsInArgumentOrder(t *testing.T) {
 	}
 }
 
+// TestSpawnAgentsWithoutTypeLetsDispatcherChoose — пустой type обязан дойти до
+// автовыбора как пустая строка.
+//
+// Раньше здесь стоял молчаливый дефолт "explorer", и в пакетном режиме все
+// шесть субагентов уходили в роль без инструментов записи — независимо от
+// того, что было в задаче.
+func TestSpawnAgentsWithoutTypeLetsDispatcherChoose(t *testing.T) {
+	// Субагенты идут параллельно, а append из горутин гоняется: без мьютекса
+	// тест падал бы случайно. Собираем под мьютексом и по имени.
+	var mu sync.Mutex
+	got := map[string]string{}
+	r, _ := newSpawnReg(t, func(_ context.Context, a SpawnArgs) (SpawnResult, error) {
+		mu.Lock()
+		got[a.Name] = a.Type
+		mu.Unlock()
+		return SpawnResult{Name: a.Name, Summary: "ок", Full: "ок"}, nil
+	})
+	if _, err := r.hSpawnAgents(context.Background(), map[string]any{
+		"agents": []any{
+			map[string]any{"task": "исправь баг", "name": "a1"},
+			map[string]any{"type": "reviewer", "task": "найди баги", "name": "a2"},
+			map[string]any{"task": "добавь тесты", "name": "a3"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 3 {
+		t.Fatalf("вызовов Spawn: %d, ожидалось 3", len(got))
+	}
+	if got["a1"] != "" {
+		t.Errorf("тип первой задачи = %q, ожидалась пустая строка — автовыбор должен отработать в spawnAgent", got["a1"])
+	}
+	if got["a2"] != "reviewer" {
+		t.Errorf("явный тип задан %q, ожидался reviewer", got["a2"])
+	}
+	if got["a3"] != "" {
+		t.Errorf("тип третьей задачи = %q, ожидалась пустая строка", got["a3"])
+	}
+}
+
+// TestSpawnBatchShowsActualType — в сводке показывается тип, на котором
+// субагент РЕАЛЬНО работал. При автовыборе он не совпадает с запрошенным,
+// и модель без этого припишет отчёт не той роли.
+func TestSpawnBatchShowsActualType(t *testing.T) {
+	r, _ := newSpawnReg(t, func(_ context.Context, a SpawnArgs) (SpawnResult, error) {
+		return SpawnResult{
+			Name: a.Name, Type: "coder", Dispatched: true,
+			Summary: "сделано", Full: "сделано",
+		}, nil
+	})
+	if _, err := r.hSpawnAgents(context.Background(), map[string]any{
+		"agents": []any{map[string]any{"task": "почини", "name": "w1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.hSpawnAgent(context.Background(), map[string]any{"task": "почини"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "coder") {
+		t.Errorf("фактический тип не показан:\n%s", res.Text)
+	}
+	if !strings.Contains(res.Text, "автоматически") {
+		t.Errorf("автовыбор не помечен:\n%s", res.Text)
+	}
+}
+
+// TestSpawnAgentKeepsExplicitTypeInText — при явном типе пометки об автовыборе
+// быть не должно: модель знает, кого просила.
+func TestSpawnAgentKeepsExplicitTypeInText(t *testing.T) {
+	r, _ := newSpawnReg(t, func(_ context.Context, a SpawnArgs) (SpawnResult, error) {
+		return SpawnResult{Name: "x", Type: "reviewer", Summary: "ок", Full: "ок"}, nil
+	})
+	res, err := r.hSpawnAgent(context.Background(), map[string]any{"type": "reviewer", "task": "найди баги"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Text, "автоматически") {
+		t.Errorf("при явном типе пометка о автовыборе лишняя:\n%s", res.Text)
+	}
+	if !strings.Contains(res.Text, "reviewer") {
+		t.Errorf("тип не показан:\n%s", res.Text)
+	}
+}
+
 func TestSpawnAgentsRunsConcurrently(t *testing.T) {
 	const n = 4
 	var mu sync.Mutex

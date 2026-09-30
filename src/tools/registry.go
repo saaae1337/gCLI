@@ -237,12 +237,19 @@ type SpawnArgs struct {
 
 // SpawnResult — результат работы субагента.
 type SpawnResult struct {
-	Name     string
-	Summary  string
-	Full     string
-	Usage    core.Usage
-	Turns    int
-	ToolCall int
+	Name string
+	// Type — тип, на котором субагент РЕАЛЬНО работал. Может отличаться от
+	// запрошенного: автовыбор роли подставляет специализацию по тексту задачи.
+	Type string
+	// Dispatched — роль выбрана автоматически, а не указана моделью.
+	// Модель показывают пометку об этом, иначе отчёт придёт без своего
+	// заголовка и будет приписан не той роли.
+	Dispatched bool
+	Summary    string
+	Full       string
+	Usage      core.Usage
+	Turns      int
+	ToolCall   int
 }
 
 // SessionRef — минимальный интерфейс сессии для инструментов.

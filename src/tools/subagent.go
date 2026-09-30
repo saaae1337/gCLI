@@ -11,7 +11,8 @@ import (
 // registerSubagentTools — инструменты делегирования (доступны в агентном режиме).
 func (r *Registry) registerSubagentTools() {
 	r.registerBound("spawn_agent", "Запустить субагента — отдельного ИИ-агента с собственным контекстом и (возможно) другой моделью. "+
-		"Специализации: explorer (карта кода), reviewer (баги/безопасность), planner (план реализации), coder (реализация), "+
+		"Указывай task — этого достаточно, роль подберётся сама по тексту задачи (исправь → coder, тест → tester, найди баги → reviewer, план → planner, вёрстка → frontend, найди в интернете → researcher). "+
+		"Переопредели через type, если роль очевидна иначе: explorer (карта кода), reviewer (баги/безопасность), planner (план), coder (реализация), "+
 		"tester (тесты), frontend (верстка с проверкой по скриншотам), researcher (веб/доки), docs (документация), general (универсал). "+
 		"Также работают имена твоих агентов из .gcli/agents/*.md. Используй для независимых подзадач; субагент вернёт отчёт — дождись и используй его.",
 		schemaSpawn, "agent", false, func(r *Registry) Handler { return r.hSpawnAgent })
@@ -50,14 +51,8 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 		ReadOnly: ArgBool(m, "read_only"),
 		Depth:    r.env.Depth + 1,
 	}
-	if args.Type == "" {
-		args.Type = "explorer"
-	}
 	if strings.TrimSpace(args.Task) == "" {
 		return Result{}, fmt.Errorf("укажи task — что именно должен сделать субагент")
-	}
-	if args.Name == "" {
-		args.Name = ""
 	}
 
 	res, err := r.env.Spawn(ctx, args)
@@ -68,12 +63,19 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 	if summary == "" {
 		summary = coreTruncate(coreOneLine(res.Full), 800)
 	}
+	// Тип мог не совпасть с запрошенным: автовыбор роли в spawnAgent подставляет
+	// специализацию по тексту задачи, и модель должна знать, кем реально работал
+	// субагент. Иначе отчёт придёт без своего заголовка и припишется не туда.
+	typeNote := ""
+	if res.Dispatched {
+		typeNote = fmt.Sprintf("\n(тип выбран автоматически по тексту задачи: %s)", res.Type)
+	}
 	// Подсказываем, где взять полный отчёт: раньше модель получала только
 	// сводку и не знала, что полный текст доступен через agent_status.
 	return Result{
-		Text: fmt.Sprintf("Субагент %s (%s) завершил работу.\n\nИтог:\n%s\n"+
+		Text: fmt.Sprintf("Субагент %s (%s) завершил работу.%s\n\nИтог:\n%s\n"+
 			"\nПолный отчёт, если нужны детали: agent_status action=result name=%s",
-			res.Name, args.Type, summary, res.Name),
+			res.Name, res.Type, typeNote, summary, res.Name),
 		Summary: fmt.Sprintf("%s: %s", res.Name, coreTruncate(coreOneLine(res.Full), 90)),
 	}, nil
 }
@@ -119,17 +121,22 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 			return Result{}, fmt.Errorf("agents[%d]: ожидался объект {type, task, name}", i)
 		}
 		typ := strings.ToLower(ArgStr(am, "type"))
-		if typ == "" {
-			typ = "explorer"
-		}
 		task := ArgStr(am, "task")
 		if strings.TrimSpace(task) == "" {
 			return Result{}, fmt.Errorf("agents[%d]: нужна задача (task)", i)
 		}
 		name := ArgStr(am, "name")
+		// Пустой type НЕ превращается в "explorer" здесь: автовыбор роли живёт
+		// в app.spawnAgent и смотрит на текст задачи. Подстановка дефолта в
+		// этом месте тихо перебивала бы его — и в пакетном режиме все шесть
+		// субагентов уходили бы в роль только для чтения.
 		label := name
 		if label == "" {
-			label = typ + fmt.Sprintf("#%d", i+1)
+			label = typ
+			if label == "" {
+				label = "auto"
+			}
+			label += fmt.Sprintf("#%d", i+1)
 		}
 		args := SpawnArgs{
 			Type:     typ,
@@ -150,9 +157,15 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 				if body == "" {
 					body = coreTruncate(coreOneLine(res.Full), 800)
 				}
+				// Тип показываем фактический: при автовыборе он не совпадает
+				// с запрошенным (или вовсе не был запрошен).
+				shown := res.Type
+				if shown == "" {
+					shown = args.Type
+				}
 				return Result{
 					Text: body,
-					Summary: fmt.Sprintf("%s (%s): %s", res.Name, args.Type,
+					Summary: fmt.Sprintf("%s (%s): %s", res.Name, shown,
 						coreTruncate(coreOneLine(res.Full), 90)),
 				}, nil
 			},
