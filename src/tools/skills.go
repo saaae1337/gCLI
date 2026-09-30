@@ -14,11 +14,27 @@ import (
 
 // Skill — подключаемый навык агента (markdown с front matter).
 type Skill struct {
-	Name  string
-	Desc  string
+	Name string
+	Desc string
+	// When — необязательное уточнение в front matter: когда именно применять.
+	// Описание отвечает за «что это», when — за «в каком случае брать».
+	// Оба попадают в системный промпт: без when триггеры теряются.
+	When  string
 	Body  string
 	Path  string
-	Scope string // "проект" | "глобальный"
+	Scope string // "проект" | "глобальный" | "встроенный"
+}
+
+// Triggers — всё, по чему навык ищется: имя, описание и уточнение when.
+func (s Skill) Triggers() string {
+	parts := []string{s.Name, s.Desc, s.When}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // SkillsDirs — каталоги навыков (проектные имеют приоритет).
@@ -38,12 +54,16 @@ func ValidSkillName(s string) bool { return reSkillName.MatchString(s) }
 const skillTemplate = `---
 name: %s
 description: <краткое описание — когда агенту применять этот навык>
+when: <необязательно: уточнение триггеров — слова, по которым навык подбирается>
 ---
 
 # %s
 
 Инструкции для агента. Пиши конкретно: шаги, правила, примеры команд,
 чего избегать. Навык загружается инструментом load_skill по запросу модели.
+
+В тексте можно писать $ARGUMENTS — на вызов load_skill вместо этого
+маркера подставится значение аргумента args.
 `
 
 // ParseSkill — разобрать markdown-файл навыка.
@@ -65,6 +85,9 @@ func ParseSkill(p, scope string) (Skill, error) {
 				}
 				if v, ok := strings.CutPrefix(line, "description:"); ok {
 					s.Desc = strings.TrimSpace(strings.Trim(v, `"'`))
+				}
+				if v, ok := strings.CutPrefix(line, "when:"); ok {
+					s.When = strings.TrimSpace(strings.Trim(v, `"'`))
 				}
 			}
 		}
@@ -154,12 +177,17 @@ func (r *Registry) SkillsPromptBlock() string {
 	var b strings.Builder
 	b.WriteString("# Навыки (skills)\n")
 	b.WriteString("Подключаемые навыки. Если задача попадает под описание навыка — сначала вызови инструмент load_skill с его name и следуй инструкциям.\n")
+	b.WriteString("Не помнишь точного имени — вызови load_skill с query (что делаешь) и args: подберёт навык сам; впиши args, если в инструкциях есть $ARGUMENTS.\n")
 	n := 0
 	for _, s := range skills {
 		if r.SkillOff(s.Name) {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s — %s\n", s.Name, skillDesc(s.Desc))
+		desc := skillDesc(s.Desc)
+		if w := skillDesc(s.When); w != "" {
+			desc += " [" + w + "]"
+		}
+		fmt.Fprintf(&b, "- %s — %s\n", s.Name, desc)
 		n++
 		if n >= 20 {
 			break
@@ -184,37 +212,96 @@ func skillDesc(d string) string {
 	return d
 }
 
-const schemaLoadSkill = `{"type":"object","properties":{"name":{"type":"string","description":"Имя навыка из списка skills в системном промпте"}},"required":["name"]}`
+const schemaLoadSkill = `{"type":"object","properties":{"name":{"type":"string","description":"Имя навыка из списка skills в системном промпте"},"query":{"type":"string","description":"Если точного имени нет — что ты делаешь. Навык подберётся по совпадению с описанием."},"args":{"type":"string","description":"Значение для $ARGUMENTS в тексте навыка: путь, имя команды, номера строк."}}}`
 
 // RegisterSkills — зарегистрировать инструмент load_skill.
 func (r *Registry) RegisterSkills() {
-	r.registerBound("load_skill", "Загрузить навык (skill) из библиотеки пользователя: полный текст инструкций по имени. Список доступных навыков — в системном промпте и в /skills.",
+	r.registerBound("load_skill", "Загрузить навык (skill) из библиотеки пользователя: полный текст инструкций по имени. "+
+		"Укажи name — или query (что ты делаешь), и навык подберётся сам. args подставится вместо $ARGUMENTS в тексте. "+
+		"Список доступных навыков — в системном промпте и в /skills.",
 		schemaLoadSkill, "read", false, func(r *Registry) Handler { return r.hLoadSkill })
 }
 
 // hLoadSkill — отдать модели полный текст навыка.
 func (r *Registry) hLoadSkill(_ context.Context, m map[string]any) (Result, error) {
 	name := ArgStr(m, "name")
-	if name == "" {
-		return Result{}, fmt.Errorf("укажи name навыка")
+	query := ArgStr(m, "query")
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(query) == "" {
+		return Result{}, fmt.Errorf("укажи name навыка или query — что ты делаешь (тогда навык подберётся сам)")
 	}
-	for _, s := range r.LoadSkills() {
-		if s.Name == name {
-			if r.SkillOff(name) {
-				return Result{}, fmt.Errorf("навык «%s» выключен — включи: /skill on %s", name, name)
+	skills := r.LoadSkills()
+	var s Skill
+	altHint := ""
+	switch {
+	case name != "":
+		for _, c := range skills {
+			if c.Name == name {
+				s = c
 			}
-			return Result{
-				Text:    fmt.Sprintf("Навык: %s (%s, %s)\n\n%s", s.Name, s.Scope, s.Path, s.Body),
-				Summary: "навык " + s.Name,
-			}, nil
+		}
+		if s.Name == "" {
+			names := r.SkillNames()
+			hint := ""
+			if len(names) > 0 {
+				hint = " доступные: " + strings.Join(names, ", ")
+			}
+			return Result{}, fmt.Errorf("навык «%s» не найден%s", name, hint)
+		}
+	default:
+		top, alts, err := r.MatchSkillTop(query)
+		if err != nil {
+			names := r.SkillNames()
+			hint := ""
+			if len(names) > 0 {
+				hint = " доступные: " + strings.Join(names, ", ")
+			}
+			return Result{}, fmt.Errorf("%w%s — укажи name точно или переформулируй", err, hint)
+		}
+		s = top
+		if len(alts) > 0 {
+			names := make([]string, 0, len(alts))
+			for _, a := range alts {
+				names = append(names, a.Name)
+			}
+			altHint = " Похожие навыки: " + strings.Join(names, ", ") + "."
 		}
 	}
-	names := r.SkillNames()
-	hint := ""
-	if len(names) > 0 {
-		hint = " доступные: " + strings.Join(names, ", ")
+	if r.SkillOff(s.Name) {
+		return Result{}, fmt.Errorf("навык «%s» выключен — включи: /skill on %s", s.Name, s.Name)
 	}
-	return Result{}, fmt.Errorf("навык «%s» не найден%s", name, hint)
+	args := ArgStr(m, "args")
+	if args == "" {
+		// query — самый честный аргумент для $ARGUMENTS: он уже описывает,
+		// что именно делает агент в этот момент.
+		args = query
+	}
+	body := ExpandSkillArgs(s.Body, args)
+	head := fmt.Sprintf("Навык: %s (%s, %s)", s.Name, s.Scope, s.Path)
+	if args != "" && strings.Contains(s.Body, skillArgsMarker) {
+		head += fmt.Sprintf("\n$ARGUMENTS = %s", args)
+	}
+	return Result{
+		Text:    head + "\n\n" + body + altHint,
+		Summary: "навык " + s.Name,
+	}, nil
+}
+
+// skillArgsMarker — маркер подстановки аргумента в тексте навыка.
+const skillArgsMarker = "$ARGUMENTS"
+
+// ExpandSkillArgs — подставить аргумент вместо $ARGUMENTS.
+//
+// При пустом аргументе маркер не заменяется на пустую строку: остаётся
+// видимым, и модель понимает, что подставить нечего, вместо того чтобы
+// получить инструкцию с дырой на месте шага.
+func ExpandSkillArgs(body, args string) string {
+	if !strings.Contains(body, skillArgsMarker) {
+		return body
+	}
+	if strings.TrimSpace(args) == "" {
+		return body
+	}
+	return strings.ReplaceAll(body, skillArgsMarker, args)
 }
 
 // SkillNames — имена включённых навыков.

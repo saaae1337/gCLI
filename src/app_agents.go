@@ -288,6 +288,18 @@ func (a *app) runAgentCommand(parts []string) {
 
 // ---------- Скиллы ----------
 
+// skillRowDesc — описание навыка для таблицы /skills.
+//
+// Триггеры when дописываются в конец: по одному только description нельзя
+// понять, что навык не сработает, и пользователь его выключает, не разобравшись.
+func skillRowDesc(s tools.Skill) string {
+	d := s.Desc
+	if s.When != "" {
+		d += " · " + s.When
+	}
+	return core.Truncate(core.OneLine(d), 46)
+}
+
 func (a *app) cmdSkills(rest string) {
 	parts := strings.Fields(rest)
 	skills := a.tools.LoadSkills()
@@ -304,7 +316,7 @@ func (a *app) cmdSkills(rest string) {
 			if a.tools.SkillOff(s.Name) {
 				state = "выкл"
 			}
-			rows = append(rows, []string{s.Name, s.Scope, state, core.Truncate(core.OneLine(s.Desc), 46)})
+			rows = append(rows, []string{s.Name, s.Scope, state, skillRowDesc(s)})
 		}
 		a.ui.Table([]ui.Column{
 			{Title: "навык", Width: 20},
@@ -312,7 +324,7 @@ func (a *app) cmdSkills(rest string) {
 			{Title: "состояние", Width: 10},
 			{Title: "описание", Width: 48},
 		}, rows, ui.BlockOpts{Title: "Навыки"})
-		a.ui.Println("  " + a.ui.Gray("показать: /skill <имя> · выключить: /skill off <имя> · создать: /skill new <имя>"))
+		a.ui.Println("  " + a.ui.Gray("показать: /skill <имя> · подобрать: /skill <описание задачи> · выключить: /skill off <имя> · создать: /skill new <имя>"))
 		a.ui.Println("")
 
 	case parts[0] == "new" || parts[0] == "новый":
@@ -371,6 +383,27 @@ func (a *app) cmdSkills(rest string) {
 					Subtitle: s.Scope + " · " + s.Path,
 					Accent:   true,
 				})
+				return
+			}
+		}
+		// Имя не найдено — пробуем понять, что имелось в виду: пользователь
+		// пишет «/skill ревью» так же естественно, как модель зовёт навык по
+		// описанию. Без подбора он получил бы только «не найден».
+		if strings.TrimSpace(rest) != "" {
+			if s, alts, err := a.tools.MatchSkillTop(rest); err == nil {
+				a.ui.Block(s.Body, ui.BlockOpts{
+					Title:    s.Name,
+					Subtitle: s.Scope + " · " + s.Path,
+					Accent:   true,
+				})
+				if len(alts) > 0 {
+					names := make([]string, 0, len(alts))
+					for _, al := range alts {
+						names = append(names, al.Name)
+					}
+					a.ui.Println(a.ui.Gray("похожие: " + strings.Join(names, ", ")))
+					a.ui.Println("")
+				}
 				return
 			}
 		}
