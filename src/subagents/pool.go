@@ -161,6 +161,13 @@ type Pool struct {
 	counter int
 	slots   slotCounter
 
+	// nameSeq — счётчик автоимён по типу. Живёт отдельно от runs, потому
+	// что между вычислением имени (autoName) и регистрацией запуска в runs
+	// проходит время: два параллельных запуска без имени успевали высчитать
+	// одно и то же «explorer-1», и /agents с agent_status различали их
+	// только по ID.
+	nameSeq map[Type]int
+
 	runner   Runner
 	maxPar   int
 	maxDepth int
@@ -178,6 +185,7 @@ type Pool struct {
 func NewPool(runner Runner, opts PoolOptions) *Pool {
 	p := &Pool{
 		runs:     map[string]*Run{},
+		nameSeq:  map[Type]int{},
 		runner:   runner,
 		maxPar:   opts.MaxParallel,
 		maxDepth: opts.MaxDepth,
@@ -278,6 +286,14 @@ func (p *Pool) Spawn(ctx context.Context, spec Spec) (out Outcome, err error) {
 	}
 	defer p.release()
 
+	// Отмена ловится сразу после acquire и до похода в кеш: прерванный
+	// субагент отдаёт частичный отчёт без ошибки, а такой отчёт иначе
+	// признавался бы годным и переиспользовался бы при повторе задачи —
+	// вместе с обрывом на полуслове.
+	if ctx.Err() != nil {
+		return Outcome{}, ctx.Err()
+	}
+
 	name := spec.Name
 	if name == "" {
 		name = p.autoName(spec.Type)
@@ -321,12 +337,19 @@ func (p *Pool) Spawn(ctx context.Context, spec Spec) (out Outcome, err error) {
 	run.Usage = out.Usage
 	run.Retries = out.Retries
 	switch {
+	// Отмена проверяется ПЕРВОЙ, до err и до пустого отчёта. Agent.Run
+	// превращает context.Canceled в nil, а RunSubagent при отмене отдаёт
+	// частичный отчёт без ошибки — без этой ветки прерванный субагент
+	// записывался как StatusDone, и его выжимка уходила главному агенту
+	// как обычный результат: тот опирался на доведенный обрывом текст.
+	case cctx.Err() != nil:
+		run.Status = StatusCanceled
+		if err != nil {
+			run.Err = err.Error()
+		}
 	case err != nil:
 		run.Status = StatusError
 		run.Err = err.Error()
-		if cctx.Err() != nil {
-			run.Status = StatusCanceled
-		}
 	case strings.TrimSpace(out.Full) == "":
 		run.Status = StatusError
 		run.Err = "субагент не вернул отчёт"
@@ -450,13 +473,11 @@ func (p *Pool) autoName(t Type) string {
 	if base == "" {
 		base = "agent"
 	}
-	n := 0
-	for _, r := range p.runs {
-		if r.Type == t {
-			n++
-		}
-	}
-	return fmt.Sprintf("%s-%d", base, n+1)
+	// Порядковый номер берётся из nameSeq, а не из len по runs: runs пополняется
+	// позже, под другой блокировкой, и два параллельных запуска без имени
+	// получали бы один и тот же номер.
+	p.nameSeq[t]++
+	return fmt.Sprintf("%s-%d", base, p.nameSeq[t])
 }
 
 // All — все запуски (новые первыми).

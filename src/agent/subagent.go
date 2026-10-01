@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gcli/core"
@@ -182,13 +183,16 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		task += spec.RetryHint
 	}
 
-	var toolCalls int
+	// toolCalls — счётчик вызовов инструментов. Атомарный: хук OnToolStart
+	// вызывается из горутин параллельных execOne, и обычный счётчик терял бы
+	// часть вызовов, а -race ругался бы на гонку.
+	var toolCalls atomic.Int64
 	// Grounding — журнал доказательств: что субагент реально открывал и
 	// выполнял. Наполняется хуком OnToolDone и используется для проверки
 	// итогового отчёта перед возвратом главному агенту.
 	ground := subagents.NewGrounding(d.WorkDir)
 	ag.d.OnToolStart = func(tc core.ToolCall, tool *tools.Tool) {
-		toolCalls++
+		toolCalls.Add(1)
 		if d.OnEvent != nil {
 			d.OnEvent("tool", fmt.Sprintf("%s → %s", spec.Name, tc.Name))
 		}
@@ -208,7 +212,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 			return subagents.Outcome{
 				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
 				Turns: ag.Turns,
-				Tools: toolCalls,
+				Tools: int(toolCalls.Load()),
 				Usage: sess.usage,
 			}
 		}
@@ -223,7 +227,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 			return subagents.Outcome{
 				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
 				Turns: ag.Turns,
-				Tools: toolCalls,
+				Tools: int(toolCalls.Load()),
 				Usage: sess.usage,
 			}
 		}
@@ -231,7 +235,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 			Full:    report,
 			Summary: subagents.Summarize(report),
 			Turns:   ag.Turns,
-			Tools:   toolCalls,
+			Tools:   int(toolCalls.Load()),
 			Usage:   sess.usage,
 		}
 	}
@@ -269,7 +273,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		return subagents.Outcome{
 			Full:  body + ground.Report(audit0),
 			Turns: ag.Turns,
-			Tools: toolCalls,
+			Tools: int(toolCalls.Load()),
 			Usage: sess.usage,
 			Audit: audit0,
 		}
@@ -296,7 +300,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		Full:    full + ground.Report(audit),
 		Summary: subagents.Summarize(full),
 		Turns:   ag.Turns,
-		Tools:   toolCalls,
+		Tools:   int(toolCalls.Load()),
 		Usage:   sess.usage,
 		// Audit уезжает в слой прочности: без него Wrap не может отличить
 		// «формально гладкий, но выдуманный» отчёт от честного и повторил бы

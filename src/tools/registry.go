@@ -46,6 +46,25 @@ func wasRead(m map[string]bool, p string) bool {
 	return m[p]
 }
 
+// snapshotRead — копия карты прочитанных файлов.
+//
+// Копировать под readMu обязательно: Base/Restrict/Merge вызывают это из
+// горутин субагентов, которые параллельно пишут в ту же карту через
+// markRead. Без блокировки и range, и len по карте, которую пишет другой
+// поток, дают фатальную ошибку Go «concurrent map iteration and map write».
+func snapshotRead(m map[string]bool) map[string]bool {
+	rf := make(map[string]bool)
+	if m == nil {
+		return rf
+	}
+	readMu.Lock()
+	defer readMu.Unlock()
+	for k := range m {
+		rf[k] = true
+	}
+	return rf
+}
+
 // Result — результат инструмента для модели.
 type Result struct {
 	// Text — текст, который уходит в контекст модели.
@@ -329,11 +348,7 @@ func (r *Registry) Base() *Registry {
 	// ReadFiles внутри — ссылочное поле, поэтому без этого все копии реестра
 	// делили одну карту с главным агентом: чтение субагента давало главному
 	// право редактировать файл, которого он не читал.
-	rf := make(map[string]bool, len(r.env.ReadFiles))
-	for k := range r.env.ReadFiles {
-		rf[k] = true
-	}
-	out.env.ReadFiles = rf
+	out.env.ReadFiles = snapshotRead(r.env.ReadFiles)
 	for _, t := range r.tools {
 		// Инструменты расширений и MCP-серверов живут только у главного
 		// агента: субагентам — встроенный набор.
@@ -447,11 +462,7 @@ func (r *Registry) Restrict(allow, deny []string) *Registry {
 	out.env.ReadOnly = r.env.ReadOnly
 	// Копия карты прочитанных файлов: субагент не должен «наследовать»
 	// право редактировать файлы, которые прочитал главный агент.
-	rf := make(map[string]bool, len(r.env.ReadFiles))
-	for k := range r.env.ReadFiles {
-		rf[k] = true
-	}
-	out.env.ReadFiles = rf
+	out.env.ReadFiles = snapshotRead(r.env.ReadFiles)
 
 	for _, t := range r.tools {
 		if len(allowSet) > 0 && !allowSet[t.Def.Name] {
@@ -529,11 +540,7 @@ func (r *Registry) Merge(others ...*Registry) *Registry {
 		asks: &askLog{},
 	}
 	// Карта прочитанных файлов — своя копия: см. Base().
-	rf := make(map[string]bool, len(r.env.ReadFiles))
-	for k := range r.env.ReadFiles {
-		rf[k] = true
-	}
-	out.env.ReadFiles = rf
+	out.env.ReadFiles = snapshotRead(r.env.ReadFiles)
 	for _, reg := range append([]*Registry{r}, others...) {
 		for _, t := range reg.tools {
 			if out.byName[t.Def.Name] != nil {
