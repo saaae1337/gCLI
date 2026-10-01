@@ -73,8 +73,33 @@ type target struct {
 // определялся скоростью, одинаковый набор давал бы разный текст каждый раз,
 // и сравнивать результаты двух ходов было бы невозможно.
 func (r *Registry) runBatch(ctx context.Context, title string, par int, targets []target, render func([]batchItem) (string, string)) (Result, error) {
+	items, err := r.runTargets(ctx, title, par, targets)
+	if err != nil {
+		return Result{}, err
+	}
+	text, summary := render(items)
+	r.progress(ProgressEvent{
+		Title: title,
+		Label: summary,
+		Done:  len(targets),
+		Total: len(targets),
+		Ok:    true,
+		Final: true,
+	})
+	return Result{Text: text, Summary: summary}, nil
+}
+
+// runTargets — выполнить цели параллельно и отдать сырые результаты.
+//
+// Вынесено из runBatch отдельно от рендера и финального события прогресса:
+// пачке с зависимостями нужно выполнить волну, посмотреть на её результаты
+// (от них зависят выводы следующих субагентов и отчёт о пропусках) и лишь
+// потом решать, что показывать. Свой параллелизм для волн заводить нельзя —
+// это был бы второй семафор, второй счётчик прогресса и вторая защита от
+// паники на один и тот же код.
+func (r *Registry) runTargets(ctx context.Context, title string, par int, targets []target) ([]batchItem, error) {
 	if len(targets) == 0 {
-		return Result{}, fmt.Errorf("пустая пачка: нечего выполнять")
+		return nil, fmt.Errorf("пустая пачка: нечего выполнять")
 	}
 	par = core.Clamp(par, 1, multiMaxPar)
 
@@ -111,17 +136,7 @@ func (r *Registry) runBatch(ctx context.Context, title string, par int, targets 
 		}(i)
 	}
 	wg.Wait()
-
-	text, summary := render(items)
-	r.progress(ProgressEvent{
-		Title: title,
-		Label: summary,
-		Done:  len(targets),
-		Total: len(targets),
-		Ok:    true,
-		Final: true,
-	})
-	return Result{Text: text, Summary: summary}, nil
+	return items, nil
 }
 
 // batchItem — результат одной цели.

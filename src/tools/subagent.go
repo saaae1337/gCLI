@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gcli/core"
+	"gcli/subagents"
 )
 
 // registerSubagentTools — инструменты делегирования (доступны в агентном режиме).
@@ -19,7 +20,10 @@ func (r *Registry) registerSubagentTools() {
 	r.registerBound("agent_status", "Сводка по субагентам: status — что сейчас работает, list — все запуски сессии, result — итог по имени.",
 		schemaAgents, "agent", false, func(r *Registry) Handler { return r.hAgentStatus })
 	r.registerBound("spawn_agents", "Запустить пачку субагентов параллельно — независимые подзадачи одним вызовом вместо N последовательных. "+
-		"Каждому передай task (что сделать и что вернуть) и по возможности name. Порядок отчётов совпадает с порядком в agents.",
+		"Каждому передай task (что сделать и что вернуть) и по возможности name. Порядок отчётов совпадает с порядком в agents. "+
+		"Если задачи связаны (план → реализация → тесты, ревью после правок), укажи depends_on: имя или «#N» субагента, чей вывод нужен ДО старта — "+
+		"его вывод подставится в task, а зависимые запустятся позже. Нужны несколько выводов — depends_on принимает список имён. "+
+		"Без depends_on всё идёт одной волной параллельно.",
 		schemaSpawnMany, "agent", false, func(r *Registry) Handler { return r.hSpawnAgents })
 	r.registerBound("ask_user", "Задать вопрос пользователю, когда без его решения задачу нельзя продолжить. Используй редко — только для развилок.",
 		schemaAsk, "agent", false, func(r *Registry) Handler { return r.hAskUser })
@@ -126,11 +130,16 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 		}, nil
 	}
 
-	var specs []target
+	// Собираем узлы пачки и параллельно строим план зависимостей. Порядок
+	// specs навсегда остаётся порядком аргументов: отчёты сопоставляются
+	// моделью по номеру, и перестановка сделала бы вывод бессмысленным.
+	specs := make([]spawnSpec, 0, len(raw))
+	names := make([]string, 0, len(raw))
+	depsRaw := make([][]string, 0, len(raw))
 	for i, v := range raw {
 		am, ok := v.(map[string]any)
 		if !ok {
-			return Result{}, fmt.Errorf("agents[%d]: ожидался объект {type, task, name}", i)
+			return Result{}, fmt.Errorf("agents[%d]: ожидался объект {type, task, name, depends_on}", i)
 		}
 		typ := strings.ToLower(ArgStr(am, "type"))
 		task := ArgStr(am, "task")
@@ -138,6 +147,21 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 			return Result{}, fmt.Errorf("agents[%d]: нужна задача (task)", i)
 		}
 		name := ArgStr(am, "name")
+		// depends_on — имена или номера («#2») субагентов этой же пачки, чьи
+		// выводы нужны до старта этого. Список разрешён: две независимые ссылки
+		// не «зависают» в первой волне, как это кажется на первый взгляд, —
+		// узел попадает в волну, где разрешён уже ВЕСЬ его набор предшественников,
+		// то есть строго позже обоих. Реальный пример: ревью, которому нужны и
+		// карта кода, и список правок, — это один узел с двумя входами, а не две
+		// копии ревью, спорящие за один и тот же вывод.
+		//
+		// Строка принимается наравне со списком: модели гораздо чаще пишут
+		// depends_on: "plan", чем depends_on: ["plan"], и отклонять это значит
+		// гонять её по кругу с ошибкой «одна ссылка».
+		deps := ArgStrSlice(am, "depends_on")
+		if one := ArgStr(am, "depends_on"); one != "" {
+			deps = append([]string{one}, deps...)
+		}
 		// Пустой type НЕ превращается в "explorer" здесь: автовыбор роли живёт
 		// в app.spawnAgent и смотрит на текст задачи. Подстановка дефолта в
 		// этом месте тихо перебивала бы его — и в пакетном режиме все шесть
@@ -150,6 +174,13 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 			}
 			label += fmt.Sprintf("#%d", i+1)
 		}
+		// Адрес узла — всегда name, а для безымянного — номер. Подпись label
+		// в адрес не годится: «explorer#3» и «auto#3» — один и тот же узел с
+		// разной ролью, и ссылка на первый не нашла бы второй.
+		key := name
+		if key == "" {
+			key = fmt.Sprintf("#%d", i+1)
+		}
 		args := SpawnArgs{
 			Type:     typ,
 			Task:     task,
@@ -158,10 +189,17 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 			ReadOnly: ArgBool(am, "read_only"),
 			Depth:    r.env.Depth + 1,
 		}
-		specs = append(specs, target{
+		specs = append(specs, spawnSpec{
 			label: label,
-			run: func(ctx context.Context) (Result, error) {
-				res, err := r.env.Spawn(ctx, args)
+			run: func(ctx context.Context, depsText string) (Result, error) {
+				taskspec := args.Task
+				if depsText != "" {
+					taskspec += "\n\n" + depsText
+				}
+				res, err := r.env.Spawn(ctx, SpawnArgs{
+					Type: args.Type, Task: taskspec, Name: args.Name,
+					Model: args.Model, ReadOnly: args.ReadOnly, Depth: args.Depth,
+				})
 				if err != nil {
 					return Result{}, err
 				}
@@ -193,12 +231,25 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 				}, nil
 			},
 		})
+		names = append(names, key)
+		depsRaw = append(depsRaw, deps)
 	}
 
-	return r.runBatch(ctx, "spawn_agents", r.parallelism(m), specs,
-		func(items []batchItem) (string, string) {
-			return renderSpawnBatch(items)
-		})
+	dag, err := subagents.BuildDAG(names, depsRaw)
+	if err != nil {
+		return Result{}, fmt.Errorf("неверные зависимости в пачке: %w", err)
+	}
+	// Зависимости кладём в узлы один раз, здесь: и запуск, и отчёт о пропусках
+	// читают один и тот же список, а не разбирают ссылки повторно.
+	for i := range specs {
+		specs[i].depsIdx = dag.DepsOf(i)
+	}
+	if dag.WaveCount() <= 1 {
+		// Ни одной зависимости — обычный параллельный запуск: без волн,
+		// без подстановки входов и без платы за планирование.
+		return r.runBatch(ctx, "spawn_agents", r.parallelism(m), plainTargets(specs), renderSpawnBatch)
+	}
+	return r.runSpawnWaves(ctx, dag, specs, r.parallelism(m))
 }
 
 // renderSpawnBatch — собрать отчёты пачки субагентов.
