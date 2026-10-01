@@ -144,6 +144,8 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		// единственный способ отличить «модель выбрала general сама» от
 		// «роль вывел диспетчер».
 		Dispatched: args.Type == "",
+		Reuse:      string(out.Reuse),
+		ReusedFrom: out.ReusedFrom,
 		Summary:    out.Summary,
 		Full:       out.Full,
 		Usage:      core.Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens},

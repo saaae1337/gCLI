@@ -70,6 +70,18 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 	if res.Dispatched {
 		typeNote = fmt.Sprintf("\n(тип выбран автоматически по тексту задачи: %s)", res.Type)
 	}
+	// Отчёт мог достаться из кеша повторов или из уже идущей точно такой же
+	// работы. Сообщаем об этом прямо и с именем источника: главный агент иначе
+	// решит, что подзадача отработана заново, и станет опираться на выводы,
+	// полученные до последних правок в коде.
+	if res.Reuse != "" {
+		note := "\n(отчёт переиспользован, новый запуск НЕ выполнялся"
+		if res.ReusedFrom != "" {
+			note += ": взят у субагента " + res.ReusedFrom
+		}
+		note += ")"
+		typeNote += note
+	}
 	// Подсказываем, где взять полный отчёт: раньше модель получала только
 	// сводку и не знала, что полный текст доступен через agent_status.
 	return Result{
@@ -162,6 +174,17 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 				shown := res.Type
 				if shown == "" {
 					shown = args.Type
+				}
+				// Пометка о переиспользовании обязательна и здесь: в пачке
+				// дедупликация срабатывает чаще всего (соседние агенты просят
+				// одно и то же), и молчаливый отчёт из кеша выглядел бы как
+				// отдельная полноценная работа.
+				if res.Reuse != "" {
+					from := res.ReusedFrom
+					if from == "" {
+						from = "другой запуск"
+					}
+					body += fmt.Sprintf("\n\n[Отчёт переиспользован, новый запуск не выполнялся: %s]", from)
 				}
 				return Result{
 					Text: body,
