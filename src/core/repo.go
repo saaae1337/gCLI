@@ -27,6 +27,13 @@ func (r *Repo) LoadConfig() *Config {
 	cfg := DefaultConfig()
 	data, err := os.ReadFile(r.Store.ConfigPath())
 	if err == nil {
+		// Комментарии и висячие запятые допускаются и тут: этот файл
+		// человек правит руками чаще всех остальных (ключ провайдера,
+		// модель, разрешения), и запрет комментариев превращает его
+		// в место, где непонятно, что зачем.
+		if HasJSONC(data) {
+			data = StripJSONC(data)
+		}
 		_ = json.Unmarshal(data, &cfg)
 	}
 	if cfg.Think == "" {

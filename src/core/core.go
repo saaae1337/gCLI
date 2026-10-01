@@ -7,6 +7,7 @@ package core
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -224,17 +225,97 @@ type Config struct {
 	// но на 70% и 90% маршрутизация начинает понижать модель.
 	SubBudget     int  `json:"sub_budget,omitempty"`
 	ParallelTools bool `json:"parallel_tools,omitempty"` // выполнять параллельные вызовы инструментов
-	// Sandbox — песочница файловой системы: ограничить инструменты
-	// рабочим каталогом. По умолчанию выключена, потому что в своём
-	// проекте ограничение только мешает; в чужом репозитории её
-	// включают руками, и это единственная защита от чтения ~/.gcli
-	// с ключами API.
-	Sandbox bool `json:"sandbox,omitempty"`
+	// Sandbox — режим песочницы файловой системы: ограничить инструменты
+	// рабочим каталогом и закрыть каталоги с секретами.
+	//
+	// Тип SandboxMode, а не bool: у bool с omitempty нельзя отличить
+	// «выключено по просьбе» от «не задано», а разница принципиальна.
+	// Пустое значение = не задано, и тогда действует дефолт (включено).
+	// SandboxOn и SandboxOff — явный выбор пользователя, который дефолт
+	// перекрывает навсегда.
+	//
+	// Почему дефолт — «включено»: песочница защищает от чтения ~/.gcli с
+	// ключами API и ~/.ssh при работе в чужом репозитории, а ломает работу
+	// только там, где агент ходит за пределы проекта по делу (сборка в
+	// ../builds, общий кэш). Ложное чувство безопасности дороже лишнего
+	// вопроса «/sandbox off».
+	Sandbox SandboxMode `json:"sandbox,omitempty"`
+
+	// Permissions — правила разрешений для этого запуска (allow/ask/deny).
+	//
+	// Поле необязательное: у человека, который правил конфиг только
+	// ради ключа провайдера, оно не задано, и поведение остаётся прежним
+	// (спросить перед записью файлов и запуском команд). Наличие правил
+	// не меняет дефолт, а только отвечает на вопрос «а что именно можно»
+	// там, где человек это написал.
+	Permissions *PermissionCfg `json:"permissions,omitempty"`
+}
+
+// SandboxMode — режим песочницы: «on» | «off» | «» (не задано, дефолт).
+type SandboxMode string
+
+// Состояния SandboxMode.
+const (
+	SandboxUnset SandboxMode = ""    // не задано → дефолт (включено)
+	SandboxOn    SandboxMode = "on"  // включено
+	SandboxOff   SandboxMode = "off" // выключено
+)
+
+// UnmarshalJSON — принять и строку, и старый булев вид.
+//
+// До 5.5.1 поле было bool, и в конфигах у людей лежит "sandbox": true.
+// Стандартный разбор такой файл проглатывает молча (ошибка отбрасывается
+// в LoadConfig), из-за чего песочница тихо выключается у того, кто её
+// просил, — худший вид поломки: нет ни ошибки, ни эффекта. Поэтому старые
+// true/false разбираем явно, а любое другое значение — ошибка, чтобы
+// опечатку было видно.
+func (m *SandboxMode) UnmarshalJSON(b []byte) error {
+	raw := strings.TrimSpace(string(b))
+	if raw == "null" || raw == `""` {
+		*m = SandboxUnset
+		return nil
+	}
+	switch raw {
+	case "true":
+		*m = SandboxOn
+		return nil
+	case "false":
+		*m = SandboxOff
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("sandbox: ждал \"on\"/\"off\", получил %s", raw)
+	}
+	switch SandboxMode(strings.ToLower(strings.TrimSpace(s))) {
+	case SandboxUnset, SandboxOn, SandboxOff:
+		*m = SandboxMode(strings.ToLower(strings.TrimSpace(s)))
+		return nil
+	}
+	return fmt.Errorf("sandbox: ждал \"on\"/\"off\", получил %q", s)
 }
 
 // DefaultConfig — конфигурация по умолчанию.
 func DefaultConfig() Config {
+	// Sandbox по умолчанию включён (пустое значение = дефолт, см. поле).
 	return Config{Agent: true, Think: "auto", Subagents: true, SubMaxDepth: 1, SubMaxPar: 3}
+}
+
+// SandboxEnabled — действует ли песочница при этом значении поля.
+func (c Config) SandboxEnabled() bool { return c.Sandbox != SandboxOff }
+
+// SandboxMode — разобрать режим из строки флага/переменной окружения.
+// Допускает всё, чем писали в этой опции раньше (on/off/1/0/true/false).
+func ParseSandboxMode(s string) (SandboxMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return SandboxUnset, true
+	case "on", "1", "true", "вкл", "включить":
+		return SandboxOn, true
+	case "off", "0", "false", "выкл", "выключить", "отключить":
+		return SandboxOff, true
+	}
+	return SandboxUnset, false
 }
 
 // ToolDef — описание инструмента для API.

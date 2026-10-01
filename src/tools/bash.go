@@ -115,6 +115,10 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 		workdir = abs
 	}
 
+	if err := r.guardCommand(cmd, workdir); err != nil {
+		return Result{}, err
+	}
+
 	if r.env.Confirm != nil {
 		ok := r.env.Confirm(ConfirmReq{Kind: ConfirmExec, Detail: cmd, Reason: "выполнение команды"})
 		if !ok {

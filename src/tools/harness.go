@@ -553,6 +553,9 @@ func (r *Registry) hJob(_ context.Context, m map[string]any) (Result, error) {
 				return Result{}, err
 			}
 		}
+		if err := r.guardCommand(cmd, dir); err != nil {
+			return Result{}, err
+		}
 		if r.env.Confirm != nil {
 			if !r.env.Confirm(ConfirmReq{Kind: ConfirmExec, Detail: cmd, Reason: "фоновый процесс"}) {
 				return Result{Text: "Запуск отменён", Summary: "отменено"}, nil

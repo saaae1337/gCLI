@@ -46,6 +46,17 @@ type projInfo struct {
 }
 
 func (r *Registry) projectInfo() projInfo {
+	return r.ProjectProfile()
+}
+
+// ProjectProfile — снимок устройства проекта для /init и других команд.
+//
+// Экспортная обёртка над projectInfo: /init должен показать человеку
+// не пустые плейсхолдеры («<команда сборки>»), а то, что машина уже
+// знает наверняка — стек, команды, точки входа. Иначе первый же запуск
+// агента в новом проекте начинается с выдумывания того, что уже лежит
+// в go.mod и Makefile.
+func (r *Registry) ProjectProfile() projInfo {
 	p := projInfo{WorkDir: r.workDir}
 	p.GitRoot = gitRepoRoot(r.workDir)
 
