@@ -14,7 +14,7 @@ set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/src"
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/builds"
-VERSION="${GCLI_VERSION:-5.4.0}"
+VERSION="${GCLI_VERSION:-5.5.0}"
 LDFLAGS="-s -w -X main.buildVersion=$VERSION"
 
 # Версия в core/core.go — источник правды для всего, что читает core.Version:
