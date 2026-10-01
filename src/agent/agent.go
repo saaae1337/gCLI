@@ -80,6 +80,17 @@ type Deps struct {
 	SkillsPrompt func() string
 	// MaxIters — лимит итераций (0 = DefaultMaxIters).
 	MaxIters int
+	// MaxItersAbs — абсолютный потолок итераций с учётом продлений
+	// (0 = DefaultExtendAbs).
+	MaxItersAbs int
+	// ExtendMax — сколько раз за ход можно продлить (0 = DefaultExtendMax).
+	ExtendMax int
+	// ExtendStep — размер одного продления в итерациях (0 = дефолт).
+	ExtendStep int
+	// Budget — текущий расход сессии и её потолок в токенах.
+	// Заполняется хостом перед каждым вызовом инструмента, потому что
+	// расход меняется на каждой итерации.
+	Budget func() (spent, limit int)
 	// AutoCompact — порог авто-сжатия (0 = выключить).
 	AutoCompact int
 	// Parallel — выполнять независимые вызовы инструментов параллельно.
@@ -123,7 +134,70 @@ type Agent struct {
 	NotesList []string
 	// OnNote — callback при добавлении заметки.
 	OnNote func(title, body string)
+	// OnExtend — callback при выдаче продления (для UI и заметок).
+	OnExtend func(granted, total int, reason string)
+	// ext — состояние продлений текущего хода.
+	ext *ExtendState
+	// loops — детектор петли текущего хода (для проверки прогресса).
+	loops *LoopDetector
 }
+
+// ExtendTurn — модель просит продолжить ход.
+//
+// Возвращает решение с текстом для модели. Вызывается из инструмента
+// extend_turns, поэтому потокобезопасно и не имеет побочных эффектов вне
+// состояния продлений.
+func (a *Agent) ExtendTurn(reason string, want int) ExtendVerdict {
+	// Состояние продлений живёт только внутри хода: до первого вызова Run и
+	// после его завершения a.ext равен nil. Инструмент при этом доступен —
+	// реестр живёт дольше хода, — поэтому nil проверяем здесь, а не
+	// полагаемся на «агент не успеет позвать».
+	if a.ext == nil {
+		return ExtendVerdict{
+			Message: "Продление работает только во время хода агента: сейчас хода нет, " +
+				"продлевать нечего. Начни работу инструментами — и лимит снова можно будет увеличить.",
+		}
+	}
+	var progress float64
+	if a.loops != nil {
+		progress = a.loops.Progress()
+	}
+	spent, limit := 0, 0
+	if a.d.Budget != nil {
+		spent, limit = a.d.Budget()
+	}
+	// Финальные ходы: инструменты уже отключены, продлевать нечего. Проверка
+	// до Request: вызвать ExtendDecision, а потом отозвать результат нельзя —
+	// лимит к этому моменту уже вырос. На финальные ходы инструмент физически
+	// не попадает (реестр подменяется пустым), но полагаться на это — значит
+	// забыть проверку однажды и получить панику на следующем же вызове.
+	if !a.AgentMode {
+		return ExtendVerdict{
+			Total:   a.ext.Limit(),
+			Message: "Продление не работает на финальных ходах: лимит итераций исчерпан, инструменты отключены. Заканчивай отчёт.",
+		}
+	}
+
+	v := a.ext.Request(progress, spent, limit, reason, want)
+	if v.OK && a.OnExtend != nil {
+		a.OnExtend(v.Granted, v.Total, v.Reason)
+	}
+	return v
+}
+
+// ExtendLog — журнал решений по продлениям за текущий ход.
+func (a *Agent) ExtendLog() []string {
+	if a.ext == nil {
+		return nil
+	}
+	return a.ext.Log()
+}
+
+// ExtendUsed — выдавалось ли в этом ходе хотя бы одно продление.
+func (a *Agent) ExtendUsed() bool { return a.ext != nil && a.ext.Used() }
+
+// ExtendState — состояние продлений текущего хода (nil вне хода).
+func (a *Agent) ExtendState() *ExtendState { return a.ext }
 
 // New — создать агента.
 func New(d Deps, workDir string) *Agent {
@@ -472,23 +546,28 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		maxIters = DefaultMaxIters
 	}
 
+	ext := NewExtendState(maxIters, a.d.MaxItersAbs, a.d.ExtendMax, a.d.ExtendStep)
+	a.ext = ext
+
 	// Счётчик реально выполненных итераций (для отчётов и статистики).
 	a.Turns = 0
 
 	// Детектор петли: ловит повторяющиеся вызовы и одинаковые ошибки.
 	loops := NewLoopDetector()
+	a.loops = loops
 
 	for iter := 1; ; iter++ {
-		if iter > maxIters {
+		limit := ext.Limit()
+		if iter > limit {
 			// Лимит исчерпан: даём агенту несколько ходов, чтобы сдать
 			// результат, вместо обрыва цикла на полуслове.
 			a.Turns = iter - 1
-			a.autoHandoff(maxIters)
+			a.autoHandoff(limit)
 			if err := a.finalize(ctx); err != nil {
 				return err
 			}
 			if a.OnNote != nil {
-				a.OnNote("лимит итераций", fmt.Sprintf("достигнут лимит %d итераций за ход, результат собран принудительно", maxIters))
+				a.OnNote("лимит итераций", fmt.Sprintf("достигнут лимит %d итераций за ход, результат собран принудительно", limit))
 			}
 			break
 		}
@@ -523,6 +602,15 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		// Не прерываем цикл — решение остаётся за ней, но теперь у неё
 		// есть факты: что именно повторяется и сколько раз.
 		if warn := loops.Record(assistant.ToolCalls, results); warn != "" {
+			a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: warn})
+		}
+		// Близко к лимиту: говорим заранее, а не когда он уже кончился.
+		//
+		// Раньше модель узнавала об исчерпании по одной фразе в self_status,
+		// а сам self_status надо было догадаться вызвать. К этому моменту
+		// времени на нормальную работу уже нет. Сообщение одно на ход:
+		// повторять его каждую итерацию — значит жечь контекст.
+		if warn := ext.Reminder(ext.Limit() - iter); warn != "" {
 			a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: warn})
 		}
 		// Зрение: изображения из результатов (screenshot, read_image)

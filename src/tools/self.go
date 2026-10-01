@@ -38,6 +38,10 @@ type SelfReport struct {
 	Stats core.Stats
 	// Сколько ходов агентного цикла уже выполнено в этом ходе.
 	Turns int
+	// ExtendAbs — абсолютный потолок итераций с продлениями.
+	ExtendAbs int
+	// Extends — сколько раз ход уже продлили за этот ход.
+	Extends int
 	// История диалога.
 	History []core.Message
 	// Сколько файлов агент уже прочитал (для edit_file нужно было прочитать).
@@ -68,6 +72,7 @@ var toolLimits = []struct{ tool, limit string }{
 	{"agent_status", "agent_status list/status — только сводка; полный отчёт субагента приходит его же результатом"},
 	{"ask_user", "в автопилоте вопросы не задаются: вопрос помечается как решённый на твоё усмотрение"},
 	{"self_status", "этот инструмент; ничего не меняет"},
+	{"extend_turns", "продлевает ход, а не сохраняет состояние: для следующего хода зови handoff; отклоняется при повторах и без обоснования"},
 	{"remember", "пишет в долговременную память (~/.gcli/GCLI.md); для заметок внутри задачи — task_note"},
 	{"screenshot", "PNG сохраняется в .gcli/screenshots; изображение прикладывается к твоему контексту"},
 	{"read_image", "изображение прикладывается к контексту; до 4 картинок за один ход"},
@@ -128,14 +133,18 @@ func (s SelfReport) Text() string {
 	// ---- Бюджет итераций: агент видит, что скоро придётся сдавать отчёт. ----
 	if s.MaxIters > 0 {
 		fmt.Fprintf(&b, "\nИтерации цикла: %d из %d использовано", s.Turns, s.MaxIters)
-		if s.MaxIters > 0 {
-			left := s.MaxIters - s.Turns
-			switch {
-			case left <= 2:
-				b.WriteString(" — почти всё, пора готовить итог.")
-			case left <= 6:
-				b.WriteString(" — осталось немного, не распыляйся на «ещё один заход».")
-			}
+		left := s.MaxIters - s.Turns
+		switch {
+		case left <= 2:
+			b.WriteString(" — почти всё, пора готовить итог.")
+		case left <= 6:
+			b.WriteString(" — осталось немного, не распыляйся на «ещё один заход».")
+		}
+		if s.Extends > 0 {
+			fmt.Fprintf(&b, " (продлено %d %s до %d)",
+				s.Extends, pluralRU(s.Extends, "раз", "раза", "раз"), s.ExtendAbs)
+		} else if s.ExtendAbs > s.MaxIters {
+			fmt.Fprintf(&b, ". Продлить можно до %d — инструментом extend_turns с объяснением, зачем.", s.ExtendAbs)
 		}
 		b.WriteString("\n")
 	}
@@ -198,6 +207,20 @@ func contextBar(total, limit int) (string, int) {
 	}
 	bar := "[" + strings.Repeat("█", filled) + strings.Repeat("░", 10-filled) + "]"
 	return bar, pct
+}
+
+// pluralRU — согласовать существительное с числом по-русски.
+func pluralRU(n int, one, few, many string) string {
+	if n%100 >= 11 && n%100 <= 14 {
+		return many
+	}
+	switch n % 10 {
+	case 1:
+		return one
+	case 2, 3, 4:
+		return few
+	}
+	return many
 }
 
 // sectionRe — разделитель блоков в тексте отчёта.

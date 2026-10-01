@@ -32,6 +32,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdHelp()
 	case "/status":
 		a.cmdStatus()
+	case "/iters":
+		a.cmdIters()
 	case "/model":
 		a.cmdModel(rest)
 	case "/provider":
@@ -133,6 +135,7 @@ func (a *app) cmdHelp() {
 			{"/sandbox on|off", "песочница файлов: пути вне рабочего каталога запрещены"},
 			{"/yolo", "без подтверждений (кроме опасных команд)"},
 			{"/tools", "список инструментов агента"},
+			{"/iters", "лимит итераций, продления хода и их журнал"},
 			{"/todos", "план текущей задачи"},
 			{"/compact", "сжать историю диалога"},
 		}},

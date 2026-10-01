@@ -50,6 +50,18 @@ func (r *Repo) LoadConfig() *Config {
 	if cfg.SubBudget < 0 {
 		cfg.SubBudget = 0
 	}
+	// Лимиты продления хода. Отрицательные значения — опечатка, а не замысел:
+	// ноль здесь означает «взять дефолт пакета», и пропустить минус вниз нельзя,
+	// иначе продление молча выключится и агент упрётся в лимит без объяснения.
+	if cfg.MaxItersAbs < 0 {
+		cfg.MaxItersAbs = 0
+	}
+	if cfg.TurnExtendMax < 0 {
+		cfg.TurnExtendMax = 0
+	}
+	if cfg.TurnExtendStep < 0 {
+		cfg.TurnExtendStep = 0
+	}
 	return &cfg
 }
 

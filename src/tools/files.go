@@ -119,6 +119,7 @@ func (r *Registry) registerBuiltins() {
 		schemaJob, "exec", true, func(r *Registry) Handler { return r.hJob })
 	r.registerBound("ask_trace", "Что я спрашивал у пользователя и что получил в ответ. Проверяй, если кажется, что ждёшь ответа, которого не было: отсутствие следа означает, что вопрос не был задан.",
 		schemaAskTrace, "plan", false, func(r *Registry) Handler { return r.hAskTrace })
+	registerExtendTool(r)
 
 	// ---- Пакетный режим: одно действие вместо N ----
 	//

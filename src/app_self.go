@@ -32,11 +32,19 @@ func (a *app) selfReport() tools.SelfReport {
 
 	// Системный промпт берём у того агента, который сейчас работает,
 	// иначе агент сравнивал бы свой контекст с чужим.
+	rep.ExtendAbs = a.maxItersAbs()
 	if ag := a.currentAgent(); ag != nil {
 		rep.SystemPrompt = ag.SystemPrompt()
 		rep.Turns = ag.Turns
 		rep.Subagent = ag.SubagentName
 		rep.Depth = ag.Depth
+		// Живой лимит важнее базового: после продления именно он определяет,
+		// сколько итераций осталось. В self_status попадает оба — и сколько
+		// использовано, и до какого потолка вообще.
+		if st := ag.ExtendState(); st != nil {
+			rep.MaxIters = st.Limit()
+			rep.Extends = st.Extends()
+		}
 	} else {
 		// Агент ещё не собран — считаем хотя бы примерно, по базовому.
 		rep.SystemPrompt = agent.MainSystemBase()

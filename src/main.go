@@ -459,6 +459,7 @@ func (a *app) buildTools() {
 		Agents:     a.agentsInfo,
 		Ask:        a.askUser,
 		Self:       a.selfReport,
+		Extend:     a.extendTurn,
 		OnProgress: a.onProgress,
 		// Доверие к коду из проекта. Хранилище всегда есть, даже если файл
 		// согласий пуст: тогда «нет согласия» и «хранилища нет» — одно и то же.
@@ -1071,6 +1072,13 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 			return a.tools.SkillsPromptBlock()
 		},
 		MaxIters:    a.maxIters(),
+		MaxItersAbs: a.maxItersAbs(),
+		ExtendMax:   a.turnExtendMax(),
+		ExtendStep:  a.turnExtendStep(),
+		// Расход сессии нужен агенту дважды: чтобы решить, можно ли ещё
+		// продлевать ход, и чтобы self_status показал честную картину.
+		// Отдаём функцию, а не числа: расход меняется на каждой итерации.
+		Budget:      func() (spent, limit int) { return a.sessionSpent(), a.repo.Cfg.SubBudget },
 		AutoCompact: a.autoCompactLimit(),
 		Parallel:    a.repo.Cfg.ParallelTools,
 		Quiet:       quiet || a.quiet,
@@ -1097,6 +1105,7 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 	ag.WithAgentMode(a.sess.AgentMode)
 	ag.Notes = a.notesText()
 	ag.OnNote = a.onNote
+	ag.OnExtend = a.onExtend
 	a.mu.Lock()
 	a.lastAgent = ag
 	a.mu.Unlock()
@@ -1112,6 +1121,32 @@ func (a *app) maxIters() int {
 		return core.Clamp(a.repo.Cfg.MaxIters, 1, 200)
 	}
 	return agent.DefaultMaxIters
+}
+
+// maxItersAbs — абсолютный потолок итераций с продлениями.
+//
+// Нижняя граница — базовый лимит, а не 1: конфиг с max_iters=200 и
+// max_iters_abs=50 не должен тихо урезать работающие 200 итераций. Верхняя
+// граница — дефолт пакета, потому что при max_iters=40 потолок по умолчанию
+// обязан оставаться 200: иначе при base == abs продление невозможно и весь
+// механизм мёртв от рождения, хотя формально он включён.
+func (a *app) maxItersAbs() int {
+	base := a.maxIters()
+	abs := a.repo.Cfg.MaxItersAbs
+	if abs <= 0 {
+		abs = agent.DefaultExtendAbs
+	}
+	return core.Clamp(abs, base, 500)
+}
+
+// turnExtendMax — сколько раз за ход можно продлить (0 = дефолт пакета).
+func (a *app) turnExtendMax() int {
+	return core.Clamp(a.repo.Cfg.TurnExtendMax, 0, 20)
+}
+
+// turnExtendStep — размер одного продления в итерациях (0 = дефолт пакета).
+func (a *app) turnExtendStep() int {
+	return core.Clamp(a.repo.Cfg.TurnExtendStep, 0, 100)
 }
 
 func (a *app) autoCompactLimit() int {

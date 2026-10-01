@@ -190,17 +190,31 @@ type Config struct {
 	PlanMode bool `json:"plan_mode,omitempty"`
 
 	// Поведение агента.
-	MaxIters      int    `json:"max_iters,omitempty"`       // лимит итераций агентного цикла
-	AutoCompact   int    `json:"auto_compact,omitempty"`    // порог авто-сжатия контекста (0 = 80k)
-	Subagents     bool   `json:"subagents,omitempty"`       // разрешить субагентов
-	Autopilot     bool   `json:"autopilot,omitempty"`       // автопилот: одобрять безопасные команды самому (0 = спрашивать)
-	AutopilotAll  bool   `json:"autopilot_all,omitempty"`   // автопилот повышенного риска: одобрять всё, включая опасные команды
-	SubMaxDepth   int    `json:"sub_max_depth,omitempty"`   // глубина вложенности (1..3)
-	SubMaxPar     int    `json:"sub_max_par,omitempty"`     // максимум субагентов одновременно
-	SubModel      string `json:"sub_model,omitempty"`       // модель субагентов (пусто = как у главного)
-	SubMaxTurns   int    `json:"sub_max_turns,omitempty"`   // лимит ходов одного субагента
-	SubTimeoutMin int    `json:"sub_timeout_min,omitempty"` // потолок времени на субагента, минут (0 = 10)
-	SubRetries    int    `json:"sub_retries,omitempty"`     // попытки запуска субагента при сбое (1..3, 0 = 2)
+	MaxIters    int `json:"max_iters,omitempty"`    // лимит итераций агентного цикла
+	AutoCompact int `json:"auto_compact,omitempty"` // порог авто-сжатия контекста (0 = 80k)
+	// MaxItersAbs — абсолютный потолок итераций за ход с учётом продлений
+	// (0 = 200). Продление не поднимает потолок: оно лишь распределяет его
+	// по требованию модели. Значение никогда не считается меньше max_iters —
+	// иначе конфиг тихо урезал бы работающий лимит.
+	MaxItersAbs int `json:"max_iters_abs,omitempty"`
+	// TurnExtendMax — сколько раз за один ход можно продлить лимит
+	// (0 = 8). Ноль и отрицательное не значат «нельзя продлевать», а
+	// значат «взять дефолт»: выключить продление целиком можно одним
+	// лимитом max_iters, заводить для этого отдельный выключатель — лишнее.
+	TurnExtendMax int `json:"turn_extend_max,omitempty"`
+	// TurnExtendStep — размер одного продления в итерациях (0 = 30).
+	// Модель может попросить меньше, но не больше: иначе «продли на 500»
+	// превращает механизм в способ обойти потолок.
+	TurnExtendStep int    `json:"turn_extend_step,omitempty"`
+	Subagents      bool   `json:"subagents,omitempty"`       // разрешить субагентов
+	Autopilot      bool   `json:"autopilot,omitempty"`       // автопилот: одобрять безопасные команды самому (0 = спрашивать)
+	AutopilotAll   bool   `json:"autopilot_all,omitempty"`   // автопилот повышенного риска: одобрять всё, включая опасные команды
+	SubMaxDepth    int    `json:"sub_max_depth,omitempty"`   // глубина вложенности (1..3)
+	SubMaxPar      int    `json:"sub_max_par,omitempty"`     // максимум субагентов одновременно
+	SubModel       string `json:"sub_model,omitempty"`       // модель субагентов (пусто = как у главного)
+	SubMaxTurns    int    `json:"sub_max_turns,omitempty"`   // лимит ходов одного субагента
+	SubTimeoutMin  int    `json:"sub_timeout_min,omitempty"` // потолок времени на субагента, минут (0 = 10)
+	SubRetries     int    `json:"sub_retries,omitempty"`     // попытки запуска субагента при сбое (1..3, 0 = 2)
 	// SubRoute — маршрутизация моделей субагентов по роли и бюджету.
 	// По умолчанию выключена: молча перевести субагента на другую модель
 	// нельзя, пользователь узнаёт об этом по счёту, а не по /agents.

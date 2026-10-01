@@ -138,6 +138,10 @@ type Env struct {
 	Agents func(action, name string) string
 	// Self — снимок собственного состояния агента (инструмент self_status).
 	Self func() SelfReport
+	// Extend — продлить лимит итераций хода (инструмент extend_turns).
+	// Возвращает, на сколько продлили (0 = отказ, msg объясняет почему).
+	// nil = инструмент недоступен: так у субагентов и в финальных ходах.
+	Extend func(reason string, n int) (granted int, msg string, err error)
 	// Depth — текущая глубина вложенности агента.
 	Depth int
 	// MaxDepth — максимальная глубина вложенности.
