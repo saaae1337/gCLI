@@ -97,6 +97,21 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 			spec.Name = custom.Name
 		}
 	}
+	// Маршрутизация модели — после того, как роль и пользовательский агент уже
+	// известны. Модель из аргумента инструмента и из front matter своего агента
+	// считаются явными и не трогаются: это указание человека, а не дефолт.
+	if spec.Model == "" {
+		spec.Model, spec.ModelWhy = a.routeModelFor(t)
+	} else if a.repo.Cfg.SubRoute {
+		spec.ModelWhy = "модель указана явно — не меняю"
+	}
+	// Ходы урезаются по бюджету на том же пределе, что и модель: потеря хода
+	// бьёт по качеству сильнее смены модели, поэтому включается позже.
+	spec.MaxTurns = subagents.TurnsForBudget(core.Clamp(a.repo.Cfg.SubMaxTurns, 1, 60),
+		subagents.RouteOptions{
+			Budget:  subagents.Budget{Spent: a.sessionSpent(), Limit: a.repo.Cfg.SubBudget},
+			Enabled: a.repo.Cfg.SubRoute,
+		})
 	// Жёсткий потолок времени на одного субагента. Без него 12 итераций по
 	// 10 минут на модель дают до 2 часов на субагента, а пул из 3 таких —
 	// это очередь, в которой главный агент просто зависает.
@@ -116,23 +131,33 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		a.ui.Println("  " + a.ui.Magenta("◆ запускаю субагента: ") + a.ui.Bold(name) +
 			a.ui.Gray("  ("+string(t)+")"))
 	}
+	// Смена модели видна сразу, а не постфактум из счёта: невидимое
+	// понижение пользователь читает как баг, а это его же настройка.
+	if spec.Model != "" && !a.quiet {
+		line := "  " + a.ui.Gray("модель: "+spec.Model)
+		if spec.ModelWhy != "" {
+			line += a.ui.Gray("  — " + spec.ModelWhy)
+		}
+		a.ui.Println(line)
+	}
 	out, err := a.pool.Spawn(sctx, spec)
 	runName := name
 	if runs := a.pool.Get(name); len(runs) > 0 {
 		runName = runs[0].Name
 	}
 	a.recordSubagent(core.SubagentRecord{
-		ID:      core.RandID(6),
-		Name:    runName,
-		Type:    string(t),
-		Task:    spec.Task,
-		Model:   firstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
-		Status:  string(statusOf(err)),
-		Depth:   spec.Depth,
-		Turns:   out.Turns,
-		Tools:   out.Tools,
-		Summary: out.Summary,
-		Err:     errText(err),
+		ID:       core.RandID(6),
+		Name:     runName,
+		Type:     string(t),
+		Task:     spec.Task,
+		Model:    firstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
+		ModelWhy: spec.ModelWhy,
+		Status:   string(statusOf(err)),
+		Depth:    spec.Depth,
+		Turns:    out.Turns,
+		Tools:    out.Tools,
+		Summary:  out.Summary,
+		Err:      errText(err),
 	})
 	if err != nil {
 		return tools.SpawnResult{}, err
@@ -146,6 +171,8 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Dispatched: args.Type == "",
 		Reuse:      string(out.Reuse),
 		ReusedFrom: out.ReusedFrom,
+		Model:      firstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
+		ModelWhy:   spec.ModelWhy,
 		Summary:    out.Summary,
 		Full:       out.Full,
 		Usage:      core.Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens},
@@ -197,7 +224,7 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 		},
 	}
 	out := agent.RunSubagent(ctx, d, spec)
-	a.sess.AddUsage(out.Usage)
+	a.AddUsage(out.Usage)
 	return out, nil
 }
 
@@ -222,6 +249,37 @@ func (a *app) agentsInfo(action, name string) string {
 	default:
 		return a.pool.Summary()
 	}
+}
+
+// sessionSpent — расход сессии в токенах: главный агент плюс субагенты.
+//
+// Снимок под sessMu обязателен: usage пишется из горутин субагентов, и без
+// блокировки это гонка данных, а счёт бюджета влияет на выбор модели.
+func (a *app) sessionSpent() int {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Usage.Total()
+}
+
+// routeModelFor — выбрать модель субагента с учётом роли и бюджета.
+//
+// Возвращает модель (пустая строка — «как у главного агента») и объяснение
+// выбора. Вызывается только когда модель не указана явно: RouteModel всё
+// равно проверяет это первым, но лишний параметр с пустым значением читался
+// бы как «явно указано», и подмена вернулась бы незаметно.
+func (a *app) routeModelFor(role subagents.Type) (string, string) {
+	cur := firstNonEmpty(a.repo.Cfg.SubModel, a.model)
+	v := subagents.RouteModel(role, subagents.RouteOptions{
+		Current:    cur,
+		ProviderID: a.prov.ID,
+		Available:  a.prov.Models,
+		Budget:     subagents.Budget{Spent: a.sessionSpent(), Limit: a.repo.Cfg.SubBudget},
+		Enabled:    a.repo.Cfg.SubRoute,
+	})
+	if v.Model == "" {
+		return "", v.Why
+	}
+	return v.Model, v.Why
 }
 
 // taskSummary — краткое описание текущей задачи (для контекста субагента).

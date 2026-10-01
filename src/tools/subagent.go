@@ -86,6 +86,12 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 		note += ")"
 		typeNote += note
 	}
+	// Модель могла быть понижена маршрутизацией. Сообщаем прямо: отчёт,
+	// собранный на дешёвой модели из-за роли или предела бюджета, заказчик
+	// обязан взвесить иначе, чем такой же текст с полной моделью.
+	if res.ModelWhy != "" {
+		typeNote += fmt.Sprintf("\n(модель: %s — %s)", res.Model, res.ModelWhy)
+	}
 	// Подсказываем, где взять полный отчёт: раньше модель получала только
 	// сводку и не знала, что полный текст доступен через agent_status.
 	return Result{
@@ -223,6 +229,12 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 						from = "другой запуск"
 					}
 					body += fmt.Sprintf("\n\n[Отчёт переиспользован, новый запуск не выполнялся: %s]", from)
+				}
+				// Модель понижена маршрутизацией: в пачке это заметно сильнее,
+				// потому что один бюджет делится на шесть субагентов, и три
+				// дешёвых отчёта легко принять за шесть равноценных.
+				if res.ModelWhy != "" {
+					body += fmt.Sprintf("\n\n[Модель: %s — %s]", res.Model, res.ModelWhy)
 				}
 				return Result{
 					Text: body,

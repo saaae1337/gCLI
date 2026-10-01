@@ -44,6 +44,12 @@ func (r *Repo) LoadConfig() *Config {
 	if cfg.SubTimeoutMin <= 0 {
 		cfg.SubTimeoutMin = 10
 	}
+	// Бюджет сессии: ноль — это «потолок не задан», и маршрутизация по нему
+	// молча выключена. Отрицательное значение в конфиге — опечатка, а не
+	// замысел, поэтому оно тоже схлопывается в ноль.
+	if cfg.SubBudget < 0 {
+		cfg.SubBudget = 0
+	}
 	return &cfg
 }
 

@@ -201,7 +201,15 @@ type Config struct {
 	SubMaxTurns   int    `json:"sub_max_turns,omitempty"`   // лимит ходов одного субагента
 	SubTimeoutMin int    `json:"sub_timeout_min,omitempty"` // потолок времени на субагента, минут (0 = 10)
 	SubRetries    int    `json:"sub_retries,omitempty"`     // попытки запуска субагента при сбое (1..3, 0 = 2)
-	ParallelTools bool   `json:"parallel_tools,omitempty"`  // выполнять параллельные вызовы инструментов
+	// SubRoute — маршрутизация моделей субагентов по роли и бюджету.
+	// По умолчанию выключена: молча перевести субагента на другую модель
+	// нельзя, пользователь узнаёт об этом по счёту, а не по /agents.
+	SubRoute bool `json:"sub_route,omitempty"`
+	// SubBudget — потолок расхода сессии в токенах, под который умещается
+	// маршрутизация (0 = не задан). Это не лимит: превышение не запрещает,
+	// но на 70% и 90% маршрутизация начинает понижать модель.
+	SubBudget     int  `json:"sub_budget,omitempty"`
+	ParallelTools bool `json:"parallel_tools,omitempty"` // выполнять параллельные вызовы инструментов
 	// Sandbox — песочница файловой системы: ограничить инструменты
 	// рабочим каталогом. По умолчанию выключена, потому что в своём
 	// проекте ограничение только мешает; в чужом репозитории её
@@ -256,18 +264,23 @@ type Session struct {
 
 // SubagentRecord — запись о запуске субагента в журнале сессии.
 type SubagentRecord struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
-	Type    string        `json:"type"`
-	Task    string        `json:"task"`
-	Model   string        `json:"model"`
-	Status  string        `json:"status"` // running | done | error | canceled
-	Depth   int           `json:"depth"`
-	Turns   int           `json:"turns"`
-	Tools   int           `json:"tools"`
-	Elapsed time.Duration `json:"elapsed_ns"`
-	Summary string        `json:"summary,omitempty"`
-	Err     string        `json:"error,omitempty"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Task  string `json:"task"`
+	Model string `json:"model"`
+	// ModelWhy — почему субагент поехал на этой модели. Заполняется
+	// маршрутизацией, когда модель понижена по роли или по бюджету: без
+	// объяснения счёт за сессию выглядит как ошибка, а он — результат
+	// настройки, которую пользователь сам включил.
+	ModelWhy string        `json:"model_why,omitempty"`
+	Status   string        `json:"status"` // running | done | error | canceled
+	Depth    int           `json:"depth"`
+	Turns    int           `json:"turns"`
+	Tools    int           `json:"tools"`
+	Elapsed  time.Duration `json:"elapsed_ns"`
+	Summary  string        `json:"summary,omitempty"`
+	Err      string        `json:"error,omitempty"`
 }
 
 // AddUsage — прибавить расход токенов к сессии.

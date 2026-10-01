@@ -77,6 +77,10 @@ func (a *app) cmdAgents(rest string) {
 			a.ui.Ok("модель субагентов: " + parts[1])
 		}
 		a.saveConfig()
+	case "route", "маршрутизация", "маршрут":
+		a.setSubRoute(parts)
+	case "budget", "бюджет":
+		a.setSubBudget(parts)
 	case "timeout", "таймаут":
 		if len(parts) < 2 {
 			a.ui.Info(fmt.Sprintf("таймаут субагента: %d мин (изменить: /agents timeout 20)", core.Clamp(a.repo.Cfg.SubTimeoutMin, 1, 60)))
@@ -121,6 +125,94 @@ func (a *app) setSubagents(on bool) {
 		a.ui.Ok("субагенты включены — модель может делегировать подзадачи")
 	} else {
 		a.ui.Ok("субагенты выключены")
+	}
+}
+
+// setSubRoute — вкл/выкл маршрутизацию моделей субагентов.
+//
+// Показываем не только переключатель, но и то, что он реально сделает:
+// список дешёвых ролей и пороги бюджета. Иначе «включено» остаётся
+// абстракцией, а человек узнаёт о маршрутизации только из счёта.
+func (a *app) setSubRoute(parts []string) {
+	if len(parts) < 2 {
+		state := "выключена"
+		if a.repo.Cfg.SubRoute {
+			state = "включена"
+		}
+		a.ui.Info("маршрутизация моделей субагентов: " + state + " (изменить: /agents route on|off)")
+		a.ui.Hint("простые роли (карта кода, документация) поедут на самую дешёвую модель провайдера; " +
+			"при 70% и 90% израсходованного бюджета понижается всё")
+		if !a.repo.Cfg.SubRoute {
+			return
+		}
+		if a.repo.Cfg.SubBudget > 0 {
+			a.ui.Hint(fmt.Sprintf("бюджет сессии: %s токенов (изменить: /agents budget 500000)", core.Kfmt(a.repo.Cfg.SubBudget)))
+		} else {
+			a.ui.Hint("бюджет не задан — понижение будет только по роли; бюджет: /agents budget 500000")
+		}
+		return
+	}
+	switch strings.ToLower(parts[1]) {
+	case "on", "вкл", "1", "true", "да":
+		a.repo.Cfg.SubRoute = true
+		a.saveConfig()
+		a.ui.Ok("маршрутизация включена — простые роли поедут на дешёвую модель")
+		if a.repo.Cfg.SubBudget <= 0 {
+			a.ui.Hint("бюджет сессии не задан, поэтому понижение по нему не сработает: /agents budget 500000")
+		}
+	case "off", "выкл", "0", "false", "нет":
+		a.repo.Cfg.SubRoute = false
+		a.saveConfig()
+		a.ui.Ok("маршрутизация выключена — субагенты едут на модели " +
+			firstNonEmpty(a.repo.Cfg.SubModel, a.model))
+	default:
+		a.ui.Err("значение: on | off")
+	}
+}
+
+// setSubBudget — потолок расхода сессии в токенах.
+//
+// Не лимит: превышение не запрещает и ничего не обрывает. Это ориентир, по
+// которому маршрутизация понимает, что пора беречь деньги. Поэтому «0» здесь
+// означает «ориентира нет», а не «бюджет нулевой».
+func (a *app) setSubBudget(parts []string) {
+	if len(parts) < 2 {
+		if a.repo.Cfg.SubBudget <= 0 {
+			a.ui.Info("бюджет сессии не задан (маршрутизация понижает только по роли; изменить: /agents budget 500000)")
+		} else {
+			spent := a.sessionSpent()
+			v := subagents.JudgeBudget(subagents.Budget{Spent: spent, Limit: a.repo.Cfg.SubBudget})
+			extra := ""
+			if v.Critical {
+				extra = " · на пределе: понижаются все роли"
+			} else if v.Tight {
+				extra = " · жмёт: понижаются все роли"
+			}
+			a.ui.Info(fmt.Sprintf("бюджет сессии: %s токенов, израсходовано %s (%d%%)%s",
+				core.Kfmt(a.repo.Cfg.SubBudget), core.Kfmt(spent), v.UsedPct, extra))
+		}
+		return
+	}
+	raw := strings.TrimSpace(parts[1])
+	switch strings.ToLower(raw) {
+	case "off", "выкл", "0", "нет", "none":
+		a.repo.Cfg.SubBudget = 0
+		a.saveConfig()
+		a.ui.Ok("бюджет сессии снят — маршрутизация понижает только по роли")
+		return
+	}
+	n, err := strconv.Atoi(raw)
+	// Нижняя граница осмысленная: потолок в 50k токенов срабатывал бы на
+	// первом же ходе и выдавал бы «бюджет на пределе» там, где его нет.
+	if err != nil || n < 50_000 || n > 20_000_000 {
+		a.ui.Err("значение: токены от 50000 до 20000000 (или off)")
+		return
+	}
+	a.repo.Cfg.SubBudget = n
+	a.saveConfig()
+	a.ui.Ok(fmt.Sprintf("бюджет сессии: %s токенов — на 70%% и 90%% маршрутизация понизит модель", core.Kfmt(n)))
+	if !a.repo.Cfg.SubRoute {
+		a.ui.Hint("маршрутизация выключена: /agents route on")
 	}
 }
 
@@ -214,7 +306,7 @@ func (a *app) listAgents() {
 		}, rows, ui.BlockOpts{})
 	}
 	a.ui.Println("  " + a.ui.Gray("запустить вручную: /agents run explorer \"найди, где реализована авторизация\""))
-	a.ui.Println("  " + a.ui.Gray("настройки: /agents on|off · /agents par N · /agents depth N · /agents model <имя> · /agents timeout N · /agents types"))
+	a.ui.Println("  " + a.ui.Gray("настройки: /agents on|off · /agents par N · /agents depth N · /agents model <имя> · /agents timeout N · /agents route on|off · /agents budget N · /agents types"))
 	a.ui.Println("")
 }
 

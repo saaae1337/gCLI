@@ -252,11 +252,17 @@ type SpawnResult struct {
 	Reuse string
 	// ReusedFrom — имя субагента-первоисточника.
 	ReusedFrom string
-	Summary    string
-	Full       string
-	Usage      core.Usage
-	Turns      int
-	ToolCall   int
+	// Model — на какой модели субагент реально работал.
+	Model string
+	// ModelWhy — почему именно эта модель (маршрутизация по роли или по
+	// бюджету). Модель обязана знать это прямо: отчёт, собранный на дешёвой
+	// модели, она иначе примет за такой же полноценный, как привыкла.
+	ModelWhy string
+	Summary  string
+	Full     string
+	Usage    core.Usage
+	Turns    int
+	ToolCall int
 }
 
 // SessionRef — минимальный интерфейс сессии для инструментов.

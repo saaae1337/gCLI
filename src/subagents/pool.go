@@ -23,11 +23,15 @@ const (
 
 // Run — один запуск субагента.
 type Run struct {
-	ID       string
-	Name     string
-	Type     Type
-	Task     string
-	Model    string
+	ID    string
+	Name  string
+	Type  Type
+	Task  string
+	Model string
+	// ModelWhy — почему выбрана эта модель (маршрутизация по роли или
+	// бюджету). Показывается в /agents: невидимое решение по деньгам
+	// выглядит как ошибка.
+	ModelWhy string
 	Status   Status
 	Depth    int
 	Started  time.Time
@@ -99,10 +103,13 @@ func (r *Run) Label() string {
 
 // Spec — описание задачи для субагента.
 type Spec struct {
-	Type     Type
-	Task     string
-	Name     string
-	Model    string
+	Type  Type
+	Task  string
+	Name  string
+	Model string
+	// ModelWhy — объяснение выбора модели (маршрутизация по роли/бюджету).
+	// Заполняет вызывающий: пул выбора не делает.
+	ModelWhy string
 	ReadOnly bool
 	Depth    int
 	Summary  string
@@ -276,14 +283,15 @@ func (p *Pool) Spawn(ctx context.Context, spec Spec) (out Outcome, err error) {
 		name = p.autoName(spec.Type)
 	}
 	run := &Run{
-		ID:      core.RandID(6),
-		Name:    name,
-		Type:    spec.Type,
-		Task:    spec.Task,
-		Model:   spec.Model,
-		Status:  StatusRunning,
-		Depth:   spec.Depth,
-		Started: time.Now(),
+		ID:       core.RandID(6),
+		Name:     name,
+		Type:     spec.Type,
+		Task:     spec.Task,
+		Model:    spec.Model,
+		ModelWhy: spec.ModelWhy,
+		Status:   StatusRunning,
+		Depth:    spec.Depth,
+		Started:  time.Now(),
 	}
 	runID = run.ID
 	srcName = name
@@ -349,6 +357,7 @@ func (p *Pool) reuse(spec Spec, out Outcome, kind Reuse, from string, at time.Ti
 		Type:       spec.Type,
 		Task:       spec.Task,
 		Model:      spec.Model,
+		ModelWhy:   spec.ModelWhy,
 		Status:     StatusDone,
 		Depth:      spec.Depth,
 		Started:    at,
@@ -549,6 +558,14 @@ func (p *Pool) Details(name string) string {
 			r.Reuse, r.ReusedFrom)
 	}
 	fmt.Fprintf(&b, "Токены: ↑%s ↓%s\n", core.Kfmt(r.Usage.PromptTokens), core.Kfmt(r.Usage.CompletionTokens))
+	if r.Model != "" {
+		fmt.Fprintf(&b, "Модель: %s\n", r.Model)
+	}
+	// Почему именно эта модель. Без этой строки понижение выглядит как
+	// чужая ошибка, а решение маршрутизатора — настройкой пользователя.
+	if r.ModelWhy != "" {
+		fmt.Fprintf(&b, "Выбор модели: %s\n", r.ModelWhy)
+	}
 	fmt.Fprintf(&b, "Задача: %s\n", core.OneLine(r.Task))
 	if r.Err != "" {
 		fmt.Fprintf(&b, "Ошибка: %s\n", r.Err)

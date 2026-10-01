@@ -274,6 +274,42 @@ func TestPoolSummaryAndDetails(t *testing.T) {
 	}
 }
 
+// TestPoolDetailsExplainsDowngradedModel — выбор модели виден в /agents.
+//
+// Понижение маршрутизацией без объяснения читается как чужая ошибка,
+// а это настройка самого пользователя: без этой строки он не сможет ни
+// отключить её, ни понять, почему счёт стал меньше.
+func TestPoolDetailsExplainsDowngradedModel(t *testing.T) {
+	p := NewPool(okRunner, PoolOptions{Enabled: true, MaxDepth: 1})
+	_, _ = p.Spawn(context.Background(), Spec{
+		Type:     TypeExplorer,
+		Task:     "составь карту кода",
+		Name:     "карта",
+		Model:    "claude-3-5-haiku",
+		ModelWhy: "роль «explorer» простая, модель claude-opus-4 дороже",
+		Depth:    1,
+	})
+	det := p.Details("карта")
+	if !strings.Contains(det, "claude-3-5-haiku") {
+		t.Errorf("выбранная модель не показана:\n%s", det)
+	}
+	if !strings.Contains(det, "простая") {
+		t.Errorf("причина выбора не показана:\n%s", det)
+	}
+}
+
+// TestPoolDetailsSilentWithoutRouting — запуск без маршрутизации не получает
+// лишних строк: иначе детали каждого субагента обрастают пустым шумом.
+func TestPoolDetailsSilentWithoutRouting(t *testing.T) {
+	p := NewPool(okRunner, PoolOptions{Enabled: true, MaxDepth: 1})
+	_, _ = p.Spawn(context.Background(), Spec{
+		Type: TypeExplorer, Task: "задача", Name: "и1", Depth: 1,
+	})
+	if det := p.Details("и1"); strings.Contains(det, "Выбор модели") {
+		t.Errorf("без маршрутизации напечатано объяснение:\n%s", det)
+	}
+}
+
 func TestPoolTable(t *testing.T) {
 	p := NewPool(okRunner, PoolOptions{Enabled: true, MaxDepth: 1})
 	_, _ = p.Spawn(context.Background(), Spec{Type: TypeExplorer, Task: "задача", Depth: 1})
