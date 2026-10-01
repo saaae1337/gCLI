@@ -539,6 +539,8 @@ func (a *app) cmdMission(rest string) {
 		a.missionStop()
 	case rest == "save":
 		a.missionSave()
+	case rest == "report":
+		a.missionReport()
 	case rest == "help" || rest == "?":
 		a.missionHelp()
 	default:
@@ -557,6 +559,7 @@ func (a *app) missionHelp() {
 	a.ui.Println("    /mission status                                 где сейчас прогон")
 	a.ui.Println("    /mission stop                                   остановить")
 	a.ui.Println("    /mission save                                   сохранить состояние")
+	a.ui.Println("    /mission report                                 отчёт по прогону из журнала (markdown)")
 	a.ui.Println("")
 	a.ui.Println("  Режимы: " + missionModesHelp())
 	a.ui.Println("  Срок: 4h, 90m, 120. Бюджет: 500k (токены), 25 (доллары), 500k,25 (оба).")

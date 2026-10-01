@@ -71,6 +71,11 @@ func (a *app) extendLimits() (base, abs, maxExtends, step int) {
 // обрыву работы: «сколько ещё можно» и «продлевал ли уже агент ход».
 // Показываем и лимиты из конфига, и живое состояние текущего хода —
 // расходятся они только во время хода, и именно тогда разница и важна.
+//
+// Когда запущен автономный прогон, рядом показываем и его расход: у
+// прогона свои потолки (время, токены, деньги), и лимит хода про них
+// ничего не знает. Раньше /iters молчал о прогоне — на многочасовом
+// запуске человек смотрел не туда.
 func (a *app) cmdIters() {
 	base, abs, maxExtends, step := a.extendLimits()
 	a.ui.Println("")
@@ -80,6 +85,8 @@ func (a *app) cmdIters() {
 			strconv.Itoa(maxExtends) + " раз за ход"},
 		{"Потолок", strconv.Itoa(abs) + " итераций (с учётом продлений)"},
 	})
+
+	a.printMissionIters()
 
 	ag := a.currentAgent()
 	if ag == nil || ag.ExtendState() == nil {
@@ -101,4 +108,73 @@ func (a *app) cmdIters() {
 		}
 	}
 	a.ui.Println("")
+}
+
+// printMissionIters — блок прогона в /iters: расход потолков миссии.
+//
+// Отдельная функция, потому что расчёты здесь не про ход: ход —
+// это итерации от extendLimits, прогон — время/токены/деньги из
+// трекера миссии. Смешивать их в одной выдаче значит снова
+// получить «смотрю не туда».
+func (a *app) printMissionIters() {
+	tr := a.missionTr
+	if tr == nil {
+		return
+	}
+	m := tr.Mission()
+
+	a.ui.Println("")
+	a.ui.Println(a.ui.Bold("Автономный прогон:"))
+	rows := [][2]string{}
+	if m.Mode != "" && m.Mode != core.MissionNormal {
+		rows = append(rows, [2]string{"Режим", string(m.Mode)})
+	}
+	if m.Deadline > 0 {
+		spent := core.FormatDur(tr.Elapsed())
+		if left := tr.Left(); left < 0 {
+			rows = append(rows, [2]string{"Время",
+				spent + " · просрочено на " + core.FormatDur(-left)})
+		} else {
+			rows = append(rows, [2]string{"Время",
+				spent + " · осталось " + core.FormatDur(left)})
+		}
+	} else {
+		rows = append(rows, [2]string{"Время", core.FormatDur(tr.Elapsed())})
+	}
+	if m.MaxIters > 0 {
+		rows = append(rows, [2]string{"Итерации",
+			strconv.Itoa(tr.Iters()) + " из " + strconv.Itoa(m.MaxIters)})
+	} else {
+		rows = append(rows, [2]string{"Итерации", strconv.Itoa(tr.Iters())})
+	}
+	rows = append(rows, [2]string{"Вызовы инструментов", strconv.Itoa(tr.ToolCalls())})
+	if m.TokenBudget > 0 {
+		rows = append(rows, [2]string{"Токены",
+			core.CompactNum(tr.Spent()) + " из " + core.CompactNum(m.TokenBudget)})
+	} else {
+		rows = append(rows, [2]string{"Токены", core.CompactNum(tr.Spent())})
+	}
+	if cost := tr.Cost(a.prov.ID, a.model); cost > 0 || m.CostBudget > 0 {
+		c := "$" + strconv.FormatFloat(cost, 'f', 2, 64)
+		if m.CostBudget > 0 {
+			c += " из $" + strconv.FormatFloat(m.CostBudget, 'f', 2, 64)
+		}
+		rows = append(rows, [2]string{"Стоимость", c})
+	}
+	if cp := tr.Checkpoints(); cp > 0 {
+		rows = append(rows, [2]string{"Чекпоинты", strconv.Itoa(cp)})
+	}
+	if cont := tr.Continues(); cont > 0 {
+		rows = append(rows, [2]string{"Продолжений после «готово»", strconv.Itoa(cont)})
+	}
+	if done := tr.Stopped(); done != "" {
+		rows = append(rows, [2]string{"Статус",
+			"остановлен: " + core.StopReasonLabel(done)})
+	} else {
+		rows = append(rows, [2]string{"Статус", tr.Status()})
+	}
+	a.ui.KVPairs(rows)
+	if obj := core.OneLine(m.Objective); obj != "" {
+		a.ui.Println(a.ui.Gray("  цель: " + core.Truncate(obj, 120)))
+	}
 }
