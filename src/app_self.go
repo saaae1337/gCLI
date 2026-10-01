@@ -53,6 +53,15 @@ func (a *app) selfReport() tools.SelfReport {
 	rep.Notes = a.notesCopy()
 	rep.ReadFiles = a.tools.CountRead()
 
+	// Прогон под a.mu не держим: он меняется на каждой итерации, а
+	// self_status зовут из инструмента, то есть изнутри хода агента.
+	// Строка собирается под тем же локом, что и счётчики трекера.
+	if tr := a.missionTr; tr != nil {
+		a.mu.Lock()
+		rep.Mission = tr.SelfLine()
+		a.mu.Unlock()
+	}
+
 	if a.pool != nil {
 		rep.Agents = a.pool.Summary()
 	}

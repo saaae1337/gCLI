@@ -56,6 +56,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdYolo()
 	case "/autopilot":
 		a.cmdAutopilot(rest)
+	case "/mission":
+		a.cmdMission(rest)
 	case "/todos":
 		a.ui.RenderTodos(a.sess.Todos)
 		a.ui.Println("")
@@ -143,7 +145,7 @@ func (a *app) cmdHelp() {
 			{"/skills, /skill", "навыки; new, on|off, показать"},
 			{"/ext", "расширения; new, trust, reload"},
 			{"/mcp", "MCP-серверы; trust, reload, new, path"},
-			{"/init", "создать GCLI.md — память проекта"},
+			{"/init", "разобрать проект: GCLI.md + gcli.json; show, force"},
 			{"/memory", "файлы памяти проекта"},
 		}},
 		{"Сессия", [][2]string{
@@ -622,16 +624,247 @@ func (a *app) cmdUsage() {
 	a.ui.Println("")
 }
 
+// showPermissionRules — вывести правила разрешений в порядке применения.
+//
+// Порядок в списке значим: последнее совпавшее правило решает, поэтому
+// список показан именно в том порядке, в котором правила применяются.
+// Иначе человек читал бы правила и не мог предсказать итог.
+func (a *app) showPermissionRules() {
+	if a.rules.Len() == 0 {
+		a.ui.Println("")
+		a.ui.Println("  " + a.ui.Gray("правил в конфигах нет — всё спрашивается"))
+		a.ui.Println("  " + a.ui.Gray("завести правила: /permissions init"))
+		return
+	}
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Gray("правила разрешений (последнее совпавшее выигрывает):"))
+	for _, r := range a.rules.Items() {
+		mode := string(r.Mode)
+		switch r.Mode {
+		case core.PermDeny:
+			mode = a.ui.Red(mode)
+		case core.PermAllow:
+			mode = a.ui.Green(mode)
+		}
+		src := ""
+		if r.Source != "" {
+			src = a.ui.Gray("  (" + r.Source + ")")
+		}
+		a.ui.Println("    " + r.String() + "  → " + mode + src)
+	}
+}
+
+// permsSub — подкоманды /permissions: init | rules | where | test.
+//
+// arg — подкоманда в нижнем регистре, rest — аргументы после неё.
+// Разделение нужно для test: имя команды и путь приходят как есть, и
+// приводить их к нижнему регистру нельзя.
+func (a *app) permsSub(arg, rest string) {
+	switch arg {
+	case "init":
+		a.permsInit()
+	case "rules", "правила":
+		a.showPermissionRules()
+	case "where", "где":
+		a.ui.Println("")
+		for _, p := range core.PermissionSources(a.workDir) {
+			a.ui.Println("  " + a.ui.Gray("· "+core.RelToWD(a.workDir, p)))
+		}
+	case "test", "проверить":
+		a.permsTest(rest)
+	default:
+		a.ui.Warn("не понял: " + arg + " — /permissions init | rules | where | test | reset")
+	}
+}
+
+// splitFirstWord — первое слово в нижнем регистре и остаток строки.
+//
+// Возвращает пустое слово, если строки нет: у вызывающего «нет подкоманды»
+// и «подкоманда с аргументами» должны быть разными случаями.
+func splitFirstWord(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", ""
+	}
+	// Первый разрез по пробелу, дальше строка идёт как есть.
+	if i := strings.IndexAny(s, " \t"); i >= 0 {
+		return strings.ToLower(s[:i]), strings.TrimSpace(s[i:])
+	}
+	return strings.ToLower(s), ""
+}
+
+// permsTest — спросить у движка, что он решит по конкретному действию.
+//
+// /permissions test bash "git status"
+//
+// Команда отвечает на главный вопрос человека: «почему моё правило не
+// сработало?». Проверять это вслепую невозможно — цепочка от правила до
+// подтверждения проходит через сопоставление имени инструмента, шаблона и
+// приведение пути к относительному виду, и ошибка в любом из трёх мест
+// выглядит одинаково: действие просто спросит вместо запрета.
+func (a *app) permsTest(rest string) {
+	parts := splitArgs(rest)
+	if len(parts) == 0 {
+		a.ui.Println("")
+		a.ui.Warn("нужен инструмент и аргумент: /permissions test bash \"git status\"")
+		return
+	}
+	name := parts[0]
+	subject := strings.Join(parts[1:], " ")
+	if name == "exec" || name == "write" || name == "net" {
+		// Род операции: /permissions test write src/main.go
+		group := core.ToolsForPermission(name)
+		d, hit, ok := a.rules.DecideAny(group, subject)
+		a.showPermDecision(name, subject, d, hit, ok)
+		return
+	}
+	// Конкретный инструмент: /permissions test edit_file src/main.go
+	if subject == "" {
+		d, hit, ok := a.rules.Match(name, "")
+		a.showPermDecision(name, "", d, hit, ok)
+		return
+	}
+	if isPathLike(name) && filepath.IsAbs(subject) {
+		subject = core.PatternForPath(a.workDir, subject)
+	}
+	// Решение принимает группа инструментов, а не одно имя, поэтому и
+	// проверка должна идти по группе — иначе /permissions test врал бы
+	// на правиле "edit(src/**)".
+	if g, ok := core.GroupForTool(name); ok {
+		d, hit, ok := a.rules.DecideAny(g, subject)
+		a.showPermDecision(name, subject, d, hit, ok)
+		return
+	}
+	d, hit, ok := a.rules.Match(name, subject)
+	a.showPermDecision(name, subject, d, hit, ok)
+}
+
+// showPermDecision — напечатать решение движка и объяснить, чем оно вызвано.
+func (a *app) showPermDecision(name, subject string, d core.Permission, hit core.Rule, ok bool) {
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Bold(name) + " " + a.ui.Gray(subject))
+	switch {
+	case !ok:
+		a.ui.Println("  " + a.ui.Gray("решение: спросить пользователя — правил нет"))
+		a.ui.Hint("завести правило: /permissions init")
+	case hit.Tool == "":
+		// Решение из блока mode: правила, которое совпало, не существует,
+		// и показывать нечего — показываем сам дефолт.
+		a.ui.Println("  " + a.ui.Gray("решение: "+string(d)+" — из блока \"mode\" конфига"))
+	default:
+		verb := map[core.Permission]string{
+			core.PermAllow: "разрешить",
+			core.PermAsk:   "спросить",
+			core.PermDeny:  "запретить",
+		}[d]
+		line := "  решение: " + verb
+		if src := hit.Label(); src != "" {
+			line += "  " + a.ui.Gray("по правилу "+hit.String())
+		}
+		a.ui.Println(line)
+		if hit.Source != "" {
+			a.ui.Hint("откуда: " + hit.Source)
+		}
+	}
+}
+
+// splitArgs — разбить аргумент команды на слова с учётом кавычек.
+//
+// Без кавычек не разобрать "/permissions test bash "git status --short"" —
+// а именно такую команду человек и напишет: путь с пробелом или строка
+// команды целиком.
+func splitArgs(s string) []string {
+	var (
+		out   []string
+		cur   strings.Builder
+		quote byte
+		open  bool
+	)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				continue
+			}
+			cur.WriteByte(c)
+		case c == '"' || c == '\'':
+			quote, open = c, true
+		case c == ' ' || c == '\t':
+			if cur.Len() > 0 || open {
+				out = append(out, cur.String())
+				cur.Reset()
+				open = false
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if cur.Len() > 0 || open {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// isPathLike — похож ли инструмент на операцию с файлом.
+//
+// Имя файла и путь — единственное, что приходит в правило записи вместо
+// команды, поэтому для них путь приводится к виду от проекта. Отличать надо
+// именно по этому признаку, а не по наличию «write» в имени: правило
+// "write_file(src/**)" само по себе шаблон уже содержит путь.
+func isPathLike(tool string) bool {
+	switch tool {
+	case "edit", "edit_file", "write_file", "multi_edit", "apply_patch", "patch":
+		return true
+	}
+	return false
+}
+
+// permsInit — создать gcli.json с заготовкой правил, если его нет.
+//
+// Существующий файл не трогаем: правила проекта написаны руками, и
+// перезаписать их заготовкой — значит потерять работу человека без
+// предупреждения. Лучше сказать, что файл уже есть, и показать путь.
+func (a *app) permsInit() {
+	path := filepath.Join(a.workDir, "gcli.json")
+	if _, err := os.Stat(path); err == nil {
+		a.ui.Ok("gcli.json уже есть: " + core.RelToWD(a.workDir, path))
+		a.ui.Hint("правь руками: последнее совпавшее правило выигрывает")
+		return
+	}
+	if err := os.WriteFile(path, []byte(core.ProjectConfigTemplate), 0o600); err != nil {
+		a.ui.Warn("не создал gcli.json: " + err.Error())
+		return
+	}
+	a.rules = a.setupRules()
+	a.ui.Ok("создал gcli.json с заготовкой правил: " + core.RelToWD(a.workDir, path))
+	a.ui.Hint("правила применятся в следующем запуске — сейчас перезапусти gcli")
+}
+
+// cmdPerms — /permissions [init|rules|where|test|reset] [аргументы].
+//
+// Подкоманда — только первое слово. Раньше она бралась из всей строки
+// целиком, поэтому "/permissions test bash git status" уходил в ветку
+// «не понял», а "/permissions init" и "where" случайно работали — просто
+// потому, что состоят из одного слова.
 func (a *app) cmdPerms(rest string) {
+	arg, tail := splitFirstWord(rest)
+	if arg != "" && arg != "reset" {
+		a.permsSub(arg, tail)
+		return
+	}
 	a.ui.Println("")
 	a.ui.KVPairs([][2]string{
 		{"автопилот", autopilotStatus(a)},
 		{"песочница файлов", sandboxStatus(a.sandbox)},
+		{"правила из конфигов", strconv.Itoa(a.rules.Len())},
 		{"запись файлов без подтверждения", yesNo(a.sess.Perms.FileWrite)},
 		{"любые bash-команды без подтверждения", yesNo(a.sess.Perms.BashAll)},
 		{"сетевые запросы без подтверждения", yesNo(a.sess.Perms.WebFetch)},
 		{"разрешённых команд", strconv.Itoa(len(a.sess.Perms.BashExact))},
 	})
+	a.showPermissionRules()
 	if len(a.sess.Perms.BashExact) > 0 {
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Gray("разрешённые команды:"))
@@ -719,39 +952,47 @@ func sandboxStatus(sb *tools.Sandbox) string {
 	return "включена: " + core.Truncate(strings.Join(sb.Roots(), ", "), 60)
 }
 
+// showSandbox — напечатать состояние песочницы (/sandbox без аргументов).
+func (a *app) showSandbox() {
+	if !a.sandbox.Enabled() {
+		a.ui.Println("песочница выключена — инструменты видят всю файловую систему")
+		return
+	}
+	a.ui.Ok("песочница включена: пути ограничены рабочим каталогом, секреты закрыты")
+	for _, p := range a.sandbox.Roots() {
+		a.ui.Println("    " + a.ui.Gray("· "+p))
+	}
+}
+
 // cmdSandbox — переключить песочницу файловой системы: on | off | status.
 //
 // Переключение пересобирает реестр инструментов: песочница живёт в Env, а не
 // внутри инструментов, поэтому без пересборки команда «включила» бы
 // песочницу, а инструменты продолжили бы работать по-старому.
 func (a *app) cmdSandbox(rest string) {
-	mode := strings.ToLower(strings.TrimSpace(rest))
-	if mode == "" {
-		mode = "status"
-	}
-	switch mode {
-	case "status", "показать":
-		if a.sandbox.Enabled() {
-			a.ui.Ok("песочница включена: пути ограничены рабочим каталогом, секреты закрыты")
-			for _, p := range a.sandbox.Roots() {
-				a.ui.Println("    " + a.ui.Gray("· "+p))
-			}
-		} else {
-			a.ui.Println("песочница выключена — инструменты видят всю файловую систему")
-		}
+	arg := strings.ToLower(strings.TrimSpace(rest))
+	if arg == "status" || arg == "показать" {
+		a.showSandbox()
 		return
-	case "off", "0", "false", "выкл", "отключить":
+	}
+	mode, ok := core.ParseSandboxMode(arg)
+	if !ok {
+		a.ui.Warn("не понял: " + rest + " — /sandbox on | off | status")
+		return
+	}
+	if mode == core.SandboxUnset {
+		a.showSandbox()
+		return
+	}
+	if mode == core.SandboxOff {
 		a.sandbox = nil
-		a.repo.Cfg.Sandbox = false
-	case "on", "1", "true", "вкл", "включить":
+		a.repo.Cfg.Sandbox = core.SandboxOff
+	} else {
 		a.sandbox = tools.NewSandbox(a.workDir).WithDeny(tools.DefaultDeny()...)
 		if home := a.store.Root; home != "" {
 			a.sandbox.WithDeny(home)
 		}
-		a.repo.Cfg.Sandbox = true
-	default:
-		a.ui.Warn("не понял: " + rest + " — /sandbox on | off | status")
-		return
+		a.repo.Cfg.Sandbox = core.SandboxOn
 	}
 	a.saveConfig()
 	a.buildTools()
@@ -888,18 +1129,133 @@ func (a *app) cmdCopy() {
 	a.ui.Ok("последний ответ скопирован (OSC52)")
 }
 
+// cmdInit — разобраться в проекте и записать это в GCLI.md и gcli.json.
+//
+// Команда делает две вещи, и обе нужны сразу: пишет память проекта для
+// агента и заводит правила разрешений под этот стек. Только память —
+// половина работы (агент всё равно будет спрашивать разрешение на каждый
+// запуск go test); только правила — тоже половина (агент не знает, где
+// корень и чем собирать).
+//
+// Существующие файлы не трогаются без force: человек писал их руками,
+// и перезапись заготовкой — потеря работы без предупреждения.
 func (a *app) cmdInit(arg string) {
-	p := filepath.Join(a.workDir, "GCLI.md")
-	if _, err := os.Stat(p); err == nil && !strings.Contains(strings.ToLower(arg), "force") {
-		a.ui.Warn("GCLI.md уже существует — перезаписать: /init force")
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	// show — ничего не пишет: показать, что /init узнал о проекте. Нужно
+	// перед решением «перезаписывать ли», иначе человек сравнивает
+	// содержимое своего файла с пустым воображением о том, что сгенерирует
+	// агент.
+	if arg == "show" || strings.Contains(arg, "показать") {
+		a.initShow()
 		return
 	}
-	if err := os.WriteFile(p, []byte(tools.MemoryTemplate()), 0o644); err != nil {
-		a.ui.Err("не удалось создать: " + err.Error())
+	force := strings.Contains(arg, "force") || strings.Contains(arg, "заново")
+	prof := a.tools.InitProfileFor()
+
+	md := filepath.Join(a.workDir, "GCLI.md")
+	_, mdErr := os.Stat(md)
+	cfg := filepath.Join(a.workDir, "gcli.json")
+	_, cfgErr := os.Stat(cfg)
+
+	// Файлы создаются независимо друг от друга. Раньше здесь стоял
+	// безусловный выход, если есть GCLI.md: человек, у которого уже была
+	// память проекта, не мог получить правила вообще — пришлось бы
+	// звать /init force и рисковать перезаписью своего файла.
+	if mdErr == nil && cfgErr == nil && !force {
+		a.ui.Warn("GCLI.md и gcli.json уже есть — перезаписать оба: /init force")
+		a.ui.Hint("посмотреть, что найдено о проекте, ничего не записывая: /init show")
 		return
 	}
-	a.ui.Ok("создан " + p)
-	a.ui.Hint("заполни разделы — содержимое подмешивается в промпт каждой модели")
+
+	if mdErr != nil || force {
+		if err := os.WriteFile(md, []byte(tools.MemoryDoc(prof)), 0o644); err != nil {
+			a.ui.Err("не удалось создать GCLI.md: " + err.Error())
+			return
+		}
+		a.ui.Ok("создан GCLI.md — память проекта для агента")
+	}
+	if cfgErr != nil || force {
+		rules := core.ProjectConfigDoc(tools.PermissionRules(prof))
+		if err := os.WriteFile(cfg, []byte(rules), 0o600); err != nil {
+			a.ui.Warn("GCLI.md создан, но gcli.json не записался: " + err.Error())
+		} else {
+			a.ui.Ok("создан gcli.json — правила разрешений под этот проект")
+			a.rules = a.setupRules()
+		}
+	}
+
+	a.initReport(prof)
+}
+
+// initShow — что /init узнал бы о проекте, ничего не записывая.
+func (a *app) initShow() {
+	prof := a.tools.InitProfileFor()
+	a.initReport(prof)
+
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Head("Команды, которые станут разрешены"))
+	rules := tools.PermissionRules(prof)
+	allowed := 0
+	for _, r := range rules {
+		if strings.Contains(r, ": allow") {
+			a.ui.Println("    " + a.ui.Green("· "+r))
+			allowed++
+		}
+	}
+	// Базовые правила (чтение, grep, edit) есть всегда, поэтому «список
+	// не пуст» ещё не значит, что проект понят. Без этой оговорки
+	// человек увидит четыре правила и решит, что /init разобрался.
+	if prof.Stack() == "" {
+		a.ui.Println("    " + a.ui.Yellow("стек не найден — выше только базовые правила"))
+	}
+	if allowed == 0 {
+		a.ui.Println("    " + a.ui.Gray("разрешать нечего"))
+	}
+
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Head("Останется вопросом"))
+	for _, r := range rules {
+		if strings.Contains(r, ": ask") {
+			a.ui.Println("    " + a.ui.Yellow("· "+r))
+		}
+	}
+
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Head("Будет запрещено"))
+	for _, r := range rules {
+		if strings.Contains(r, ": deny") {
+			a.ui.Println("    " + a.ui.Red("· "+r))
+		}
+	}
+}
+
+// initReport — что машина узнала о проекте.
+//
+// Показывается всегда, даже когда файлы созданы: человек должен видеть,
+// откуда взялись строки в GCLI.md, иначе он будет считать их выдуманными
+// и править не то.
+func (a *app) initReport(p tools.InitProfile) {
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Head("О проекте"))
+	a.ui.KVPairs([][2]string{
+		{"корень", orDash(p.RootRel())},
+		{"стек", orDash(p.Stack())},
+		{"точек входа", orDash(strconv.Itoa(len(p.EntryPoints)))},
+		{"команд сборки", orDash(strconv.Itoa(len(p.Build)))},
+		{"команд тестов", orDash(strconv.Itoa(len(p.Test)))},
+	})
+	if len(p.Test) > 0 {
+		a.ui.Hint("правило allow на проверку: /permissions test bash \"" + p.Test[0] + "\"")
+	}
+	a.ui.Hint("заполни строки вида <…> в GCLI.md — остальное агент уже знает")
+}
+
+// orDash — значение или прочерк, чтобы в таблице не было пустот.
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return s
 }
 
 func (a *app) cmdMemory() {

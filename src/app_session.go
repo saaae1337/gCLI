@@ -63,8 +63,43 @@ func (a *app) Turns() int { return a.sess.Turns }
 
 // ---------- Подтверждения ----------
 
+// permDecision — что говорят правила разрешений об этом действии.
+//
+// Порядок именно такой: правило решает раньше, чем флаги сессии. Иначе
+// «разрешил всё для файлов» перекрыло бы deny из gcli.json проекта —
+// то есть неявное «да» из прошлого разговора отменило бы явное «нет»
+// из файла, который человек отредактировал сам. Здесь наоборот: флаги
+// сессии помогают, когда правил нет вовсе.
+func (a *app) permDecision(req tools.ConfirmReq) (core.Permission, core.Rule, bool) {
+	group := core.ToolsForPermission(string(req.Kind))
+	subject := req.Detail
+	if req.Kind == tools.ConfirmWrite && req.Path != "" {
+		subject = core.PatternForPath(a.workDir, req.Path)
+	}
+	// Решение по группе целиком: внутри неё действует «последнее совпавшее
+	// правило выигрывает», а правила без имени инструмента проверяются
+	// только в самом конце — см. core.Rules.DecideAny.
+	return a.rules.DecideAny(group, subject)
+}
+
 // confirm — единая точка подтверждений пользователя.
 func (a *app) confirm(req tools.ConfirmReq) bool {
+	// Правила конфигов — выше всего остального, включая автопилот.
+	// Автопилот ведь тоже про разрешение «на этот раз», и он не должен
+	// перебивать явный запрет из файла.
+	if mode, rule, ok := a.permDecision(req); ok {
+		switch mode {
+		case core.PermDeny:
+			a.announceDeny(req, rule)
+			return false
+		case core.PermAllow:
+			if a.sess.Perms.AutopilotAll {
+				return true
+			}
+			return true
+		}
+	}
+
 	// В машинном режиме подтверждаем только явно безопасные операции.
 	if a.quiet {
 		return a.quietConfirm(req)
@@ -148,6 +183,29 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		return false
 	}
 	return true
+}
+
+// announceDeny — показать, что действие запрещено правилом.
+//
+// Молчаливый отказ выглядит как зависший агент: он позвал инструмент,
+// получил пустоту и пробует снова. Причина обязана быть видна, и
+// обязана быть видна ДО вопроса — иначе человек нажмёт «да» на то, что
+// запрещено, и будет искать ошибку в другом месте.
+func (a *app) announceDeny(req tools.ConfirmReq, rule core.Rule) {
+	if a.quiet {
+		return
+	}
+	a.ui.Println("")
+	switch req.Kind {
+	case tools.ConfirmExec:
+		a.ui.Println("  " + a.ui.Yellow("$ ") + req.Detail)
+	case tools.ConfirmWrite:
+		a.ui.Println("  " + a.ui.Yellow("✎ ") + core.RelToWD(a.workDir, req.Path))
+	case tools.ConfirmNet:
+		a.ui.Println("  " + a.ui.Blue("⇩ ") + core.Truncate(req.Detail, 80))
+	}
+	a.ui.Warn("запрещено правилом: " + rule.Label())
+	a.ui.Hint("изменить правило: " + rule.Tool + "(" + rule.Pattern + ") в gcli.json или ~/.gcli/config.json")
 }
 
 // autoApprove — можно ли одобрить операцию без участия пользователя.

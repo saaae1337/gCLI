@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,45 @@ type app struct {
 	// чтобы агент видел свой настоящий системный промпт, а не базовый.
 	lastAgent *agent.Agent
 
+	// mission — задание автономного прогона и его трекер. Живут на app,
+	// а не внутри агента: mission.json переживает перезапуск, а агент
+	// создаётся на каждый ход заново.
+	mission     core.Mission
+	missionTr   *core.Tracker
+	missionNote string
+	// missionJournal — append-only журнал прогона. Отдельный файл от
+	// mission_state.json по той же причине, что и там: снимок перезаписывается
+	// и при падении на записи теряется, а журнал дописывается и битый хвост
+	// просто отбрасывается при чтении.
+	missionJournal *core.Journal
+	// missionResume — снимок прошлого прогона, подхваченный при старте.
+	// Показывается в статусе и уходит в историю первого хода: модель
+	// должна начать продолжение не с нуля.
+	missionResume string
+	// missionResumeState — тот же снимок целиком, со счётчиками. Строка
+	// идёт в историю модели, а числа — в трекер: одно без другого
+	// половина работы, потому что модель продолжает «с прошлого места»,
+	// а бюджет при этом начинается с полного.
+	missionResumeState *core.MissionState
+	// missionResumedOnce — приглашение к продолжению уже ушло в историю
+	// модели в этом сеансе. Именно модельную обязанность, а не запись в
+	// журнал: она должна уйти ровно один раз, даже если журнал не
+	// открылся (диск занят) — иначе история засорялась бы одинаковыми
+	// «продолжаем с прошлого места» на каждом ходе.
+	missionResumedOnce bool
+	// missionResumeJournalled — запись «resume» уже попала в журнал.
+	//
+	// Отдельный флаг, потому что у него другое последствие сбоя: запись в
+	// журнале не удалась → её надо повторить, а не считать сделанной.
+	// Одним флагом на обе обязанности подхват либо терялся навсегда, либо
+	// повторялся дважды.
+	missionResumeJournalled bool
+	// missionJournalEnd — в журнал уже записана окончательная запись
+	// прогона (stop или close). Без этого флага выход из сеанса дописал
+	// бы вторую копию одной и той же остановки: журнал append-only, и
+	// два одинаковых «остановлен» читались бы как две разные причины.
+	missionJournalEnd bool
+
 	// setupNotes — замечания при старте, показываются под баннером одной
 	// группой. Снимок startupNotes на момент последней сборки реестра.
 	setupNotes []string
@@ -90,11 +130,18 @@ type app struct {
 	// «Песочница: пути ограничены…».
 	startupNotes []string
 
+	// rules — правила разрешений, собранные из слоёв конфигов
+	// (core.LayeredRules). Хранятся готовыми, потому что собираются
+	// один раз при старте: правило, которое перечиталось бы на каждом
+	// подтверждении, могло бы измениться посреди хода, и агент получил бы
+	// разные ответы на одинаковые вопросы.
+	rules core.Rules
+
 	// sandbox — граница файловой системы для инструментов. По умолчанию
-	// выключена: пользователь обычно работает в своём проекте и лишний
-	// вопрос «а можно ли выйти из каталога?» только мешает. Но в чужом
-	// репозитории (клон, распакованный архив) песочница — единственное,
-	// что не даст агенту унести ключи из ~/.gcli.
+	// включена: она защищает от чтения ~/.gcli с ключами и ~/.ssh, а ломает
+	// работу только там, где агент ходит за пределы проекта по делу, и это
+	// лечится одной командой /sandbox off. setupSandbox решает по флагу,
+	// переменной окружения и конфигу, а здесь уже только факт.
 	sandbox *tools.Sandbox
 
 	// Размышления модели. По умолчанию они НЕ печатаются: в ходе работы
@@ -164,6 +211,10 @@ func main() {
 		flagUnicode      = flag.Bool("ascii", false, "только ASCII-псевдографика")
 		flagCompact      = flag.Bool("compact", false, "компактный вывод")
 		flagSubagent     = flag.String("subagent", "", "разрешить субагентов: on | off")
+		flagMission      = flag.String("mission", "", "автономный прогон: long-time | extra-long-time | overnight (или путь к mission.json)")
+		flagDeadline     = flag.String("deadline", "", "срок прогона: 4h, 90m или число минут")
+		flagBudget       = flag.String("budget", "", "бюджет прогона: токены, деньги или оба через запятую (500000 или 500000,25)")
+		flagObjective    = flag.String("objective", "", "цель прогона одной строкой")
 	)
 	flag.Parse()
 
@@ -192,6 +243,7 @@ func main() {
 	// Песочница включается флагом или переменной окружения. Сначала
 	// собираем Env: без него buildTools не увидит песочницу.
 	a.sandbox = a.setupSandbox(*flagSandbox)
+	a.rules = a.setupRules()
 	if a.repo.Cfg.Compact || *flagCompact {
 		a.ui.SetCompact(true)
 	}
@@ -234,6 +286,22 @@ func main() {
 	a.sess.Model = a.model
 	defer a.saveSession()
 
+	// Задание автономного прогона: файл проекта, поверх — флаги.
+	// Читается после сессии: бюджет миссии меряется от расхода сессии,
+	// и трекеру нужен реальный провайдер с моделью для цены токенов.
+	if err := a.setupMission(*flagMission, *flagDeadline, *flagBudget, *flagObjective, ""); err != nil {
+		if !a.quiet {
+			a.ui.Err(err.Error())
+		}
+		os.Exit(1)
+	}
+	// Продолжение после обрыва проверяется ДО старта нового трекера: оно
+	// читает счётчики прошлого прогона, и новый трекер их бы затёр.
+	a.loadMissionResume()
+	if a.startTracker() {
+		a.missionNote = a.mission.Summary()
+	}
+
 	a.installSignalHandler()
 
 	// Ctrl+O читаем ровно один раз на весь сеанс (см. watchKeys): и во
@@ -248,7 +316,13 @@ func main() {
 		if *flagJSON {
 			a.ui.SetQuiet(true)
 		}
-		if err := a.turn(*flagPrompt); err != nil {
+		err := a.turn(*flagPrompt)
+		// Журнал закрывается в обоих случаях: и при ошибке, и при
+		// успешном возврате. Иначе прогон из -prompt оставлял бы журнал
+		// открытым навсегда, и следующий запуск предложил бы продолжить
+		// работу, которой уже никто не ждёт.
+		a.closeMissionJournal()
+		if err != nil {
 			if !a.quiet {
 				a.ui.Err(err.Error())
 			}
@@ -508,26 +582,81 @@ func (a *app) reportPendingCode() {
 		core.Truncate(strings.Join(names, ", "), 70), kind))
 }
 
+// sandboxMode — разобрать один источник режима песочницы.
+//
+// Опечатка (например -sandbox выклклено) не должна молча откатываться
+// на следующий источник: при GCLI_SANDBOX=off или sandbox=off в конфиге
+// защита выключилась бы именно там, где человек её явно просил не
+// трогать. Непонятное значение — это включённая песочница плюс
+// предупреждение, а не «продолжить искать дальше».
+func (a *app) sandboxMode(source, val string) core.SandboxMode {
+	mode, ok := core.ParseSandboxMode(val)
+	if ok {
+		return mode
+	}
+	if strings.TrimSpace(val) != "" {
+		a.startupNotes = append(a.startupNotes,
+			"Песочница: не понял "+source+"="+strconv.Quote(val)+" — ждал on или off, действует включённая")
+		return core.SandboxOn
+	}
+	return core.SandboxUnset
+}
+
+// setupRules — собрать правила разрешений из всех слоёв конфигов.
+//
+// Порядок слоёв и почему он такой — в core.LayeredRulesFrom. Здесь важно
+// другое: битый gcli.json не должен пройти молча. Если файл есть, но не
+// разбирается, агент продолжил бы работать по старым правилам, и человек
+// удивился бы, почему его deny не сработал. Поэтому ошибка попадает в
+// замечания при старте, а правила из этого файла не применяются вовсе.
+func (a *app) setupRules() core.Rules {
+	pc, path, err := core.LoadProjectConfig(a.workDir)
+	var notes []string
+	if err != nil {
+		notes = append(notes, "Правила разрешений: "+err.Error()+" — правила из этого файла не применены")
+		pc, path = nil, ""
+	}
+	rules, ruleErr := core.LayeredRulesFrom(&a.repo.Cfg, pc)
+	if ruleErr != nil {
+		notes = append(notes, "Правила разрешений: "+ruleErr.Error())
+	}
+	if n := rules.Len(); n > 0 {
+		src := "~/.gcli/config.json"
+		if path != "" {
+			src += " и " + core.RelToWD(a.workDir, path)
+		}
+		notes = append(notes, fmt.Sprintf("Правила разрешений: %d (%s)", n, src))
+	}
+	if !a.quiet {
+		a.startupNotes = append(a.startupNotes, notes...)
+	}
+	return rules
+}
+
 // setupSandbox — решить, включать ли песочницу, и собрать её.
 //
 // Три источника, по убыванию приоритета: флаг -sandbox, переменная
-// GCLI_SANDBOX, значение из конфига. Пока режим не задан явно, песочница
-// выключена: ломать привычное поведение без просьбы нельзя, а вот для
-// чужого репозитория её включают руками (-sandbox on) или переменной
-// окружения, чтобы не набирать флаг каждый раз.
+// GCLI_SANDBOX, значение из конфига.
+//
+// Дефолт — включено. Раньше здесь стоял «выключено, пока не попросят»:
+// это было сделано до того, как песочницу начали проверять в bash, и тогда
+// ограничение было лишь подсказкой. Теперь, когда защита настоящая, выключенная
+// по умолчанию песочница означала бы, что уязвимым является обычный запуск,
+// а защищённым — специальный. Пользователь выключает её руками (-sandbox off,
+// /sandbox off или конфиг), и это решение запоминается.
 func (a *app) setupSandbox(flagVal string) *tools.Sandbox {
-	mode := strings.ToLower(strings.TrimSpace(flagVal))
-	if mode == "" {
-		mode = strings.ToLower(strings.TrimSpace(os.Getenv("GCLI_SANDBOX")))
+	mode := a.sandboxMode("флаг -sandbox", flagVal)
+	if mode == core.SandboxUnset {
+		mode = a.sandboxMode("GCLI_SANDBOX", os.Getenv("GCLI_SANDBOX"))
 	}
-	if mode == "" {
-		if a.repo.Cfg.Sandbox {
-			mode = "on"
-		} else {
-			return nil
-		}
+	if mode == core.SandboxUnset {
+		mode = a.repo.Cfg.Sandbox
 	}
-	if mode == "off" || mode == "0" || mode == "false" || mode == "выкл" {
+	if mode == core.SandboxUnset {
+		// Не задано нигде — действует дефолт: песочница включена.
+		mode = core.SandboxOn
+	}
+	if mode == core.SandboxOff {
 		return nil
 	}
 
@@ -585,6 +714,10 @@ func (a *app) installSignalHandler() {
 				a.ui.Println("")
 				a.ui.Info("до связи!")
 			}
+			// Прогон мог остаться неоконченным, и журнал обязан это
+			// сказать: иначе следующий запуск увидит последний чекпоинт
+			// и предложит продолжение, хотя человек закрыл его сам.
+			a.closeMissionJournal()
 			a.saveSession()
 			os.Exit(130)
 		}
@@ -1106,6 +1239,11 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 	ag.Notes = a.notesText()
 	ag.OnNote = a.onNote
 	ag.OnExtend = a.onExtend
+	// Прогон живёт на агенте: без этого вызова mission.json остался бы
+	// просто файлом, а цикл вёл бы себя как обычный ход. attachMission
+	// вместо прямого StartMission — чтобы подхват после обрыва
+	// отметился в журнале и в истории ровно один раз за сеанс.
+	a.attachMission(ag)
 	a.mu.Lock()
 	a.lastAgent = ag
 	a.mu.Unlock()
@@ -1317,6 +1455,10 @@ func (a *app) repl() {
 			}
 			// MCP-серверы — дочерние процессы: гасим перед выходом.
 			a.tools.MCPShutdown()
+			// Журнал — после серверов и до saveSession: он дописывается
+			// на том же файловом дескрипторе, и закрывать его последним
+			// нельзя, иначе последняя запись не дойдёт до диска.
+			a.closeMissionJournal()
 			a.saveSession()
 			return
 		}
