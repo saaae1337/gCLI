@@ -140,6 +140,57 @@ type Agent struct {
 	ext *ExtendState
 	// loops — детектор петли текущего хода (для проверки прогресса).
 	loops *LoopDetector
+	// mission — движок автономного прогона (nil = обычный ход).
+	//
+	// Живёт на агенте, а не внутри Run, потому что прогон переживает
+	// вызовы Run: счётчик итераций накапливается между ходами, и
+	// следующий промпт должен продолжить ту же миссию, а не начать заново.
+	mission *missionEngine
+	// missionStop — просил ли человек остановить прогон (из /mission stop
+	// или по Escape в интерфейсе). Флаг, а не отмена трекера: остановка
+	// должна быть видна в статусе, а не исчезнуть по возвращении Run.
+	missionStop bool
+}
+
+// MissionTracker — трекер автономного прогона (nil, если прогона нет).
+//
+// Отдельный метод, а не поле: mission приватный, а /mission status и
+// self_status должны видеть трекер снаружи агента.
+func (a *Agent) MissionTracker() *core.Tracker {
+	if a == nil || a.mission == nil {
+		return nil
+	}
+	return a.mission.tracker()
+}
+
+// MissionActive — идёт ли автономный прогон.
+func (a *Agent) MissionActive() bool {
+	return a != nil && a.mission != nil
+}
+
+// StopMission — остановить автономный прогон по воле человека.
+//
+// Работает и между вызовами Run: агентный цикл проверяет флаг на
+// каждой итерации и уходит с понятным сообщением, а не с обрывом.
+func (a *Agent) StopMission() {
+	if a == nil || a.mission == nil {
+		return
+	}
+	a.missionStop = true
+	a.mission.stop(core.StopCancelled)
+}
+
+// StartMission — начать (или заменить) автономный прогон.
+//
+// deps с nil-трекером означает «прогона больше нет»: вызывается после
+// /mission stop, чтобы следующий ход шёл как обычный.
+func (a *Agent) StartMission(m core.Mission, deps MissionDeps) bool {
+	if a == nil {
+		return false
+	}
+	a.mission = startMission(m, deps)
+	a.missionStop = false
+	return a.mission != nil
 }
 
 // ExtendTurn — модель просит продолжить ход.
@@ -291,6 +342,11 @@ func (a *Agent) BuildRequest() core.ChatRequest {
 	// или вовсе её не запускает, и правка уходит непроверенной.
 	if h := tools.VerifyHint(a.WorkDir); h != "" {
 		creq.System += "\n\n# Проверка результата\n\n" + h
+	}
+	// Блок миссии идёт последним: он задаёт рамку всего хода, и любой
+	// блок после него выглядел бы как уточнение задания.
+	if mb := a.mission.systemBlock(); mb != "" {
+		creq.System += mb
 	}
 	return creq
 }
@@ -541,12 +597,31 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 
 	a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: userText})
 
+	// Миссия объявляет себя в истории до первого запроса: модель должна
+	// понимать, что это не разовый запрос, а часть многочасового прогона.
+	if a.mission != nil {
+		if note := a.mission.resumeNote(); note != "" {
+			a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: note})
+		}
+	}
+
 	maxIters := a.d.MaxIters
 	if maxIters <= 0 {
 		maxIters = DefaultMaxIters
 	}
 
 	ext := NewExtendState(maxIters, a.d.MaxItersAbs, a.d.ExtendMax, a.d.ExtendStep)
+	// Миссия с потолком итераций поднимает абсолютный потолок хода.
+	//
+	// Без этого прогон на 1500 итераций упирается в 200 (DefaultExtendAbs)
+	// и обрывается на третьей минуте многочасовой работы, а витрирует
+	// при этом «достигнут лимит итераций» — причина, которая ни о чём
+	// не говорит человеку, задавшему срок на 12 часов.
+	if a.mission != nil {
+		if m := a.mission.tracker().Mission().MaxIters; m > ext.Abs() {
+			ext = NewExtendState(maxIters, m, a.d.ExtendMax, a.d.ExtendStep)
+		}
+	}
 	a.ext = ext
 
 	// Счётчик реально выполненных итераций (для отчётов и статистики).
@@ -585,7 +660,32 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		a.Turns++
 		a.d.Session.AddMessage(assistant)
 
+		// Миссия живёт своей жизнью: считает вызовы, проверяет потолки и
+		// умеет не закрывать цикл на «инструментов не было». Обычный ход
+		// проходит мимо всех этих проверок (движок == nil).
+		if a.mission != nil {
+			a.mission.countTools(len(assistant.ToolCalls))
+			if reason := a.mission.tick(1); reason != "" {
+				a.finishMission(ctx, reason)
+				break
+			}
+			if a.missionStop {
+				a.finishMission(ctx, core.StopCancelled)
+				break
+			}
+		}
+
 		if len(assistant.ToolCalls) == 0 || !a.AgentMode {
+			// Модель не звала инструменты. В обычном ходе это конец
+			// работы, а в прогоне — только повод спросить, всё ли сделано.
+			if msg := a.mission.verifyMessage(); msg != "" {
+				a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: msg})
+				continue
+			}
+			if msg := a.mission.continueMessage(); msg != "" {
+				a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: msg})
+				continue
+			}
 			break
 		}
 
@@ -631,6 +731,18 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 				Images:  imgs,
 			})
 		}
+		// Застой: предупреждаем один раз за застой, а не каждую
+		// итерацию. Проверка стоит после выполнения инструментов: до
+		// них работа только начиналась, и повторов могло не быть вовсе.
+		if msg := a.mission.stallMessage(); msg != "" {
+			a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: msg})
+		}
+		// Чекпоинт: состояние на диск по расписанию задания. Здесь, а не
+		// в конце хода, потому что конец может не наступить никогда —
+		// прогон рассчитан на переживание перезапуска.
+		if !a.mission.checkpoint() {
+			// тихо: пропущенное сохранение — не повод тревожить модель
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -639,18 +751,53 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 	return nil
 }
 
-// autoHandoff — сохранить снимок состояния при обрыве хода по лимиту итераций.
+// finishMission — закрыть прогон по его правилам.
 //
+// Отличия от обрыва по лимиту итераций намеренные: причина остановки
+// известна и принадлежит заданию, а не агентному циклу, поэтому
+// финальные ходы всё равно нужны (человек должен получить отчёт), но
+// в историю попадает объяснение, почему работа прекращена.
+func (a *Agent) finishMission(ctx context.Context, reason string) {
+	if a.mission == nil {
+		return
+	}
+	// Причина остановки идёт в историю ДО финальных ходов: отчёт должен
+	// быть написан с пониманием, что работу прекратили, а не что модель
+	// сама решила уйти. Иначе в отчёте будет «всё сделано» поверх
+	// прогона, который оборвался на середине.
+	if msg := a.mission.stopMessage(); msg != "" {
+		a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: msg})
+	}
+	// Состояние сохраняется ДО финальных ходов: они добавят в историю
+	// отчёт, и чекпоинт после них содержал бы уже не то, что было
+	// на момент обрыва.
+	if err := a.mission.checkpointNow("остановка прогона: " + core.StopReasonLabel(reason)); err != nil {
+		if a.OnNote != nil {
+			a.OnNote("чекпоинт", "не удалось сохранить состояние прогона: "+err.Error())
+		}
+	}
+	a.autoHandoffReason(core.StopReasonLabel(reason))
+	_ = a.finalize(ctx)
+	if a.OnNote != nil {
+		a.OnNote("миссия", fmt.Sprintf("автономный прогон остановлен: %s (%s)",
+			core.StopReasonLabel(reason), a.mission.tracker().Status()))
+	}
+}
+
+// autoHandoff — сохранить снимок состояния при обрыве хода по лимиту итераций.
+func (a *Agent) autoHandoff(maxIters int) {
+	a.autoHandoffReason(fmt.Sprintf("ход оборвался на лимите итераций (%d)", maxIters))
+} // autoHandoffReason — сохранить снимок состояния с заданной причиной.
 // Делается машинно, а не по просьбе модели, потому что ровно в этот момент
 // модель уже не способна оценить, что важно: ход обрывается на середине
 // работы. Снимок кладётся и в историю (следующий ход читает его как
 // пользовательское сообщение), и на диск (переживает сжатие контекста).
 // Ошибка записи не должна ломать ход: снимок — страховка, а не условие работы.
-func (a *Agent) autoHandoff(maxIters int) {
+func (a *Agent) autoHandoffReason(why string) {
 	if a.d.Registry == nil || !a.AgentMode {
 		return
 	}
-	txt, err := a.d.Registry.AutoHandoff(fmt.Sprintf("ход оборвался на лимите итераций (%d)", maxIters))
+	txt, err := a.d.Registry.AutoHandoff(why)
 	if err != nil {
 		if a.OnNote != nil {
 			a.OnNote("handoff", "не удалось сохранить снимок состояния: "+err.Error())
