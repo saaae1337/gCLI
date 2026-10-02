@@ -25,7 +25,7 @@ jobs:
     name: собрать и опубликовать ${{ github.event.inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
