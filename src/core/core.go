@@ -248,6 +248,16 @@ type Config struct {
 	// сама. Откат — /revert, список — /snapshots.
 	Snapshots *bool `json:"snapshots,omitempty"`
 
+	// LSP — переопределение language servers по расширению файла:
+	// {".go": "gopls", ".py": "pyright-langserver --stdio"}. Без ключа
+	// действуют пресеты (см. tools/lspPresets): .go/.ts/.tsx/.js/.jsx/.py/.rs.
+	LSP map[string]string `json:"lsp,omitempty"`
+	// LSPEnabled — выключатель всей LSP-механики (nil = включена).
+	// Без бинарников серверов в PATH инструменты всё равно честно
+	// ответят «недоступно», а тихий хук молчит; ключ для тех, кто
+	// хочет выключить даже попытки.
+	LSPEnabled *bool `json:"lsp_enabled,omitempty"`
+
 	// Permissions — правила разрешений для этого запуска (allow/ask/deny).
 	//
 	// Поле необязательное: у человека, который правил конфиг только

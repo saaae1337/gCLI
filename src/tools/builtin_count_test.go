@@ -13,7 +13,7 @@ import (
 //
 // Считаются только встроенные (tools.New). skills, vision, субагенты, ext и
 // MCP регистрируются поверх и зависят от настроек, поэтому в число не входят.
-const builtinCount = 29
+const builtinCount = 32
 
 // TestBuiltinCount — столько инструментов должно быть в реестре по умолчанию.
 func TestBuiltinCount(t *testing.T) {

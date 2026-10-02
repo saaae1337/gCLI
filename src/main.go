@@ -53,6 +53,11 @@ type app struct {
 	workDir string
 	stdin   *stdinReader
 
+	// lsp — хаб language servers: один на процесс, переживает пересборки
+	// реестра. Создаётся лениво по первому .go/.ts/… файлу; Shutdown — перед
+	// выходом, чтобы не оставлять процессы-сироты gopls.
+	lsp *tools.LSPHub
+
 	registry *providers.Registry
 	client   *providers.Client
 	prov     *providers.Provider
@@ -260,6 +265,13 @@ func main() {
 	}
 
 	a.memory = tools.NewMemory(a.workDir, a.store)
+	// LSP: включён, если конфигом не запрещён; пресеты серверов — в tools/lsp.go,
+	// переопределения — ключ lsp в config.json.
+	if a.repo.Cfg.LSPEnabled == nil || *a.repo.Cfg.LSPEnabled {
+		a.lsp = tools.NewLSPHub(a.repo.Cfg.LSP, true)
+	} else {
+		a.lsp = tools.NewLSPHub(nil, false)
+	}
 	a.buildTools()
 	a.buildPool()
 	a.applyMascot()
@@ -549,6 +561,7 @@ func (a *app) buildTools() {
 		// Доверие к коду из проекта. Хранилище всегда есть, даже если файл
 		// согласий пуст: тогда «нет согласия» и «хранилища нет» — одно и то же.
 		Trust: tools.NewTrustStore(a.store.Root),
+		LSP:   a.lsp,
 	}
 	a.tools = tools.New(env)
 	a.tools.RegisterSkills()
@@ -1475,6 +1488,9 @@ func (a *app) repl() {
 			}
 			// MCP-серверы — дочерние процессы: гасим перед выходом.
 			a.tools.MCPShutdown()
+			// Language servers — тоже дочерние процессы: вежливый shutdown,
+			// потом kill. После MCP: там может лежать тот же gopls.
+			a.lsp.Shutdown()
 			// Журнал — после серверов и до saveSession: он дописывается
 			// на том же файловом дескрипторе, и закрывать его последним
 			// нельзя, иначе последняя запись не дойдёт до диска.

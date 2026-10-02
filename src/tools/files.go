@@ -135,6 +135,14 @@ func (r *Registry) registerBuiltins() {
 		schemaMultiGrep, "read", false, func(r *Registry) Handler { return r.hMultiGrep })
 	r.registerBound("multi_bash", "Выполнить несколько shell-команд параллельно: один вызов вместо N bash. Каждая команда — со своим кодом возврата и своим таймаутом; порядок в отчёте совпадает с порядком команд. Команды НЕ должны зависеть друг от друга.",
 		schemaMultiBash, "exec", true, func(r *Registry) Handler { return r.hMultiBash })
+
+	// ---- LSP: типы и диагностика от language servers ----
+	r.registerBound("lsp_diagnostics", "Диагностика language server по файлу: типы, необъявленные переменные, ошибки импортов — всё, что видно без сборки. После edit_file/write_file диагностика приходит сама; зови вручную для файла, который не правил, или после внешних изменений.",
+		schemaLSPDiag, "read", false, func(r *Registry) Handler { return r.hLSPDiagnostics })
+	r.registerBound("lsp_hover", "Что знает language server о символе: тип, сигнатура, документация. Дешевле, чем открывать файлы в поисках определения. Позиция: line — строка с 1, character — столбец в символах с 0 (как в read_file).",
+		schemaLSPPos, "read", false, func(r *Registry) Handler { return r.hLSPHover })
+	r.registerBound("lsp_definition", "Где определён символ: файл:строка:столбец. Быстрая навигация по чужому коду без grep. Позиция: line — строка с 1, character — столбец в символах с 0.",
+		schemaLSPPos, "read", false, func(r *Registry) Handler { return r.hLSPDefinition })
 }
 
 // ---------- Инструменты чтения ----------
@@ -334,8 +342,14 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 	r.noteChange(p, "write_file", old, content, existed)
 	markRead(r.env.ReadFiles, p)
 	rel := core.RelToWD(r.workDir, p)
+	text := fmt.Sprintf("Записано: %s (%d строк, %s)", rel, len(core.SplitLines(content)), core.HumanSize(len(content)))
+	// Тихая диагностика после правки: language server видит сломанные типы
+	// сразу, а не после сборки. Ошибка хука молча пропускается.
+	if diag := r.env.LSP.AutoDiagnostics(r.workDir, p); diag != "" {
+		text += "\n" + diag
+	}
 	return Result{
-		Text:    fmt.Sprintf("Записано: %s (%d строк, %s)", rel, len(core.SplitLines(content)), core.HumanSize(len(content))),
+		Text:    text,
 		Summary: fmt.Sprintf("записан %s (%d строк)", rel, len(core.SplitLines(content))),
 	}, nil
 }
@@ -405,8 +419,13 @@ func (r *Registry) editFileLabeled(m map[string]any, label string) (Result, erro
 	}
 	r.noteChange(p, label, content, updated, true)
 	rel := core.RelToWD(r.workDir, p)
+	text := fmt.Sprintf("Файл обновлён: %s (замен: %d)", rel, replaced)
+	// Тихая диагностика после правки — как в write_file.
+	if diag := r.env.LSP.AutoDiagnostics(r.workDir, p); diag != "" {
+		text += "\n" + diag
+	}
 	return Result{
-		Text:    fmt.Sprintf("Файл обновлён: %s (замен: %d)", rel, replaced),
+		Text:    text,
 		Summary: fmt.Sprintf("%s — замен: %d", rel, replaced),
 	}, nil
 }
