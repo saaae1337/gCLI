@@ -346,6 +346,7 @@ type lspConn struct {
 	pending  map[int64]chan lspResponse
 	diags    map[string][]lspDiag // uri → последние diagnostics
 	pushAt   map[string]time.Time // uri → время последнего push
+	pushSeq  map[string]uint64    // uri → счётчик push'ей (свежее времени)
 	opened   map[string]int64     // uri → версия документа
 	closed   bool
 	rootURI  string
@@ -383,6 +384,7 @@ func newLSPConn(r io.Reader, w io.WriteCloser, cmd *exec.Cmd, workDir, lang stri
 		pending:  map[int64]chan lspResponse{},
 		diags:    map[string][]lspDiag{},
 		pushAt:   map[string]time.Time{},
+		pushSeq:  map[string]uint64{},
 		opened:   map[string]int64{},
 		rootURI:  pathToURI(workDir),
 		language: lang,
@@ -507,6 +509,7 @@ func (c *lspConn) readLoop(r *bufio.Reader) {
 				c.mu.Lock()
 				c.diags[p.URI] = p.Diagnostics
 				c.pushAt[p.URI] = time.Now()
+				c.pushSeq[p.URI]++
 				c.mu.Unlock()
 			}
 		default:
@@ -644,17 +647,31 @@ func (c *lspConn) diagnosticsAfterEdit(path string, wait time.Duration) string {
 	if err != nil {
 		return ""
 	}
+	// Свежесть push'а измеряем СЧЁТЧИКОМ, а не временем: сравнение
+	// «pushAt позже t0» оказалось ненадёжным. Разница между приходом
+	// события и снятием отметки — единицы миллисекунд, а детализация
+	// clock на Windows около 15,6 мс: отметка округлялась вниз и
+	// оказывалась РАНЬШЕ события, условие не срабатывало, и мы зря ждали
+	// весь таймаут, а потом уходили в запасной textDocument/diagnostic.
+	// Счётчик событий от такого не зависит.
+	//
+	// Отметку снимаем ДО отправки didOpen: сервер отвечает push'ом на
+	// неё, и событие может прийти между вызовами.
+	c.mu.Lock()
+	seq0 := c.pushSeq[pathToURI(abs)]
+	c.mu.Unlock()
+
+	t0 := time.Now()
 	if err := c.ensureOpen(abs, string(data)); err != nil {
 		return ""
 	}
 	uri := pathToURI(abs)
-	t0 := time.Now()
 	deadline := t0.Add(wait)
 	for time.Now().Before(deadline) {
 		c.mu.Lock()
-		at := c.pushAt[uri]
+		seq := c.pushSeq[uri]
 		c.mu.Unlock()
-		if at.After(t0) {
+		if seq > seq0 {
 			return formatDiagnostics(abs, string(data), c.diagsOf(uri))
 		}
 		time.Sleep(120 * time.Millisecond)
