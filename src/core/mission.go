@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -138,6 +139,14 @@ func ParseDur(s string) (Dur, error) {
 	if n, err := strconv.Atoi(s); err == nil {
 		if n < 0 {
 			return 0, fmt.Errorf("длительность не может быть отрицательной: %s", s)
+		}
+		// Умножение на минуту переполняется на больших числах: «1077000000»
+		// минут — это больше, чем помещается в Duration, и результат
+		// молча становился отрицательным. Прогон с таким сроком стартовал
+		// «просроченным» и обрывался сразу. Поэтому переполнение — ошибка,
+		// а не повод обрезать срок по кругу.
+		if int64(n) > int64(math.MaxInt64)/int64(time.Minute) {
+			return 0, fmt.Errorf("срок слишком велик: %s (максимум около %d минут)", s, int64(math.MaxInt64)/int64(time.Minute))
 		}
 		return Dur(time.Duration(n) * time.Minute), nil
 	}

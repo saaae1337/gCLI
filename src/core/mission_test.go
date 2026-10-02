@@ -2,6 +2,8 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +122,36 @@ func TestParseDur(t *testing.T) {
 	}
 	if _, err := ParseDur("завтра"); err == nil {
 		t.Error("мусор должен отвергаться")
+	}
+}
+
+// TestParseDurRejectsOverflow — регрессия: голое число минут умножалось на
+// time.Minute без проверки, и «1077000000» (чуть больше 2^63 наносекунд)
+// молча превращалось в отрицательный срок. Миссия с таким дедлайном
+// запускалась «просроченной» и обрывалась, вместо того чтобы сказать, что
+// срок неправдоподобен. Этот вход нашёл go-fuzz, тест держит его от regress.
+func TestParseDurRejectsOverflow(t *testing.T) {
+	maxMinutes := int64(math.MaxInt64) / int64(time.Minute)
+	for _, s := range []string{
+		"1077000000",                     // граница переполнения, найдена фаззингом
+		fmt.Sprintf("%d", maxMinutes+1),  // ровно за пределом
+		fmt.Sprintf("%d", math.MaxInt64), // самое большое число
+		"99999999999999999999999999",     // не влезает даже в int64
+	} {
+		d, err := ParseDur(s)
+		if err == nil {
+			t.Errorf("ParseDur(%q) вернула %s без ошибки — срок выше Duration", s, d)
+		}
+		if d < 0 {
+			t.Errorf("ParseDur(%q) вернула отрицательный срок %s", s, d)
+		}
+	}
+	// А вот максимально допустимый срок обязан разбираться: проверка не должна
+	// отвергать всё подряд, иначе мы просто заменили одну поломку другой.
+	if d, err := ParseDur(fmt.Sprintf("%d", maxMinutes)); err != nil {
+		t.Errorf("предельный срок %d минут отвергнут: %v", maxMinutes, err)
+	} else if d <= 0 {
+		t.Errorf("предельный срок разобрался как %s", d)
 	}
 }
 
