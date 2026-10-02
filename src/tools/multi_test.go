@@ -204,6 +204,9 @@ func TestMultiEditAtomicRollsBack(t *testing.T) {
 	r, dir := newMultiReg(t)
 	p1 := mustWriteFile(t, dir, "ok1.go", "keep me\n")
 	p2 := mustWriteFile(t, dir, "bad.go", "no such string\n")
+	// atomic-пачка подчиняется правилу «сначала прочитай»: помечаем оба.
+	markRead(r.env.ReadFiles, p1)
+	markRead(r.env.ReadFiles, p2)
 
 	res := callTool(t, r, "multi_edit", map[string]any{"edits": []any{
 		map[string]any{"path": p1, "old_string": "keep me", "new_string": "changed"},
@@ -224,6 +227,8 @@ func TestMultiEditAtomicAppliesAll(t *testing.T) {
 	r, dir := newMultiReg(t)
 	p1 := mustWriteFile(t, dir, "f1.txt", "old one\n")
 	p2 := mustWriteFile(t, dir, "f2.txt", "old two\n")
+	markRead(r.env.ReadFiles, p1)
+	markRead(r.env.ReadFiles, p2)
 
 	callTool(t, r, "multi_edit", map[string]any{"edits": []any{
 		map[string]any{"path": p1, "old_string": "old one", "new_string": "new one"},

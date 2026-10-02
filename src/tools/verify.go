@@ -515,11 +515,24 @@ func (r *Registry) hVerify(ctx context.Context, m map[string]any) (Result, error
 		}
 		runDir = abs
 	}
+	// Песочница — та же, что у bash, и отказ — тоже ошибка, а не строка
+	// в отчёте: verify исполняет команду модели, и без проверки путей он
+	// был бы обходом cmdguard с «безобидным» поводом в подтверждении.
+	if err := r.guardCommand(cmd, runDir); err != nil {
+		return Result{}, err
+	}
 
 	// Команды проверки читают и меняют кэш сборки, но пользователь запускал
 	// бы их вручную без подтверждения — поэтому подтверждения не спрашиваем,
 	// а результат всё равно показываем в UI как обычный вызов.
 	out, err := r.runVerifyCmd(ctx, cmd, runDir, timeout)
+	// Отмена пользователем — не результат проверки: раньше «отменено»
+	// попадало в отчёт как падение и в baseline, и следующий прогон
+	// рапортовал о фантомном «исправлено падений: 1». Как и в bash,
+	// отказ — просто отказ, без отчёта и без порчи линии.
+	if err != nil && strings.Contains(err.Error(), "отменено пользователем") {
+		return Result{Text: out.text, Summary: "отменено"}, nil
+	}
 	rep := ParseVerify(cmd, out.exit, out.elapsed, out.text)
 	// Ошибка запуска — это тоже результат проверки, и разбирать её надо ДО
 	// сравнения с базовой линией. Иначе несуществующая команда уйдёт в
@@ -579,6 +592,12 @@ func (r *Registry) runVerifyCmd(ctx context.Context, cmd, dir string, timeout in
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			out.exit = ee.ExitCode()
+			// Убитый по таймауту процесс тоже приходит ExitError
+			// (сигнал), и без этой пометки падение выглядело бы
+			// обычным кодом -1 без объяснения.
+			if out.exit < 0 && cctx.Err() == context.DeadlineExceeded {
+				out.text += fmt.Sprintf("\n[таймаут %ds]", timeout)
+			}
 			return out, nil
 		}
 		if cctx.Err() == context.DeadlineExceeded {

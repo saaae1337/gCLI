@@ -116,6 +116,11 @@ const MCPTemplate = `{
 type mcpConn struct {
 	cmd   *exec.Cmd
 	stdin chan string
+	// done — закрыт в stop(). Вместо close(stdin): отправка в закрытый
+	// канал паникует, а call() мог висеть в отправке, когда stop() уже
+	// выполняется (сервер умер, буфер переполнен, вышел gCLI). С done
+	// и писатель, и незавершённые отправки выходят без паники.
+	done chan struct{}
 	// callMu — запросы строго по одному: reader раздаёт ответы по
 	// единственному активному каналу pending.
 	callMu sync.Mutex
@@ -130,8 +135,12 @@ type mcpConn struct {
 }
 
 // mcpResponse — ответ сервера (result или error).
+//
+// ID — указатель: JSON-RPC-уведомления идут без поля id, и при обычном
+// int такое сообщение разбирается в {ID: 0} — неотличимо от ответа на
+// первый запрос. Читатель обязан отличать «ответа тут нет» от «id = 0».
 type mcpResponse struct {
-	ID     int             `json:"id"`
+	ID     *int            `json:"id"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Err    *mcpRemoteError `json:"error,omitempty"`
 }
@@ -183,6 +192,7 @@ func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (
 	c := &mcpConn{
 		cmd:     cmd,
 		stdin:   make(chan string, 8),
+		done:    make(chan struct{}),
 		scanner: bufio.NewScanner(stdoutPipe),
 	}
 	c.scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
@@ -196,7 +206,15 @@ func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (
 			}
 			var resp mcpResponse
 			if err := json.Unmarshal([]byte(line), &resp); err != nil {
-				continue // уведомления и мусор молча пропускаем
+				continue // мусор молча пропускаем
+			}
+			if resp.ID == nil {
+				// Уведомление или серверный запрос без id: ответа на наш
+				// вызов он не содержит. Раньше такие строки разбирались
+				// в {ID:0} и роняли текущий вызов с «чужой id ответа» —
+				// болтливый сервер (logging-нотификации) ломал каждый
+				// второй вызов.
+				continue
 			}
 			if p := c.pending.Load(); p != nil {
 				select {
@@ -210,12 +228,22 @@ func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (
 
 	// Писатель: сериализуем записи в stdin.
 	go func() {
-		for line := range c.stdin {
-			if _, err := stdinPipe.Write([]byte(line + "\n")); err != nil {
+		for {
+			select {
+			case line, ok := <-c.stdin:
+				if !ok {
+					stdinPipe.Close()
+					return
+				}
+				if _, err := stdinPipe.Write([]byte(line + "\n")); err != nil {
+					stdinPipe.Close()
+					return
+				}
+			case <-c.done:
+				stdinPipe.Close()
 				return
 			}
 		}
-		stdinPipe.Close()
 	}()
 
 	// initialize → notifications/initialized.
@@ -257,14 +285,16 @@ func (c *mcpConn) call(ctx context.Context, method string, params any) (json.Raw
 
 	select {
 	case c.stdin <- string(req):
+	case <-c.done:
+		return nil, fmt.Errorf("сервер остановлен")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 
 	select {
 	case resp := <-ch:
-		if resp.ID != id {
-			return nil, fmt.Errorf("чужой id ответа: %d", resp.ID)
+		if resp.ID == nil || *resp.ID != id {
+			return nil, fmt.Errorf("чужой id ответа")
 		}
 		if resp.Err != nil {
 			return nil, resp.Err
@@ -292,14 +322,21 @@ func (c *mcpConn) stop() {
 	if c.closed.Swap(true) {
 		return
 	}
-	close(c.stdin)
+	// done, а не close(stdin): отправка в закрытый канал паникует, а
+	// зависший в call() отправитель в этот момент — обычное дело.
+	close(c.done)
 	_ = c.cmd.Process.Kill()
 	_ = c.cmd.Wait()
 }
 
 // alive — процесс ещё жив?
+//
+// По closed: его ставит и stop(), и читатель при закрытии stdout (сервер
+// умер сам). Чтение cmd.ProcessState здесь было бы гонкой с cmd.Wait()
+// из stop() — оно и не нужно: живой процесс с кем-то ещё не прочитанным
+// stdout держит closed=false, а умерший обнаруживается читателем.
 func (c *mcpConn) alive() bool {
-	return !c.closed.Load() && c.cmd.ProcessState == nil
+	return c != nil && !c.closed.Load()
 }
 
 // ---------- Регистрация инструментов MCP ----------
@@ -405,15 +442,28 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 				"MCP «%s»: сервер из проекта, требует подтверждения (/mcp trust %s)", name, name))
 			continue
 		}
-		if r.mcpServerRegistered(name) {
+		r.muMCP.Lock()
+		existing := r.mcpConns[name]
+		r.muMCP.Unlock()
+		if r.mcpServerRegistered(name) && existing != nil && existing.alive() {
 			continue // сервер уже подключён
 		}
-		conn, err := mcpStart(context.Background(), name, srv, version)
-		if err != nil {
-			warns = append(warns, err.Error())
-			continue
+		// Живое соединение без инструментов (tools/list не дошёл) —
+		// используем его, а не плодим второй процесс.
+		var conn *mcpConn
+		if existing != nil && existing.alive() {
+			conn = existing
+		} else {
+			var err error
+			conn, err = mcpStart(context.Background(), name, srv, version)
+			if err != nil {
+				warns = append(warns, err.Error())
+				continue
+			}
 		}
+		r.muMCP.Lock()
 		r.mcpConns[name] = conn
+		r.muMCP.Unlock()
 
 		listCtx, cancel := context.WithTimeout(context.Background(), mcpListTimeout)
 		raw, err := conn.call(listCtx, "tools/list", map[string]any{})
@@ -471,7 +521,12 @@ func (r *Registry) registerMCPTool(server, fullName, callName, desc, schema stri
 // mcpHandler — вызов tools/call на сервере.
 func (r *Registry) mcpHandler(server, fullName, callName string) Handler {
 	return func(ctx context.Context, m map[string]any) (Result, error) {
+		// muMCP обязателен: /mcp reload из UI-потока может писать в
+		// карту ровно в этот момент (та же гонка, от которой muMCP
+		// заведён, — только раньше писали без него в горячем пути).
+		r.muMCP.Lock()
 		conn := r.mcpConns[server]
+		r.muMCP.Unlock()
 		if conn == nil || !conn.alive() {
 			return Result{}, fmt.Errorf("MCP-сервер «%s» не подключён — /mcp reload", server)
 		}
@@ -580,7 +635,10 @@ func (r *Registry) MCPStatus() (servers []string, tools int) {
 			state = "требует подтверждения"
 		}
 		live := ""
-		if c := r.mcpConns[name]; c != nil && c.alive() {
+		r.muMCP.Lock()
+		c := r.mcpConns[name]
+		r.muMCP.Unlock()
+		if c != nil && c.alive() {
 			live = " · подключён"
 		}
 		servers = append(servers, fmt.Sprintf("%s (%s%s) — %s %s", name, state, live, srv.Command, strings.Join(srv.Args, " ")))
@@ -591,14 +649,36 @@ func (r *Registry) MCPStatus() (servers []string, tools int) {
 
 // MCPReload — переподключиться к серверам и дозарегистрировать инструменты.
 func (r *Registry) MCPReload() (int, []string) {
+	var dead []string
 	r.muMCP.Lock()
 	for name, c := range r.mcpConns {
 		if !c.alive() {
 			delete(r.mcpConns, name)
+			dead = append(dead, name)
 		}
 	}
 	r.muMCP.Unlock()
+	// Инструменты мёртвых серверов уходят из реестра: иначе
+	// mcpServerRegistered считает сервер подключённым, RegisterMCP
+	// его пропускает, и /mcp reload никогда не чинит упавший процесс —
+	// тупик, из которого был только перезапуск gcli.
+	for _, name := range dead {
+		r.mcpDropServer(name)
+	}
 	return r.RegisterMCP()
+}
+
+// mcpDropServer — убрать инструменты сервера из реестра.
+func (r *Registry) mcpDropServer(name string) {
+	kept := r.tools[:0:0]
+	for _, t := range r.tools {
+		if t.MCPSrv == name {
+			delete(r.byName, t.Def.Name)
+			continue
+		}
+		kept = append(kept, t)
+	}
+	r.tools = kept
 }
 
 // MCPShutdown — остановить все MCP-процессы (при выходе).

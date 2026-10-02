@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -446,6 +447,14 @@ func (r *Registry) runAtomicEdits(ctx context.Context, edits []multiEdit, par in
 			abs, err := r.pathArg(edits[i].Path)
 			if err != nil {
 				fail(fmt.Errorf("%s: %v", edits[i].Path, err))
+				return
+			}
+			// «Сначала прочитай, потом правь» — то же правило, что у
+			// edit_file: без него atomic:true был бы лазейкой, где
+			// модель правит файл, который ни разу не открывала.
+			if !wasRead(r.env.ReadFiles, abs) {
+				fail(fmt.Errorf("%s: файл не прочитан — сначала read_file",
+					core.RelToWD(r.workDir, abs)))
 				return
 			}
 			p := prepared{e: edits[i], path: abs}
@@ -949,9 +958,19 @@ func dedupePaths(in []string) []string {
 		// Замена разделителя явная, а не filepath.ToSlash: на Linux backslash —
 		// законный символ имени, и «src\a.go» жил бы как отдельный файл,
 		// ломая дедупликацию в зависимости от ОС сборки.
-		key := strings.ToLower(strings.ReplaceAll(s, `\`, "/"))
+		key := strings.ReplaceAll(s, `\`, "/")
 		key = strings.TrimPrefix(key, "./")
 		key = strings.TrimSuffix(key, "/")
+		// Регистр сворачиваем только там, где он не различает файлы:
+		// на Windows — весь путь (NTFS нечувствителен к регистру), на
+		// остальных системах — только букву диска. Глобальный ToLower
+		// на Linux склеивал Readme.md и readme.md в одну цель, и
+		// вторая молча выпадала из пачки.
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		} else if len(key) >= 2 && key[1] == ':' && isDriveLetter(key[0]) {
+			key = strings.ToLower(key[:1]) + key[1:]
+		}
 		if key == "" {
 			continue
 		}

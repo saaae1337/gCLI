@@ -134,15 +134,13 @@ func readLinesFrom(p string, skip, linesLimit int, bytesLimit int64) (data []byt
 			continue
 		}
 		if err == bufio.ErrBufferFull {
-			// Строка длиннее буфера. Следующая строка имеет номер line+1,
-			// поэтому условие «нужна» здесь — line >= skip.
-			if line >= skip && kept < linesLimit {
+			// Строка длиннее буфера: это хвост одной и той же строки,
+			// а не отдельная строка. Пишем кусок и ждём завершения —
+			// иначе каждая порция по 64К учитывалась как целая строка,
+			// и лимит «2000 строк» кончался на сотне строк минифицированного
+			// JS (после фикса — считает одну длинную строку один раз).
+			if line >= skip {
 				buf.Write(b)
-				kept++
-			}
-			line++
-			if kept >= linesLimit {
-				return buf.Bytes(), size, false, nil
 			}
 			continue
 		}

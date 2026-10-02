@@ -19,10 +19,10 @@ import (
 // У агента нет глаз: сверстанный сайт он видит только как код. Инструменты
 // ниже дают ему зрение:
 //
-//	screenshot — снимок страницы (URL или локальный файл) через headless-
-//	             браузер (Edge/Chrome/Chromium): PNG прикладывается к
-//	             контексту, модель видит картинку на следующем шаге;
-//	read_image — чтение локального изображения (PNG/JPG/WebP/GIF) в контекст.
+//      screenshot — снимок страницы (URL или локальный файл) через headless-
+//                   браузер (Edge/Chrome/Chromium): PNG прикладывается к
+//                   контексту, модель видит картинку на следующем шаге;
+//      read_image — чтение локального изображения (PNG/JPG/WebP/GIF) в контекст.
 //
 // Картинки уходят в API как обычные image-блоки (OpenAI: image_url с
 // data-URL, Anthropic: блок image с base64-источником).
@@ -114,11 +114,6 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 		return Result{}, fmt.Errorf("укажи target — URL или путь к HTML-файлу")
 	}
 	browser, _ := findBrowser()
-	if browser == "" {
-		return Result{}, fmt.Errorf(
-			"headless-браузер не найден (нужен Edge, Chrome или Chromium). " +
-				"Установи любой из них или укажи путь в переменной GCLI_BROWSER")
-	}
 
 	// Локальный файл → file:// URL.
 	if !strings.Contains(target, "://") {
@@ -133,6 +128,13 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 		if runtime.GOOS == "windows" {
 			target = strings.ReplaceAll(target, "\\", "/")
 		}
+	} else {
+		// Сетевой адрес браузер качает сам — та же дыра, что закрыта у
+		// web_fetch: без проверки скриншот http://169.254.169.254/ приносил
+		// бы ответ внутренней сети прямо в контекст модели.
+		if err := checkSSRF(target); err != nil {
+			return Result{}, err
+		}
 	}
 
 	w := ArgInt(m, "width", 1440)
@@ -145,12 +147,25 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	if out == "" {
 		out = filepath.Join(".gcli", "screenshots", "shot-"+core.RandID(5)+".png")
 	}
-	outPath := r.resolvePath(out)
+	// pathArg, а не resolvePath: путь пришёл от модели, и песочница
+	// обязана его резать так же, как у write_file — иначе screenshot
+	// стал бы бесплатной записью куда угодно (и MkdirAll создавал бы
+	// каталоги вне корня).
+	outPath, err := r.pathArg(out)
+	if err != nil {
+		return Result{}, err
+	}
 	if filepath.Ext(outPath) == "" {
 		outPath += ".png"
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return Result{}, fmt.Errorf("не удалось создать каталог для скриншота: %v", err)
+	}
+
+	if browser == "" {
+		return Result{}, fmt.Errorf(
+			"headless-браузер не найден (нужен Edge, Chrome или Chromium). " +
+				"Установи любой из них или укажи путь в переменной GCLI_BROWSER")
 	}
 
 	// Отдельный профиль: не трогаем браузер пользователя и не падаем,
@@ -176,11 +191,10 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	defer cancel()
 	cmd := exec.CommandContext(cctx, browser, args...)
 	cmd.Env = append(os.Environ(), "HOME="+os.TempDir())
-	_, err := cmd.CombinedOutput()
-	if cctx.Err() == context.DeadlineExceeded {
-		return Result{}, fmt.Errorf("браузер не успел за 60 с — страница, вероятно, слишком тяжёлая")
-	}
-	if err != nil {
+	if _, err := cmd.CombinedOutput(); err != nil {
+		if cctx.Err() == context.DeadlineExceeded {
+			return Result{}, fmt.Errorf("браузер не успел за 60 с — страница, вероятно, слишком тяжёлая")
+		}
 		return Result{}, fmt.Errorf("скриншот не удался: %v", err)
 	}
 	return r.attachImageFile(outPath, "screenshot")

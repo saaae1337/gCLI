@@ -179,7 +179,11 @@ func resolveCandidate(p, workdir string) string {
 		}
 		return filepath.Clean(p)
 	case strings.HasPrefix(p, "../") || strings.HasPrefix(p, `..\`) ||
-		strings.HasPrefix(p, "./") || strings.HasPrefix(p, `.\`):
+		strings.HasPrefix(p, "./") || strings.HasPrefix(p, `.\`) || p == "..":
+		// Голое «..» — тоже выход за корень: «cp secret.txt ..» пишет в
+		// родителя рабочего каталога мимо песочницы, если токен не
+		// разрешить в абсолютный путь (раньше resolveCandidate возвращал
+		// пустоту и проверка не звалась вовсе).
 		if abs, err := filepath.Abs(filepath.Join(workdir, filepath.FromSlash(p))); err == nil {
 			return abs
 		}
