@@ -97,6 +97,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdContext()
 	case "/plan":
 		a.cmdPlan(rest)
+	case "/ab":
+		a.cmdAb(rest)
 	case "/undo":
 		a.cmdUndo()
 	case "/snapshots":
@@ -141,6 +143,7 @@ func (a *app) cmdHelp() {
 			{"/agents new <имя>", "свой агент (.gcli/agents/*.md)"},
 			{"/agent on|off", "агентный режим (инструменты)"},
 			{"/plan on|off", "режим планирования: сначала план — потом код"},
+			{"/ab <модель> <промпт>", "один вопрос двум моделям: сравнить ответ, время, цену"},
 			{"/autopilot on|off|all", "автопилот: одобрять безопасные действия самому"},
 			{"/sandbox on|off", "песочница файлов: пути вне рабочего каталога запрещены"},
 			{"/yolo", "без подтверждений (кроме опасных команд)"},
