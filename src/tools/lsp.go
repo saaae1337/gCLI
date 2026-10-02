@@ -201,13 +201,31 @@ func (h *LSPHub) Definition(workDir, path string, line, character int) (string, 
 
 // pathToURI — file://-URI из пути. filepath.ToSlash: на Windows «C:\x»
 // обязано стать «file:///C:/x», а не «file://C:\x».
+//
+// Про слэш перед буквой диска. Без него url.String() печатает
+// «file://C:/x», и это НЕ тот же URI, что «file:///C:/x»: разбор
+// первого раскладывает его на Host="C:" + Path="/x", и буква диска
+// уезжает из пути в узел хоста. Обратное преобразование потом не
+// может её вернуть — путь указывает на другой диск. Лишний слэш
+// убирается за счёт url.URL, который с Host="" схлопывает «//»
+// в один — так что «/home/me/x» остаётся «file:///home/me/x».
 func pathToURI(path string) string {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	p := filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" {
+		p = "/" + p
+	}
+	u := url.URL{Scheme: "file", Path: p}
 	return u.String()
 }
 
 // uriToPath — обратное преобразование. Ведущий «/» перед «C:/» на Windows
 // добавляется правилами URL и пути не соответствует — срезаем.
+//
+// Про Host. У формы «file://C:/x» (её генерировал старый pathToURI и её
+// до сих пор шлют часть серверов) буква диска осела в узле хоста, а путь
+// начинается с «/». Чтобы такой URI не превратился в «\x» на текущем
+// диске, хост возвращаем обратно в путь. Канонический «file:///C:/x» идёт
+// с пустым Host, и эта ветка его не трогает.
 func uriToPath(uri string) string {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -217,6 +235,9 @@ func uriToPath(uri string) string {
 		return uri
 	}
 	p := u.Path
+	if u.Host != "" {
+		p = u.Host + p
+	}
 	if vol := filepath.VolumeName(strings.TrimPrefix(p, "/")); vol != "" {
 		p = strings.TrimPrefix(p, "/")
 	}

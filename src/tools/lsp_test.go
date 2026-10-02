@@ -11,14 +11,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestPathURIRoundTrip(t *testing.T) {
-	wd := t.TempDir()
-	p := wd + "/sub/file main.go" // пробел в имени — классическая ловушка экранирования
+	// Нативный путь: именно его отдаёт реальный код (filepath.WalkDir,
+	// os.Stat). Раньше тест склеивал «C:\…\Temp» + «/sub/file main.go» —
+	// смесь слэшей, которой на диске не бывает, и round-trip падал не из-за
+	// бага, а из-за нечестной входной строки. Смешанные слэши отдельно
+	// проверяет TestPathURIKeepsVolume.
+	p := filepath.Join(t.TempDir(), "sub", "file main.go") // пробел — ловушка экранирования
 	uri := pathToURI(p)
 	if !strings.HasPrefix(uri, "file://") {
 		t.Fatalf("не file:// URI: %q", uri)
@@ -29,6 +34,34 @@ func TestPathURIRoundTrip(t *testing.T) {
 	// Относительный URI без scheme не превращаем молча.
 	if got := uriToPath("http://example.com/x.go"); got != "http://example.com/x.go" {
 		t.Fatalf("не-file URI должен пройти насквозь, получили %q", got)
+	}
+}
+
+// TestPathURIKeepsVolume — буква диска не теряется.
+//
+// Регресс: pathToURI печатал «file://C:/x» вместо «file:///C:/x».
+// Такой URI разбирается как Host="C:" + Path="/x", буква диска уезжает
+// из пути, и LSP получал несуществующий файл — диагностика и hover
+// указывали на другой диск. Ловим обе формы: каноническую и старую.
+func TestPathURIKeepsVolume(t *testing.T) {
+	vol := filepath.VolumeName(t.TempDir())
+	if vol == "" {
+		t.Skip("платформа без букв диска")
+	}
+	p := filepath.Join(vol+string(filepath.Separator), "Users", "me", "a b", "main.go")
+
+	uri := pathToURI(p)
+	if !strings.HasPrefix(uri, "file:///"+filepath.ToSlash(vol)+"/") {
+		t.Errorf("диск должен быть в пути URI, а не в хосте: %q", uri)
+	}
+	if got := uriToPath(uri); got != p {
+		t.Errorf("round trip с диском: %q → %q → %q", p, uri, got)
+	}
+	// Старая форма от внешних серверов: диск в хосте, но путь должен
+	// собраться обратно, а не потеряться.
+	legacy := "file://" + filepath.ToSlash(vol) + filepath.ToSlash(p[len(vol):])
+	if got := uriToPath(legacy); got != p {
+		t.Errorf("legacy URI с диском в хосте: %q → %q", legacy, got)
 	}
 }
 

@@ -589,20 +589,20 @@ func (r *Registry) runVerifyCmd(ctx context.Context, cmd, dir string, timeout in
 	data, err := ce.CombinedOutput()
 	out := verifyOut{text: string(data), elapsed: time.Since(t0)}
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			out.exit = ee.ExitCode()
-			// Убитый по таймауту процесс тоже приходит ExitError
-			// (сигнал), и без этой пометки падение выглядело бы
-			// обычным кодом -1 без объяснения.
-			if out.exit < 0 && cctx.Err() == context.DeadlineExceeded {
-				out.text += fmt.Sprintf("\n[таймаут %ds]", timeout)
-			}
-			return out, nil
-		}
+		// Таймаут разбираем ПЕРВЫМ, по ctx.Err(), а не по коду возврата.
+		// Убитый по контексту процесс отдаёт ExitError, но код у него
+		// платформенный: на Unix -1 (сигнал), на Windows — 1. Проверка
+		// «код < 0» работала только на Unix, а на Windows падение по
+		// таймауту молча выглядело как обычный FAIL с кодом 1. Сверка
+		// с ctx.Err() работает одинаково везде.
 		if cctx.Err() == context.DeadlineExceeded {
 			out.text += fmt.Sprintf("\n[таймаут %ds]", timeout)
 			out.exit = -1
+			return out, nil
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			out.exit = ee.ExitCode()
 			return out, nil
 		}
 		return out, err

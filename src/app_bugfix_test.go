@@ -99,7 +99,7 @@ func TestMissionPayloadStructured(t *testing.T) {
 // а не «FAIL (код -1)» без объяснения.
 func TestWatchTimeoutLabeled(t *testing.T) {
 	dir := t.TempDir()
-	_, code, timedOut := watchRunCommand(dir, "sleep 5", 300*time.Millisecond)
+	_, code, timedOut := watchRunCommand(dir, slowCmd(), 300*time.Millisecond)
 	if !timedOut {
 		t.Error("ожидалась пометка таймаута")
 	}
@@ -107,7 +107,7 @@ func TestWatchTimeoutLabeled(t *testing.T) {
 		t.Error("таймаут не должен считаться успехом")
 	}
 	// Успешная команда не помечается таймаутом.
-	_, code, timedOut = watchRunCommand(dir, "true", 5*time.Second)
+	_, code, timedOut = watchRunCommand(dir, shellCmd(0), 5*time.Second)
 	if code != 0 || timedOut {
 		t.Errorf("успешная команда: code=%d timedOut=%v", code, timedOut)
 	}

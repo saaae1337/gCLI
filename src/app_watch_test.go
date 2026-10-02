@@ -4,10 +4,14 @@ package main
 // Сам цикл с агентом не тестируется — он интерактивный.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"gcli/tools"
 )
 
 func TestWatchFileMapAndChange(t *testing.T) {
@@ -56,17 +60,54 @@ func TestWatchFileMapAndChange(t *testing.T) {
 	}
 }
 
+// shellCmd — команда с нужным кодом возврата для оболочки, которой
+// реально пойдёт watch.
+//
+// Тест не должен зависеть от платформы И от того, что машина думает
+// про оболочку: watch берёт tools.ShellCommand (на Windows это Git Bash,
+// если установлен, иначе cmd), и проверять надо именно его поведение.
+// Поэтому спрашиваем ту же функцию, а не подставляем синтаксис cmd.exe:
+// «exit /b 3» для Git Bash — не число, «exit 3» для cmd — тоже не выход.
+func shellCmd(code int) string {
+	shell, _ := tools.ShellCommand("")
+	if strings.Contains(strings.ToLower(shell), "cmd") {
+		return fmt.Sprintf("cmd /c exit /b %d", code)
+	}
+	return fmt.Sprintf("exit %d", code)
+}
+
+// slowCmd — команда, которая гарантированно живёт дольше таймаута.
+func slowCmd() string {
+	if strings.Contains(strings.ToLower(shellOf()), "cmd") {
+		return "ping -n 6 127.0.0.1 >nul"
+	}
+	return "sleep 5"
+}
+
+func shellOf() string {
+	shell, _ := tools.ShellCommand("")
+	return shell
+}
+
 func TestWatchRunCommand(t *testing.T) {
 	out, code, timedOut := watchRunCommand(t.TempDir(), "echo ok", time.Minute)
 	if code != 0 || timedOut || !containsStr(out, "ok") {
 		t.Fatalf("ok-команда: code=%d out=%q timeout=%v", code, out, timedOut)
 	}
-	out, code, _ = watchRunCommand(t.TempDir(), "echo boom >&2; exit 3", time.Minute)
-	if code != 3 {
-		t.Fatalf("код выхода: %d, out=%q", code, out)
+	// Код возврата должен доезжать честно: watch по нему решает, «чинить»
+	// или «всё зелёное». Раньше проверка ждала POSIX «exit 3», который
+	// под cmd.exe печатался как текст и давал код 0.
+	out, code, timedOut = watchRunCommand(t.TempDir(), shellCmd(3), time.Minute)
+	if code != 3 || timedOut {
+		t.Fatalf("код выхода: %d, out=%q, timeout=%v", code, out, timedOut)
 	}
-	if out2, _, timeout := watchRunCommand(t.TempDir(), "sleep 5", 300*time.Millisecond); timeout || out2 != "" {
-		_ = out2
+	// Таймаут: команда не успевает, флаг поднимается, успехом не считается.
+	out, code, timedOut = watchRunCommand(t.TempDir(), slowCmd(), 300*time.Millisecond)
+	if !timedOut {
+		t.Fatalf("ожидался таймаут: code=%d out=%q", code, out)
+	}
+	if code == 0 {
+		t.Fatalf("таймаут не должен считаться успехом: code=%d", code)
 	}
 }
 

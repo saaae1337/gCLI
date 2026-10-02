@@ -65,16 +65,28 @@ func TestVerifyCancelDoesNotTouchBaseline(t *testing.T) {
 }
 
 // TestVerifyTimeoutLabel — убитый по таймауту процесс помечается как
-// таймаут, а не как обычный код -1.
+// таймаут, а не как обычный код 1.
+//
+// Команда выбирается под платформу: под Windows «sleep» не существует и
+// падает мгновенно, а не по таймауту. Проверяется ветка runVerifyCmd,
+// а не наличие sleep в системе.
 func TestVerifyTimeoutLabel(t *testing.T) {
 	dir := t.TempDir()
 	r := New(Env{WorkDir: dir})
-	out, err := r.runVerifyCmd(context.Background(), "sleep 5", dir, 1)
+	slow := "sleep 5"
+	if runtime.GOOS == "windows" {
+		slow = "ping -n 6 127.0.0.1 >nul"
+	}
+	out, err := r.runVerifyCmd(context.Background(), slow, dir, 1)
 	if err != nil {
 		t.Fatalf("runVerifyCmd: %v", err)
 	}
 	if !strings.Contains(out.text, "таймаут") {
 		t.Errorf("в выводе нет пометки о таймауте: %q", out.text)
+	}
+	// Таймаут не должен выглядеть как обычный успешный код.
+	if out.exit != -1 {
+		t.Errorf("код таймаута должен быть -1, получили %d", out.exit)
 	}
 }
 

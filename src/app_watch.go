@@ -17,11 +17,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"gcli/core"
+	"gcli/tools"
 )
 
 // watchExcludes — что не считается изменением проекта. Тот же список
@@ -78,13 +78,16 @@ func watchChanged(old, new watchState) bool {
 
 // watchRunCommand — запустить проверку: вывод, код выхода, флаг таймаута.
 func watchRunCommand(dir, command string, timeout time.Duration) (string, int, bool) {
-	shell, flag := "sh", "-c"
-	if runtime.GOOS == "windows" {
-		shell, flag = "cmd", "/c"
-	}
+	// Оболочку берём общую с остальным проектом (tools.ShellCommand): на
+	// Windows это Git Bash, если он есть. Раньше здесь был жёсткий
+	// «cmd /c», и пользовательская команда вида gcli -watch "go test ./..."
+	// на Windows падала не из-за кода, а потому что cmd не понимает
+	// «./...» и «&». Теперь watch понимает ровно то же, что bash, verify
+	// и harness: один выбор оболочки на весь проект.
+	shell, args := tools.ShellCommand(command)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, shell, flag, command)
+	cmd := exec.CommandContext(ctx, shell, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	code := 0
