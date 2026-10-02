@@ -58,6 +58,11 @@ type app struct {
 	// выходом, чтобы не оставлять процессы-сироты gopls.
 	lsp *tools.LSPHub
 
+	// serveBus — шина SSE-событий для -serve. nil вне серверного режима:
+	// publish на nil-приёмнике безопасен, поэтому в TUI-режиме ничего
+	// не стоит проверять.
+	serveBus *serveBus
+
 	registry *providers.Registry
 	client   *providers.Client
 	prov     *providers.Provider
@@ -229,6 +234,8 @@ func main() {
 		flagObjective    = flag.String("objective", "", "цель прогона одной строкой")
 		flagStats        = flag.Bool("stats", false, "дашборд расходов по сессиям и выход")
 		flagWatch        = flag.String("watch", "", "режим слежения: команда проверки; упала — агент чинит (gcli -watch \"go test ./...\")")
+		flagServe        = flag.String("serve", "", "HTTP-сервер: адрес (127.0.0.1:8642); API: /v1/status, /v1/message, /v1/events")
+		flagServeToken   = flag.String("serve-token", "", "токен доступа для -serve (по умолчанию случайный)")
 	)
 	flag.Parse()
 
@@ -361,6 +368,16 @@ func main() {
 		a.runWatch(*flagWatch, 5)
 		a.closeMissionJournal()
 		a.saveSession()
+		return
+	}
+
+	// Serve: HTTP+SSE к тому же движку.
+	if *flagServe != "" {
+		a.serveBus = newServeBus()
+		if err := a.runServe(*flagServe, *flagServeToken); err != nil {
+			fmt.Fprintln(os.Stderr, "gcli serve:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -1278,11 +1295,20 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 			// Ctrl+O снова покажет накопленное.
 			a.closeThinkStream()
 			stream.Write(s)
+			// SSE-подписчикам /v1/events отдаём тот же поток: дельты —
+			// дешёвые события, медленный подписчик их не тормозит.
+			a.serveBus.publish("delta", s)
 		},
-		OnReason:    a.onReason,
-		OnToolStart: a.onToolStart,
-		OnToolDone:  a.onToolDone,
-		OnUsage:     a.onUsage,
+		OnReason: a.onReason,
+		OnToolStart: func(tc core.ToolCall, tool *tools.Tool) {
+			a.serveBus.publish("tool_start", tc.Name)
+			a.onToolStart(tc, tool)
+		},
+		OnToolDone: func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
+			a.serveBus.publish("tool_done", tc.Name)
+			a.onToolDone(tc, tool, res, err, elapsed)
+		},
+		OnUsage: a.onUsage,
 	}, a.workDir)
 	ag.WithAgentMode(a.sess.AgentMode)
 	ag.Notes = a.notesText()
