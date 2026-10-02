@@ -1,7 +1,7 @@
 {
   "name": "gcli-desktop",
   "productName": "gCLI",
-  "version": "6.2.0",
+  "version": "6.2.1",
   "description": "Десктоп-оболочка gCLI — тот же агент, тот же движок, фирменный стиль «УГОЛЬ»",
   "main": "main.js",
   "license": "MIT",

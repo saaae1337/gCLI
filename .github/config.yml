@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Вопрос по использованию
+    url: https://github.com/saaae1337/gCLI/discussions
+    about: Как настроить провайдера, что делает команда, как устроены прогоны.
+  - name: Целочисленная проверка кандидата
+    url: https://github.com/saaae1337/gCLI/releases
+    about: Пре-релизные сборки публикуются здесь — на них удобно ловить баги до релиза.

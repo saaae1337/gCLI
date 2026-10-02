@@ -1,0 +1,109 @@
+name: Release
+
+# Публикует релиз по тегу: кросс-сборка пяти платформ, SHA256SUMS.txt,
+# аннотированные заметки из CHANGELOG.md и черновик релиза на GitHub.
+#
+# Раньше единственный релиз на GitHub был v5.5.0, а тегов уже было семь:
+# «скачать и попробовать» было нечем, и README обещал бинарники в builds/,
+# которого в репозитории нет. Теперь релиз — это тег плюс вложения.
+on:
+  push:
+    tags: ["v*"]
+  # Ручной запуск: workflow_dispatch с выбором тега — чтобы пересобрать
+  # вложения релиза, не выпуская новую версию.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Существующий тег релиза, например v6.2.1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: собрать и опубликовать ${{ github.event.inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Проверка версии
+        run: |
+          # Тег должен совпадать с var Version в core/core.go: вложения
+          # названы по одному номеру, а -v внутри бинарника должен печатать
+          # тот же. Расхождение означало бы, что человек проверяет версию
+          # не того файла, который скачал.
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          ver=$(grep -oE '^var Version = "[^"]+"' src/core/core.go | grep -oE '[0-9][^"]*')
+          echo "тег: $tag, версия в коде: $ver"
+          if [ "$tag" != "v$ver" ]; then
+            echo "тег $tag не совпадает с версией v$ver в src/core/core.go" >&2
+            exit 1
+          fi
+
+      - name: Тесты
+        working-directory: src
+        run: go test -count=1 ./...
+
+      - name: Кросс-сборка
+        run: ./build.sh
+
+      - name: Проверка вложений
+        run: |
+          set -euo pipefail
+          n=$(ls builds/gcli-* | wc -l)
+          echo "собрано файлов: $n"
+          if [ "$n" -ne 5 ]; then
+            echo "ожидалось 5 платформ, собрано $n:" >&2
+            ls -la builds/ >&2
+            exit 1
+          fi
+          test -f builds/SHA256SUMS.txt || { echo "нет SHA256SUMS.txt" >&2; exit 1; }
+
+      - name: Заметки релиза из CHANGELOG
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          # Блок раздела этой версии из CHANGELOG.md — до следуого заголовка
+          # «## [» или конца файла. Заголовки вида «###» в блок входят.
+          awk -v want="## [$version]" '
+            $0 == want {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+            echo "в CHANGELOG.md нет раздела $version — релиз без заметок не публикуем" >&2
+            exit 1
+          fi
+          {
+            echo "# gcli $tag"
+            echo
+            cat /tmp/notes.md
+            echo
+            echo "---"
+            echo
+            echo "Установка: скачайте нужный файл и сверьте его с \`SHA256SUMS.txt\`."
+            echo "Из исходников: \`./build.sh one <os> <arch>\` (Go 1.21+, зависимостей нет)."
+          } > /tmp/release-notes.md
+          echo "--- заметки релиза ---"
+          cat /tmp/release-notes.md
+
+      - name: Черновик релиза на GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: gcli ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: /tmp/release-notes.md
+          draft: true
+          files: |
+            builds/gcli-*
+            builds/SHA256SUMS.txt

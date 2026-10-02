@@ -5,17 +5,20 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  # Новый пуш в ту же ветку отменяет предыдущий прогон: на одно место
+  # одновременно не толпимся, экономится минуты CI.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: go vet + go test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # Проект живёт на Windows, а пользователи собирают его и на Linux/macOS.
-        # Семантика путей на платформах различается — именно такие расхождения
-        # ловит только прогон тестов на обеих ОС (см. cmdguard и dedupePaths).
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  # Формат и vet — Linux, где переводы строк не шумят.
+  lint:
+    name: gofmt + go vet
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: src
@@ -26,8 +29,7 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: gofmt (только Linux — на Windows перевод строк шумит)
-        if: matrix.os == 'ubuntu-latest'
+      - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -39,8 +41,37 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+  # Тесты на трёх ОС. Проект живёт на Windows, а пользователи собирают его
+  # и на Linux/macOS: расхождения семантики путей (разделители, регистр,
+  # права) ловятся только прогоном на всех трёх.
+  test:
+    name: go test (${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
       - name: go test
         run: go test ./... -count=1
 
-      - name: go build (бинарник собирается)
+      # Гонки данных ловятся только под -race, и только если тесты
+      # действительно пишут в одни счётчики из горутин. Стоит дороже
+      # обычного прогона, поэтому гоняем на Linux и Windows: там жил
+      # проект, и там они уже находились.
+      - name: go test -race
+        if: matrix.os != 'macos-latest'
+        run: go test -race -count=1 ./...
+
+      - name: go build
         run: go build -o /tmp/gcli-check .
