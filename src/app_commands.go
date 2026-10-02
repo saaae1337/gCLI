@@ -95,6 +95,10 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdPlan(rest)
 	case "/undo":
 		a.cmdUndo()
+	case "/snapshots":
+		a.cmdSnapshots()
+	case "/revert":
+		a.cmdRevert(rest)
 	case "/copy":
 		a.cmdCopy()
 	case "/cls", "/clear-screen":
@@ -141,6 +145,7 @@ func (a *app) cmdHelp() {
 			{"/iters", "лимит итераций и продления хода; при прогоне — его расход"},
 			{"/todos", "план текущей задачи"},
 			{"/compact", "сжать историю диалога"},
+			{"/snapshots, /revert N", "снимки проекта по ходам; откат к снимку N"},
 		}},
 		{"Расширение", [][2]string{
 			{"/skills, /skill", "навыки; new, on|off, показать"},
@@ -1299,6 +1304,67 @@ func (a *app) cmdUndo() {
 		return
 	}
 	a.ui.Ok("undo: восстановлен " + core.RelToWD(a.workDir, cp.Path))
+}
+
+// cmdSnapshots — список теневых снимков проекта (старые сверху, как ходы).
+func (a *app) cmdSnapshots() {
+	if !core.SnapshotsAvailable() {
+		a.ui.Warn("git не найден в PATH — снимки недоступны")
+		return
+	}
+	if a.snapErr != nil {
+		a.ui.Warn("последняя ошибка снимков: " + a.snapErr.Error())
+	}
+	snaps, err := core.ListSnapshots(a.workDir)
+	if err != nil {
+		a.ui.Err("снимки: " + err.Error())
+		return
+	}
+	if len(snaps) == 0 {
+		a.ui.Info("снимков пока нет — они появляются после первого хода")
+		return
+	}
+	rows := make([][]string, 0, len(snaps))
+	for i, s := range snaps {
+		rows = append(rows, []string{
+			strconv.Itoa(i + 1), s.Time.Format("02.01 15:04"),
+			core.Truncate(core.OneLine(s.Subject), 52), core.Truncate(s.Hash, 8),
+		})
+	}
+	a.ui.Table([]ui.Column{
+		{Title: "#", Width: 4, Right: true}, {Title: "время", Width: 11},
+		{Title: "ход", Width: 54}, {Title: "снимок", Width: 8},
+	}, rows, ui.BlockOpts{Title: "Снимки проекта"})
+	a.ui.Println("  " + a.ui.Gray("откатить: /revert <номер> — проект вернётся к состоянию хода"))
+}
+
+// cmdRevert — откатить проект к снимку N из /snapshots.
+// Откат сам откатываем: текущее состояние фиксируется снимком,
+// а точка ухода остаётся на ветке keep/pre-revert (тоже видна в списке).
+func (a *app) cmdRevert(rest string) {
+	n, err := strconv.Atoi(strings.TrimSpace(rest))
+	if err != nil || n < 1 {
+		a.ui.Warn("укажи номер снимка из /snapshots: /revert 3")
+		return
+	}
+	snaps, err := core.ListSnapshots(a.workDir)
+	if err != nil {
+		a.ui.Err("снимки: " + err.Error())
+		return
+	}
+	if n > len(snaps) {
+		a.ui.Warn(fmt.Sprintf("снимка №%d нет — всего их %d (/snapshots)", n, len(snaps)))
+		return
+	}
+	target := snaps[n-1]
+	snap, err := core.RestoreSnapshot(a.workDir, target.Hash)
+	if err != nil {
+		a.ui.Err("откат не удался: " + err.Error())
+		return
+	}
+	a.ui.Ok(fmt.Sprintf("проект откачен к снимку №%d «%s» (%s)",
+		n, core.OneLine(snap.Subject), snap.Time.Format("02.01 15:04")))
+	a.ui.Info("состояние на момент отката сохранено: /snapshots → ветка keep/pre-revert")
 }
 
 func (a *app) saveConfig() { _ = a.repo.SaveConfig() }

@@ -185,6 +185,12 @@ type app struct {
 	// Пишет только finishReason (конец хода): внутри хода Ctrl+O смотрит на
 	// reasonBuf, так что гасить прошлый блок на каждом куске незачем.
 	reasonLast string
+
+	// snapErr — последняя ошибка теневых снимков. Снимок — страховка, а не
+	// критический путь: ошибка не ломает ход, но /snapshots должен показать,
+	// почему страховки нет, иначе человек узнает о ней только при попытке
+	// откатиться — слишком поздно.
+	snapErr error
 }
 
 // reasonHint — подсказка на строке ожидания.
@@ -201,6 +207,7 @@ func main() {
 		flagAgent        = flag.String("agent", "", "агентный режим: on | off")
 		flagYolo         = flag.Bool("yolo", false, "не спрашивать подтверждений (кроме опасных команд)")
 		flagSandbox      = flag.String("sandbox", "", "песочница файлов: on | off (ограничить доступ рабочим каталогом)")
+		flagSnapshots    = flag.String("snapshots", "", "теневые снимки проекта на каждый ход: on | off (откат — /revert)")
 		flagAutopilot    = flag.String("autopilot", "", "автопилот: on | off (сам одобряет безопасные действия)")
 		flagAutopilotAll = flag.String("autopilot-all", "", "автопилот повышенного риска: on | off (одобряет всё)")
 		flagSetup        = flag.Bool("setup", false, "мастер настройки: провайдер → ключ → модель")
@@ -239,6 +246,10 @@ func main() {
 	// Флаги переопределяют конфиг.
 	if *flagSubagent != "" {
 		a.repo.Cfg.Subagents = *flagSubagent != "off"
+	}
+	if *flagSnapshots != "" {
+		on := *flagSnapshots == "on"
+		a.repo.Cfg.Snapshots = &on
 	}
 	// Песочница включается флагом или переменной окружения. Сначала
 	// собираем Env: без него buildTools не увидит песочницу.
@@ -780,10 +791,10 @@ func (a *app) notesText() string {
 //
 // Правила показа, коротко:
 //
-//	состояние           meaning
-//	reasonLive          пользователь хочет видеть размышления (Ctrl+O)
-//	reasonOpen          на экране открыт поток (маркер напечатан)
-//	reasonPrintedLen    сколько байт буфера уже на экране
+//      состояние           meaning
+//      reasonLive          пользователь хочет видеть размышления (Ctrl+O)
+//      reasonOpen          на экране открыт поток (маркер напечатан)
+//      reasonPrintedLen    сколько байт буфера уже на экране
 //
 // Печать всегда под reasonPrint: ею пользуются и стриминг, и Ctrl+O.
 // reasonOpen держим честным — он равен «маркер напечатан и ещё не закрыт»,
@@ -1135,6 +1146,15 @@ func (a *app) turn(text string) error {
 	text = tools.ApplyMentions(a.workDir, text)
 	if a.sess.Title == "" {
 		a.sess.Title = core.Truncate(core.OneLine(text), 60)
+	}
+
+	// Снимок проекта до начала хода: /revert должен уметь откатить и
+	// «плохой» ход целиком — включая правки, сделанные bash-командами,
+	// мимо чекпоинтов /undo. Ошибка не ломает ход: снапшоты — страховка.
+	if a.repo.Cfg.SnapshotsEnabled() {
+		if _, _, err := core.TakeSnapshot(a.workDir, text); err != nil {
+			a.snapErr = err
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

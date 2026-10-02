@@ -241,6 +241,13 @@ type Config struct {
 	// вопроса «/sandbox off».
 	Sandbox SandboxMode `json:"sandbox,omitempty"`
 
+	// Snapshots — теневые снимки проекта на каждый ход (nil = включены).
+	// Снимок — коммит в .gcli/snapshots.git, не трогает .git проекта.
+	// Выключать стоит на огромных репозиториях, где «add -A» на каждый
+	// ход заметно тормозит; без git в PATH механика и так отключается
+	// сама. Откат — /revert, список — /snapshots.
+	Snapshots *bool `json:"snapshots,omitempty"`
+
 	// Permissions — правила разрешений для этого запуска (allow/ask/deny).
 	//
 	// Поле необязательное: у человека, который правил конфиг только
@@ -303,6 +310,9 @@ func DefaultConfig() Config {
 
 // SandboxEnabled — действует ли песочница при этом значении поля.
 func (c Config) SandboxEnabled() bool { return c.Sandbox != SandboxOff }
+
+// SnapshotsEnabled — снимать ли проект на каждый ход (nil = включено).
+func (c Config) SnapshotsEnabled() bool { return c.Snapshots == nil || *c.Snapshots }
 
 // SandboxMode — разобрать режим из строки флага/переменной окружения.
 // Допускает всё, чем писали в этой опции раньше (on/off/1/0/true/false).
