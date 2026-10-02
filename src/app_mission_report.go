@@ -14,7 +14,6 @@ package main
 // человек идёт в сессию и в историю диалога.
 
 import (
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -228,8 +227,12 @@ func (a *app) missionReport() {
 		TailOK:   tailOK,
 	})
 
+	// WriteAtomic, а не os.WriteFile: каталог .gcli появляется только если
+	// человек что-то уже запускал. Отчёт, запрошенный первым же действием в
+	// свежем проекте, обязан создаться — иначе /mission report отказывал с
+	// «не найден путь» ровно тогда, когда он нужнее всего.
 	path := MissionReportPath(a.workDir)
-	if err := os.WriteFile(path, []byte(rep), 0o644); err != nil {
+	if err := core.WriteAtomic(path, []byte(rep), 0o644); err != nil {
 		a.ui.Err("отчёт не записан: " + err.Error())
 		return
 	}

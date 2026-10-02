@@ -85,14 +85,18 @@ func (a *app) setupMission(mode, deadline, budget, objective, path string) error
 }
 
 // loadMissionFile — прочитать задание из произвольного пути.
+//
+// Принимается и файл, и каталог проекта. Каталог ищется и среди
+// относительных, и среди абсолютных путей: -mission . внутри проекта и
+// -mission C:\gcli\source\gcli должны означать одно и то же, а раньше
+// абсолютный каталог читался как файл и падал «Incorrect function».
 func loadMissionFile(path string) (core.Mission, error) {
 	abs := path
 	if !filepath.IsAbs(abs) {
-		if f, err := os.Stat(abs); err == nil && f.IsDir() {
-			abs = filepath.Join(abs, ".gcli", "mission.json")
-		} else {
-			abs = filepath.Join(a0WorkDir(), abs)
-		}
+		abs = filepath.Join(a0WorkDir(), abs)
+	}
+	if f, err := os.Stat(abs); err == nil && f.IsDir() {
+		abs = filepath.Join(abs, ".gcli", "mission.json")
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
