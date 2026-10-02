@@ -221,7 +221,7 @@ func (a *app) missionReport() {
 
 	rep := buildMissionReport(missionReportData{
 		Mission:  a.mission,
-		Tracker:  a.missionTr,
+		Tracker:  a.currentMissionTr(),
 		State:    st,
 		HasState: hasState,
 		Records:  recs,

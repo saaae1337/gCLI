@@ -270,7 +270,12 @@ func mcpSrvPrompt(workdir, prompt string, timeout time.Duration) (string, error)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "-p", "-json", prompt)
+	// Аргументы именно в таком порядке: -p поглощает следующий аргумент как
+	// значение, и «-p -json <промпт>» запускал ход с текстом «-json»,
+	// молча выбрасывая настоящий промпт. -yolo — как и обещает документация
+	// bench и gcli_prompt: изолированный ребёнок сам одобряет обычные
+	// действия, иначе задачи с файлами и командами падали всегда.
+	cmd := exec.CommandContext(ctx, exe, "-json", "-yolo", "-p", prompt)
 	cmd.Dir = workdir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

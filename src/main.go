@@ -1369,14 +1369,16 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 		OnReason: a.onReasonPub,
 		OnToolStart: func(tc core.ToolCall, tool *tools.Tool) {
 			a.serveBus.publish("tool_start", map[string]any{
-				"name": tc.Name, "args": shortArgs(tc), "kind": tool.Category,
+				// id нужен оболочке: карточки по имени склеивались,
+				// когда модель звала один инструмент дважды параллельно.
+				"id": tc.ID, "name": tc.Name, "args": shortArgs(tc), "kind": tool.Category,
 			})
 			a.onToolStart(tc, tool)
 		},
 		OnToolDone: func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
 			status, detail := serveToolStatus(res, err)
 			a.serveBus.publish("tool_done", map[string]any{
-				"name": tc.Name, "status": status,
+				"id": tc.ID, "name": tc.Name, "status": status,
 				"detail":     core.Truncate(core.OneLine(detail), 200),
 				"elapsed_ms": elapsed.Milliseconds(),
 			})
@@ -1530,7 +1532,12 @@ func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, e
 
 func (a *app) onUsage(u core.Usage, d time.Duration) {
 	// Метрики считаются всегда: на них построены /status и /usage.
+	// Токены сессии уже учёл Session.AddUsage (agent.callModel); здесь —
+	// только статистика, но тоже под sessMu: субагенты параллельно
+	// отчитываются, и RecordRequest крутит общие счётчики сессии.
+	sessMu.Lock()
 	a.sess.Stats.RecordRequest(u, d)
+	sessMu.Unlock()
 	if a.quiet {
 		return
 	}

@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -125,7 +126,13 @@ func (r *Repo) SaveSession(s *Session) error {
 }
 
 // LoadSession — загрузить сессию по id.
+//
+// id валидируется: он приходит и из HTTP (?session=...), а «../../x» без
+// проверки превращал LoadSession в оракул по json-файлам машины.
 func (r *Repo) LoadSession(id string) (*Session, error) {
+	if !validSessionID(id) {
+		return nil, fmt.Errorf("плохой id сессии: %q", id)
+	}
 	if !strings.HasSuffix(id, ".json") {
 		id += ".json"
 	}
@@ -164,8 +171,27 @@ func (r *Repo) ListSessions() []Session {
 
 // DeleteSession — удалить сессию и её чекпоинты.
 func (r *Repo) DeleteSession(id string) error {
+	if !validSessionID(id) {
+		return fmt.Errorf("плохой id сессии: %q", id)
+	}
 	_ = os.RemoveAll(filepath.Join(r.Store.Checkpoints(), id))
 	return os.Remove(filepath.Join(r.Store.Sessions(), id+".json"))
+}
+
+// validSessionID — id сессии из сети: только безопасные для имени файла
+// символы, без разделителей и «..».
+func validSessionID(id string) bool {
+	if id == "" || len(id) > 64 || strings.Contains(id, "..") ||
+		strings.ContainsAny(id, `/\:`) || strings.HasPrefix(id, ".") {
+		return false
+	}
+	for _, r := range id {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // PruneSessions — оставить последние keep сессий, удалить остальные.

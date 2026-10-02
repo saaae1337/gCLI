@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -543,6 +544,13 @@ func MissionDoc(m Mission) string {
 // now подменяется в тестах: проверять дедлайн через настоящие часы
 // значит ждать четыре часа.
 type Tracker struct {
+	// mu — сериализует доступ к счётчикам. Записывают их две стороны:
+	// агентный цикл (Tick/ChargeTokens/Resume) и человек через HTTP
+	// (Stop из /v1/mission/stop, чтение Iters/Spent в /v1/status и при
+	// сохранении состояния). Без мьютекса это гонка на остановке: строка
+	// stopped — два машинных слова, порванная запись читается мусором.
+	mu sync.Mutex
+
 	m     Mission
 	now   func() time.Time
 	start time.Time
@@ -614,6 +622,8 @@ func (t *Tracker) SetClock(now func() time.Time) {
 	if t == nil || now == nil {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.now = now
 }
 
@@ -626,6 +636,8 @@ func (t *Tracker) WithModel(providerID, model string) *Tracker {
 	if t == nil {
 		return t
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.providerID = providerID
 	t.model = model
 	return t
@@ -642,8 +654,12 @@ func (t *Tracker) Elapsed() time.Duration {
 	if t == nil {
 		return 0
 	}
-	return t.now().Sub(t.start)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.elapsed()
 }
+
+func (t *Tracker) elapsed() time.Duration { return t.now().Sub(t.start) }
 
 // Left — сколько осталось до дедлайна. Отрицательное значение означает,
 // что срок вышел: показывать его надо честно, вместе с «просрочено».
@@ -651,7 +667,16 @@ func (t *Tracker) Left() time.Duration {
 	if t == nil || t.m.Deadline <= 0 {
 		return 0
 	}
-	return t.m.Deadline.D() - t.Elapsed()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.left()
+}
+
+func (t *Tracker) left() time.Duration {
+	if t.m.Deadline <= 0 {
+		return 0
+	}
+	return t.m.Deadline.D() - t.elapsed()
 }
 
 // Overdue — на сколько просрочен прогон.
@@ -659,34 +684,77 @@ func (t *Tracker) Overdue() time.Duration {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	// Строгое «< 0»: на самой границе срока просрочки ещё нет, есть
 	// факт достижения дедлайна, который показывает Status.
-	if l := t.Left(); l < 0 {
+	if l := t.left(); l < 0 {
 		return -l
 	}
 	return 0
 }
 
 // Iters — выполнено итераций за прогон.
-func (t *Tracker) Iters() int { return t.iters }
+func (t *Tracker) Iters() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.iters
+}
 
 // ToolCalls — выполнено вызовов инструментов за прогон.
-func (t *Tracker) ToolCalls() int { return t.toolCalls }
+func (t *Tracker) ToolCalls() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.toolCalls
+}
 
 // Spent — расход токенов за прогон (без того, что было до старта).
-func (t *Tracker) Spent() int { return t.tokens }
+func (t *Tracker) Spent() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.tokens
+}
 
 // Checkpoints — сколько раз сохраняли состояние.
-func (t *Tracker) Checkpoints() int { return t.checkpoints }
+func (t *Tracker) Checkpoints() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.checkpoints
+}
 
 // Stopped — причина остановки (пусто, если ещё идёт).
-func (t *Tracker) Stopped() string { return t.stopped }
+func (t *Tracker) Stopped() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped
+}
 
 // Stop — записать причину остановки.
 func (t *Tracker) Stop(reason string) string {
 	if t == nil {
 		return reason
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stop(reason)
+}
+
+func (t *Tracker) stop(reason string) string {
 	if t.stopped == "" {
 		t.stopped = reason
 	}
@@ -694,10 +762,26 @@ func (t *Tracker) Stop(reason string) string {
 }
 
 // Done — остановлен ли прогон.
-func (t *Tracker) Done() bool { return t != nil && t.stopped != "" }
+func (t *Tracker) Done() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped != ""
+}
+
+func (t *Tracker) done() bool { return t.stopped != "" }
 
 // VerifyAsked — сколько раз требовали проверку критериев.
-func (t *Tracker) VerifyAsked() int { return t.verifyAsked }
+func (t *Tracker) VerifyAsked() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.verifyAsked
+}
 
 // NeedVerify — пора ли требовать проверку критериев перед остановкой.
 //
@@ -707,7 +791,12 @@ func (t *Tracker) VerifyAsked() int { return t.verifyAsked }
 // агент, который честно не может выполнить критерий, будет требовать
 // проверки до бесконечности и сожжёт весь бюджет.
 func (t *Tracker) NeedVerify() bool {
-	if t == nil || t.Done() {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped != "" {
 		return false
 	}
 	// Поле напрямую, а не через t.m.Verify(): при nil-трекере вызов
@@ -723,6 +812,8 @@ func (t *Tracker) AskVerify() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.verifyAsked++
 	return t.verifyAsked
 }
@@ -744,6 +835,8 @@ func (t *Tracker) Tick(iters, toolCalls, sessionTokens int) string {
 	if t == nil {
 		return ""
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.stopped != "" {
 		return t.stopped
 	}
@@ -755,14 +848,19 @@ func (t *Tracker) Tick(iters, toolCalls, sessionTokens int) string {
 		t.tokens = sessionTokens - t.spentBefore
 	}
 	if reason := t.checkBudgets(); reason != "" {
-		return t.Stop(reason)
+		return t.stop(reason)
 	}
 	return ""
 }
 
 // ChargeTokens — обновить расход токенов без сдвига итерации.
 func (t *Tracker) ChargeTokens(sessionTokens int) {
-	if t == nil || sessionTokens <= t.spentBefore {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if sessionTokens <= t.spentBefore {
 		return
 	}
 	t.tokens = sessionTokens - t.spentBefore
@@ -785,6 +883,8 @@ func (t *Tracker) Resume(iters, toolCalls, tokens int) {
 	if t == nil {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if iters > t.iters {
 		t.iters = iters
 	}
@@ -796,7 +896,8 @@ func (t *Tracker) Resume(iters, toolCalls, tokens int) {
 	}
 }
 
-// checkBudgets — потолки, каждый на своём месте.
+// checkBudgets — потолки, каждый на своём месте. Вызывается только из
+// Tick под mu.
 func (t *Tracker) checkBudgets() string {
 	if t.m.Deadline > 0 && t.now().Sub(t.start) >= t.m.Deadline.D() {
 		return StopDeadline
@@ -811,7 +912,7 @@ func (t *Tracker) checkBudgets() string {
 		return StopTokens
 	}
 	if t.m.CostBudget > 0 {
-		if c := t.Cost("", ""); c > 0 && c >= t.m.CostBudget {
+		if c := t.cost(); c > 0 && c >= t.m.CostBudget {
 			return StopCost
 		}
 	}
@@ -829,10 +930,28 @@ func (t *Tracker) Cost(providerID, model string) float64 {
 	if t == nil || t.m.CostBudget <= 0 {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if providerID == "" && model == "" {
 		providerID, model = t.providerID, t.model
 	}
 	price, ok := ModelPrice(providerID, model)
+	if !ok {
+		return 0
+	}
+	return price.Cost(Usage{
+		PromptTokens:     t.tokens / 2,
+		CompletionTokens: t.tokens - t.tokens/2,
+	})
+}
+
+// cost — стоимость по вендору и модели, заданным при старте (внутренняя:
+// вызывается под mu, например из checkBudgets).
+func (t *Tracker) cost() float64 {
+	if t.m.CostBudget <= 0 {
+		return 0
+	}
+	price, ok := ModelPrice(t.providerID, t.model)
 	if !ok {
 		return 0
 	}
@@ -847,12 +966,23 @@ func (t *Tracker) Progress() {
 	if t == nil {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.lastProgress = t.iters
 }
 
 // Stalled — стоит ли работа в застое.
 func (t *Tracker) Stalled() bool {
-	if t == nil || t.m.StallLimit <= 0 || t.Done() {
+	if t == nil || t.m.StallLimit <= 0 {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stalled()
+}
+
+func (t *Tracker) stalled() bool {
+	if t.m.StallLimit <= 0 || t.stopped != "" {
 		return false
 	}
 	return t.iters-t.lastProgress >= t.m.StallLimit
@@ -869,7 +999,16 @@ const stallHardFactor = 3
 
 // StallHard — застой перерос в повод остановить прогон.
 func (t *Tracker) StallHard() bool {
-	if t == nil || t.m.StallLimit <= 0 || t.Done() {
+	if t == nil || t.m.StallLimit <= 0 {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stallHard()
+}
+
+func (t *Tracker) stallHard() bool {
+	if t.m.StallLimit <= 0 || t.stopped != "" {
 		return false
 	}
 	return t.iters-t.lastProgress >= t.m.StallLimit*stallHardFactor
@@ -881,6 +1020,8 @@ func (t *Tracker) StallWarned() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.stallWarned
 }
 
@@ -889,6 +1030,8 @@ func (t *Tracker) WarnStall() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.stallWarned++
 	return t.stallWarned
 }
@@ -908,16 +1051,18 @@ const maxContinues = 5
 // прогоны без критериев приёмки вообще не трогаются — там «модель
 // закончила» означает ровно то, что написано.
 func (t *Tracker) CanContinue() bool {
-	if t == nil || t.Done() {
+	if t == nil {
 		return false
 	}
-	if t.continued >= maxContinues {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped != "" || t.continued >= maxContinues {
 		return false
 	}
 	if !t.m.Long() && !t.m.HasAcceptance() {
 		return false
 	}
-	return !t.StallHard()
+	return !t.stallHard()
 }
 
 // Continued — отметить, что попросили продолжить, и вернуть номер попытки.
@@ -925,6 +1070,8 @@ func (t *Tracker) Continued() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.continued++
 	return t.continued
 }
@@ -934,6 +1081,8 @@ func (t *Tracker) Continues() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.continued
 }
 
@@ -942,6 +1091,8 @@ func (t *Tracker) CheckpointDue() bool {
 	if t == nil {
 		return false
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	n := t.m.CheckpointEvery
 	if n <= 0 {
 		return false
@@ -951,9 +1102,12 @@ func (t *Tracker) CheckpointDue() bool {
 
 // CountCheckpoint — зафиксировать сохранение.
 func (t *Tracker) CountCheckpoint() {
-	if t != nil {
-		t.checkpoints++
+	if t == nil {
+		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.checkpoints++
 }
 
 // ---------- Приглашение к продолжению ----------
@@ -969,6 +1123,8 @@ func (t *Tracker) MarkResumeShown() int {
 	if t == nil {
 		return 0
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.resumeShown = true
 	return 1
 }
@@ -978,7 +1134,12 @@ func (t *Tracker) MarkResumeShown() int {
 // Состояние долговременное: переживает и ход, и перезапуск процесса,
 // потому что лежит рядом со счётчиками прогона.
 func (t *Tracker) ResumeShown() bool {
-	return t != nil && t.resumeShown
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.resumeShown
 }
 
 // SelfLine — строка о прогоне для self_status.
@@ -994,8 +1155,10 @@ func (t *Tracker) SelfLine() string {
 	if t == nil {
 		return ""
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var b strings.Builder
-	if st := t.Status(); st != "" {
+	if st := t.status(); st != "" {
 		b.WriteString(st)
 	}
 	parts := func(s string) {
@@ -1049,13 +1212,19 @@ func (t *Tracker) Status() string {
 	if t == nil {
 		return ""
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.status()
+}
+
+func (t *Tracker) status() string {
 	var b strings.Builder
 	if t.m.Deadline > 0 {
-		left := t.Left()
+		left := t.left()
 		if left < 0 {
 			fmt.Fprintf(&b, "время: просрочено на %s", FormatDur(-left))
 		} else {
-			fmt.Fprintf(&b, "время: %s из %s", FormatDur(t.Elapsed()), t.m.Deadline.String())
+			fmt.Fprintf(&b, "время: %s из %s", FormatDur(t.elapsed()), t.m.Deadline.String())
 		}
 	}
 	if t.m.MaxIters > 0 {

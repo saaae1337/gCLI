@@ -137,7 +137,7 @@ func (a *app) distillMissionSkill() {
 	st, hasState, _ := core.LoadMissionState(core.MissionStatePath(a.workDir))
 	d := missionReportData{
 		Mission:  a.mission,
-		Tracker:  a.missionTr,
+		Tracker:  a.currentMissionTr(),
 		State:    st,
 		HasState: hasState,
 		Records:  recs,

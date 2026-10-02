@@ -10,12 +10,12 @@ package main
 //
 // Принципы:
 //
-//	- оболочка встраивается в бинарник (go:embed) — gcli самодостаточен;
-//	- страница /ui/ отдаётся без токена: в ней нет данных. Все данные —
-//	  под /v1/* и по-прежнему закрыты токеном; оболочка спрашивает токен
-//	  у пользователя и держит его в localStorage;
-//	- никакого сборочного конвейера: ванильный HTML+CSS+JS, работают
-//	  десять лет спустя.
+//      - оболочка встраивается в бинарник (go:embed) — gcli самодостаточен;
+//      - страница /ui/ отдаётся без токена: в ней нет данных. Все данные —
+//        под /v1/* и по-прежнему закрыты токеном; оболочка спрашивает токен
+//        у пользователя и держит его в localStorage;
+//      - никакого сборочного конвейера: ванильный HTML+CSS+JS, работают
+//        десять лет спустя.
 
 import (
 	"embed"
@@ -58,17 +58,30 @@ func (s *serveServer) handleUIRedirect(w http.ResponseWriter, r *http.Request) {
 // ?session=<id> — любая из списка (/v1/sessions). Служебные сообщения
 // (Hidden) не отдаём: их видел только агент.
 func (s *serveServer) handleHistory(w http.ResponseWriter, r *http.Request) {
-	sess := s.a.sess
-	if id := r.URL.Query().Get("session"); id != "" {
+	var msgsSrc []core.Message
+	var id, title string
+	var agentMode bool
+	if id = r.URL.Query().Get("session"); id != "" {
+		if !validSessionID(id) {
+			jsonWrite(w, http.StatusBadRequest, map[string]string{"error": "плохой id сессии"})
+			return
+		}
 		loaded, err := s.a.repo.LoadSession(id)
 		if err != nil {
 			jsonWrite(w, http.StatusNotFound, map[string]string{"error": "сессия не найдена: " + id})
 			return
 		}
-		sess = loaded
+		msgsSrc, id, title, agentMode = loaded.Messages, loaded.ID, loaded.Title, loaded.AgentMode
+	} else {
+		// Снимок под sessMu: ход параллельно добавляет сообщения,
+		// и чтение слайса без блокировки — гонка с append.
+		sessMu.Lock()
+		msgsSrc = append([]core.Message(nil), s.a.sess.Messages...)
+		id, title, agentMode = s.a.sess.ID, s.a.sess.Title, s.a.sess.AgentMode
+		sessMu.Unlock()
 	}
-	msgs := make([]map[string]any, 0, len(sess.Messages))
-	for _, m := range sess.Messages {
+	msgs := make([]map[string]any, 0, len(msgsSrc))
+	for _, m := range msgsSrc {
 		if m.Hidden {
 			continue
 		}
@@ -84,7 +97,7 @@ func (s *serveServer) handleHistory(w http.ResponseWriter, r *http.Request) {
 			// финальный текст: оболочка показывает их свёрнутым блоком.
 			tcs := make([]map[string]string, 0, len(m.ToolCalls))
 			for _, tc := range m.ToolCalls {
-				tcs = append(tcs, map[string]string{"name": tc.Name, "args": tc.Args})
+				tcs = append(tcs, map[string]string{"id": tc.ID, "name": tc.Name, "args": tc.Args})
 			}
 			if len(tcs) > 0 {
 				entry["tool_calls"] = tcs
@@ -100,9 +113,28 @@ func (s *serveServer) handleHistory(w http.ResponseWriter, r *http.Request) {
 		msgs = append(msgs, entry)
 	}
 	jsonWrite(w, http.StatusOK, map[string]any{
-		"id": sess.ID, "title": sess.Title, "agent_mode": sess.AgentMode,
+		"id": id, "title": title, "agent_mode": agentMode,
 		"messages": msgs,
 	})
+}
+
+// validSessionID — id сессии от сети: только безопасные символы.
+//
+// filepath.Join чистит «..», но id с разделителями и без расширения .json
+// мог бы дотянуться до соседних файлов; проще отказать всё, что не похоже
+// на имя файла сессии.
+func validSessionID(id string) bool {
+	if id == "" || len(id) > 64 || strings.Contains(id, "..") ||
+		strings.ContainsAny(id, `/\:`) || strings.HasPrefix(id, ".") {
+		return false
+	}
+	for _, r := range id {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // runUI — поднять сервер и открыть оболочку в браузере.

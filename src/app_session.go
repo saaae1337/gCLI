@@ -23,8 +23,14 @@ var sessMu sync.Mutex
 func (a *app) Messages() []core.Message { return a.sess.Messages }
 
 // AddMessage — добавить сообщение в историю.
+//
+// Под sessMu: /v1/history и /v1/status читают Messages из HTTP-горутин,
+// пока ход добавляет сообщения, — без блокировки это гонка чтения-записи
+// на слайсе (второй клиент или вкладка, история в момент хода).
 func (a *app) AddMessage(m core.Message) {
+	sessMu.Lock()
 	a.sess.Messages = append(a.sess.Messages, m)
+	sessMu.Unlock()
 	// Завершаем потоковый вывод, чтобы новая реплика начиналась с чистой строки.
 	if a.stream != nil {
 		a.stream.End()
@@ -32,7 +38,11 @@ func (a *app) AddMessage(m core.Message) {
 }
 
 // ReplaceMessages — заменить историю (используется при сжатии).
-func (a *app) ReplaceMessages(msgs []core.Message) { a.sess.Messages = msgs }
+func (a *app) ReplaceMessages(msgs []core.Message) {
+	sessMu.Lock()
+	a.sess.Messages = msgs
+	sessMu.Unlock()
+}
 
 // AddUsage — учесть расход токенов.
 func (a *app) AddUsage(u core.Usage) {
@@ -315,17 +325,30 @@ func (a *app) readAns(allowAlways, allowAll bool) int {
 		if !a.stdin.Scan() {
 			return confirmNo
 		}
-		switch strings.ToLower(strings.TrimSpace(a.stdin.Text())) {
+		// Сравнение с исходным регистром внутри: «A» (заглавная) — «все»,
+		// «a» — «всегда». ToLower целиком делал «A» недостижимой веткой,
+		// и пользователь получал более слабое «всегда» молча.
+		raw := strings.TrimSpace(a.stdin.Text())
+		low := strings.ToLower(raw)
+		switch low {
 		case "y", "д", "да", "yes", "1":
 			return confirmYes
 		case "n", "н", "нет", "no", "0", "":
 			return confirmNo
 		case "a", "а", "в", "всегда", "always":
+			if raw == "A" || raw == "А" {
+				// Заглавная A/А — «все», если она вообще предложена.
+				if allowAll {
+					return confirmAll
+				}
+				a.ui.Println(a.ui.Gray("    «все» недоступно; ответь y или n"))
+				continue
+			}
 			if allowAlways {
 				return confirmAlways
 			}
 			a.ui.Println(a.ui.Gray("    недоступно; ответь y или n"))
-		case "A", "all", "все", "всё":
+		case "all", "все", "всё":
 			if allowAll {
 				return confirmAll
 			}

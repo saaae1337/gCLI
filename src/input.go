@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -37,7 +38,12 @@ type stdinReader struct {
 
 	// raw — включён ли точечный raw-режим терминала. Читается на каждый
 	// байт, поэтому atomic: включение случается после старта горутины.
-	raw     atomic.Bool
+	raw atomic.Bool
+	// rawMu — сериализует включение/выключение raw-режима: обработчик Ctrl+C
+	// зовёт disableRaw из своей горутины, и без мьютекса он мог бы
+	// проскочить между включением терминала и установкой restore —
+	// тогда restore оставался бы nil и терминал оставался «слепым».
+	rawMu   sync.Mutex
 	restore func() // возврат терминала в исходный режим; nil, если raw не включался
 
 	// out — куда печатать эхо в raw-режиме. nil = os.Stdout; в тестах — буфер.
@@ -70,7 +76,12 @@ func (s *stdinReader) Keys() <-chan byte { return s.keys }
 // (пайп, файл), raw молча не включается: построчный ввод работает как
 // раньше, горячие клавиши просто ждут Enter, как и до raw-режима.
 func (s *stdinReader) enableRaw() {
-	if s == nil || s.raw.Swap(true) {
+	if s == nil {
+		return
+	}
+	s.rawMu.Lock()
+	defer s.rawMu.Unlock()
+	if s.raw.Swap(true) {
 		return
 	}
 	restore, ok := makeRawStdin()
@@ -88,7 +99,12 @@ func (s *stdinReader) enableRaw() {
 // где ввод не виден. Поэтому её зовут и defer в main, и обработчик сигнала
 // перед os.Exit.
 func (s *stdinReader) disableRaw() {
-	if s == nil || !s.raw.Swap(false) {
+	if s == nil {
+		return
+	}
+	s.rawMu.Lock()
+	defer s.rawMu.Unlock()
+	if !s.raw.Swap(false) {
 		return
 	}
 	if s.restore != nil {

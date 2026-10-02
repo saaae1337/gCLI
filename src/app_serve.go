@@ -180,8 +180,8 @@ func (s *serveServer) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"work_dir":   s.a.workDir,
 		"session":    s.a.sess.ID,
 	}
-	if s.a.missionTr != nil {
-		resp["mission"] = s.a.missionTr.Status()
+	if tr := s.a.currentMissionTr(); tr != nil {
+		resp["mission"] = tr.Status()
 	}
 	jsonWrite(w, http.StatusOK, resp)
 }
@@ -262,11 +262,7 @@ func (s *serveServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 func (s *serveServer) handleMission(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		resp := map[string]any{"mission": s.a.mission.Summary()}
-		if s.a.missionTr != nil {
-			resp["status"] = s.a.missionTr.Status()
-		}
-		jsonWrite(w, http.StatusOK, resp)
+		jsonWrite(w, http.StatusOK, missionPayload(s.a))
 	case http.MethodPost:
 		var req struct {
 			Mode      string `json:"mode"`
@@ -281,10 +277,39 @@ func (s *serveServer) handleMission(w http.ResponseWriter, r *http.Request) {
 		args := strings.TrimSpace(strings.Join([]string{
 			req.Mode, req.Deadline, req.Budget, req.Objective}, " "))
 		s.a.missionStart(args)
-		jsonWrite(w, http.StatusOK, map[string]any{"mission": s.a.mission.Summary()})
+		jsonWrite(w, http.StatusOK, missionPayload(s.a))
 	default:
 		jsonWrite(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET или POST"})
 	}
+}
+
+// missionPayload — задание и живое состояние прогона в структурированном
+// виде. Раньше GET /v1/mission возвращал строки Summary()/Status(), которые
+// оболочка пыталась читать как JSON-объекты: карточка миссии не появлялась
+// никогда, кнопка остановки была недостижима.
+func missionPayload(a *app) map[string]any {
+	m := a.mission
+	mission := map[string]any{
+		"objective": m.Objective,
+		"mode":      string(m.Mode),
+		"summary":   m.Summary(),
+	}
+	status := map[string]any{"state": "idle"}
+	if tr := a.currentMissionTr(); tr != nil {
+		if tr.Done() {
+			status["state"] = "stopped"
+		} else {
+			status["state"] = "running"
+		}
+		status["elapsed"] = core.FormatDur(tr.Elapsed())
+		status["spent_tokens"] = tr.Spent()
+		status["tool_calls"] = tr.ToolCalls()
+		status["iters"] = tr.Iters()
+		status["stop_reason"] = tr.Stopped()
+	}
+	mission["status"] = status
+	mission["active"] = status["state"] == "running"
+	return map[string]any{"mission": mission}
 }
 
 func (s *serveServer) handleMissionStop(w http.ResponseWriter, _ *http.Request) {

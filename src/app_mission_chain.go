@@ -107,24 +107,34 @@ func (a *app) chainRun() {
 		if !ok {
 			break
 		}
-		a.missionChain.Index++
-		if err := a.missionChain.Save(a.workDir); err != nil {
-			a.ui.Err("цепочка не сохранилась: " + err.Error())
-			return
-		}
+		// Индекс растёт ПОСЛЕ успешного шага: прерванный шаг остаётся
+		// текущим, и повторный run повторит его, а не молча пропустит.
+		// Раньше индекс писался на диск до хода — упавший шаг значился
+		// «готово», и его цель терялась без предупреждения.
+		stepNo := a.missionChain.Index + 1
 		a.mission = next.Apply()
 		if !a.startTracker() {
-			a.ui.Warn("шаг " + strconv.Itoa(a.missionChain.Index) + " не задаёт потолков — пропущен")
+			a.ui.Warn("шаг " + strconv.Itoa(stepNo) + " не задаёт потолков — пропущен")
+			a.missionChain.Index++
+			if err := a.missionChain.Save(a.workDir); err != nil {
+				a.ui.Err("цепочка не сохранилась: " + err.Error())
+				return
+			}
 			continue
 		}
-		if err := a.saveMissionState("цепочка: шаг " + strconv.Itoa(a.missionChain.Index)); err != nil {
+		if err := a.saveMissionState("цепочка: шаг " + strconv.Itoa(stepNo)); err != nil {
 			a.ui.Warn("состояние прогона не сохранено: " + err.Error())
 		}
 		a.ui.Info(fmt.Sprintf("цепочка: шаг %d/%d запущен — %s",
-			a.missionChain.Index, len(a.missionChain.Items), next.Summary()))
+			stepNo, len(a.missionChain.Items), next.Summary()))
 		if err := a.turn(chainStepPrompt(a.missionChain, next)); err != nil {
-			a.ui.Err("цепочка прервана на шаге " + strconv.Itoa(a.missionChain.Index) + ": " + err.Error())
-			a.ui.Info("прогресс сохранён — продолжение: /mission chain run")
+			a.ui.Err("цепочка прервана на шаге " + strconv.Itoa(stepNo) + ": " + err.Error())
+			a.ui.Info("шаг остался текущим — продолжение: /mission chain run повторит его")
+			return
+		}
+		a.missionChain.Index++
+		if err := a.missionChain.Save(a.workDir); err != nil {
+			a.ui.Err("цепочка не сохранилась: " + err.Error())
 			return
 		}
 		a.missionJournalStop("chain_step_done")

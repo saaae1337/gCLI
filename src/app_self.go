@@ -56,7 +56,7 @@ func (a *app) selfReport() tools.SelfReport {
 	// Прогон под a.mu не держим: он меняется на каждой итерации, а
 	// self_status зовут из инструмента, то есть изнутри хода агента.
 	// Строка собирается под тем же локом, что и счётчики трекера.
-	if tr := a.missionTr; tr != nil {
+	if tr := a.currentMissionTr(); tr != nil {
 		a.mu.Lock()
 		rep.Mission = tr.SelfLine()
 		a.mu.Unlock()

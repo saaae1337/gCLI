@@ -90,12 +90,19 @@ func watchRunCommand(dir, command string, timeout time.Duration) (string, int, b
 	code := 0
 	timedOut := false
 	if err != nil {
-		code = 1
-		var ee *exec.ExitError
-		if asExitError(err, &ee) {
-			code = ee.ExitCode()
-		} else if ctx.Err() != nil {
-			timedOut = true // не ExitError — убито по таймауту
+		// Таймаут проверяем раньше разбора ExitError: убитый по
+		// контексту процесс приходит именно как ExitError с кодом -1,
+		// и раньше пометка «таймаут» до неё не доживала — падение
+		// выглядело загадочным «FAIL (код -1)».
+		if ctx.Err() != nil {
+			timedOut = true
+			code = -1
+		} else {
+			code = 1
+			var ee *exec.ExitError
+			if asExitError(err, &ee) {
+				code = ee.ExitCode()
+			}
 		}
 	}
 	return string(out), code, timedOut

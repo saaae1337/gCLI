@@ -219,13 +219,14 @@ func parseTokenNum(s string) (int, error) {
 func (a *app) startTracker() bool {
 	m := a.mission.Apply()
 	if !m.Long() && !m.HasAcceptance() && !m.Budgeted() {
-		a.missionTr = nil
+		a.setMissionTr(nil)
 		return false
 	}
-	a.missionTr = core.NewTracker(m, a.sessionSpent(), a.sessionCost())
+	tr := core.NewTracker(m, a.sessionSpent(), a.sessionCost())
 	if a.prov != nil {
-		a.missionTr.WithModel(a.prov.ID, a.model)
+		tr.WithModel(a.prov.ID, a.model)
 	}
+	a.setMissionTr(tr)
 	// Флаги сбрасываются на новый прогон: трекер, который человек
 	// перезапустил через /mission start, не должен унаследовать ни
 	// счётчики прошлого, ни состояние «остановка уже записана».
@@ -235,11 +236,26 @@ func (a *app) startTracker() bool {
 	// Счётчики прошлого прогона — до первого тика: иначе первый же Tick
 	// прибавит к ним расход нового запуска и бюджет завысится.
 	if a.missionResumeState != nil {
-		a.missionTr.Resume(a.missionResumeState.Iters,
+		tr.Resume(a.missionResumeState.Iters,
 			a.missionResumeState.ToolCalls, a.missionResumeState.Tokens)
 	}
 	a.openMissionJournal()
 	return true
+}
+
+// setMissionTr — заменить трекер под мьютексом приложения: в serve-режиме
+// миссию стартует HTTP-горутина, а /v1/status читает указатель параллельно.
+func (a *app) setMissionTr(tr *core.Tracker) {
+	a.mu.Lock()
+	a.missionTr = tr
+	a.mu.Unlock()
+}
+
+// currentMissionTr — трекер под мьютексом (nil, если прогона нет).
+func (a *app) currentMissionTr() *core.Tracker {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.missionTr
 }
 
 // sessionCost — расход сессии в долларах (для поправки бюджета миссии).
@@ -259,7 +275,7 @@ func (a *app) sessionCost() float64 {
 // missionDeps — собрать зависимости движка прогона для агента.
 func (a *app) missionDeps() agent.MissionDeps {
 	d := agent.MissionDeps{
-		Tracker: a.missionTr,
+		Tracker: a.currentMissionTr(),
 		Spent:   func() int { return a.sessionSpent() },
 		Model:   a.model,
 		Checkpoint: func(summary string) error {
@@ -306,7 +322,7 @@ func (a *app) openMissionJournal() {
 	// На новом прогоне, а не на подхвате: при продолжении журнал уже начат,
 	// и вторая запись «start» означала бы, что прогон начался дважды.
 	if a.missionResumeState == nil {
-		_ = j.Start("прогон запущен: "+a.mission.Summary(), a.missionTr)
+		_ = j.Start("прогон запущен: "+a.mission.Summary(), a.currentMissionTr())
 	}
 }
 
@@ -331,10 +347,10 @@ func (a *app) closeMissionJournal() {
 	}
 	// Прогон, остановленный по потолку, закрыт как оконченный: журнал не
 	// должен предлагать продолжение после исчерпанного бюджета.
-	if tr := a.missionTr; tr != nil && tr.Done() {
+	if tr := a.currentMissionTr(); tr != nil && tr.Done() {
 		a.missionJournalStop(tr.Stopped())
 	} else if a.missionJournal.Wrote() {
-		_ = a.missionJournal.CloseRecord("сеанс закрыт, прогон не окончен: "+a.missionStatusLine(), a.missionTr)
+		_ = a.missionJournal.CloseRecord("сеанс закрыт, прогон не окончен: "+a.missionStatusLine(), a.currentMissionTr())
 	}
 	_ = a.missionJournal.Close()
 	a.missionJournal = nil
@@ -352,7 +368,7 @@ func (a *app) missionJournalStop(reason string) {
 		return
 	}
 	a.missionJournalEnd = true
-	_ = a.missionJournal.Stop("остановлен: "+core.StopReasonLabel(reason), a.missionTr)
+	_ = a.missionJournal.Stop("остановлен: "+core.StopReasonLabel(reason), a.currentMissionTr())
 }
 
 // noteMissionResumed — записать в журнал, что прогон подхватили.
@@ -371,7 +387,7 @@ func (a *app) noteMissionResumed() {
 	if a.missionJournal == nil || a.missionResumeJournalled {
 		return
 	}
-	if err := a.missionJournal.Resumed("продолжен после обрыва", a.missionTr); err != nil {
+	if err := a.missionJournal.Resumed("продолжен после обрыва", a.currentMissionTr()); err != nil {
 		return
 	}
 	a.missionResumeJournalled = true
@@ -387,7 +403,7 @@ func (a *app) missionJournalCheckpoint(summary string) {
 	if a.missionJournal == nil {
 		return
 	}
-	_ = a.missionJournal.Checkpoint(summary, a.missionTr)
+	_ = a.missionJournal.Checkpoint(summary, a.currentMissionTr())
 }
 
 // ---------- Продолжение после обрыва ----------
@@ -456,7 +472,7 @@ func (a *app) attachMission(ag *agent.Agent) {
 	// итераций, вызовов и токенов живут в трекере, и новый трекер
 	// обнулил бы прогон на каждом ходу — потолок в 200 итераций не был
 	// бы достигнут никогда.
-	if a.missionTr == nil {
+	if a.currentMissionTr() == nil {
 		ag.StartMission(core.Mission{Mode: core.MissionNormal}, agent.MissionDeps{})
 		return
 	}
@@ -507,7 +523,7 @@ func (a *app) saveMissionState(summary string) error {
 		Updated:   time.Now().Format(time.RFC3339),
 		Status:    a.missionStatusLine(),
 	}
-	if tr := a.missionTr; tr != nil {
+	if tr := a.currentMissionTr(); tr != nil {
 		st.Iters = tr.Iters()
 		st.ToolCalls = tr.ToolCalls()
 		st.Tokens = tr.Spent()
@@ -518,10 +534,11 @@ func (a *app) saveMissionState(summary string) error {
 
 // missionStatusLine — строка «где мы» для снимка и статуса.
 func (a *app) missionStatusLine() string {
-	if a.missionTr == nil {
+	if tr := a.currentMissionTr(); tr == nil {
 		return "прогон не запущен"
+	} else {
+		return tr.Status()
 	}
-	return a.missionTr.Status()
 }
 
 // ---------- /mission: команда ----------
@@ -613,32 +630,36 @@ func (a *app) missionStart(args string) {
 		a.ui.Warn("состояние прогона не сохранено: " + err.Error())
 	}
 	a.ui.Info("прогон запущен: " + a.mission.Summary())
-	a.ui.Println("  " + a.missionTr.Status())
+	if tr := a.currentMissionTr(); tr != nil {
+		a.ui.Println("  " + tr.Status())
+	}
 }
 
 // missionStop — остановить прогон.
 func (a *app) missionStop() {
-	if a.missionTr == nil {
+	tr := a.currentMissionTr()
+	if tr == nil {
 		a.ui.Info("прогон не запущен")
 		return
 	}
-	a.missionTr.Stop(core.StopCancelled)
+	tr.Stop(core.StopCancelled)
 	a.mu.Lock()
 	if a.lastAgent != nil {
 		a.lastAgent.StopMission()
 	}
 	a.mu.Unlock()
-	_ = a.saveMissionState("прогон остановлен человеком: " + a.missionTr.Status())
+	_ = a.saveMissionState("прогон остановлен человеком: " + tr.Status())
 	a.ui.Info("прогон остановлен, состояние сохранено")
 }
 
 // missionSave — сохранить состояние прогона вручную.
 func (a *app) missionSave() {
-	if a.missionTr == nil {
+	tr := a.currentMissionTr()
+	if tr == nil {
 		a.ui.Info("прогон не запущен — сохранять нечего")
 		return
 	}
-	if err := a.saveMissionState("сохранено по запросу: " + a.missionTr.Status()); err != nil {
+	if err := a.saveMissionState("сохранено по запросу: " + tr.Status()); err != nil {
 		a.ui.Err("не сохранилось: " + err.Error())
 		return
 	}
@@ -647,7 +668,8 @@ func (a *app) missionSave() {
 
 // missionStatus — показать, где прогон.
 func (a *app) missionStatus() {
-	if a.missionTr == nil {
+	tr := a.currentMissionTr()
+	if tr == nil {
 		a.ui.Println("")
 		a.ui.Println("  Автономный прогон не запущен.")
 		a.ui.Println("  Обычный ход: столько итераций, сколько нужно модели.")
@@ -659,7 +681,6 @@ func (a *app) missionStatus() {
 		a.ui.Println("")
 		return
 	}
-	tr := a.missionTr
 	m := tr.Mission()
 	a.ui.Println("")
 	if m.Objective != "" {
