@@ -13,7 +13,7 @@
 //   $GCLI_BIN → desktop/bin/gcli(.exe) → process.resourcesPath/bin → PATH.
 "use strict";
 
-const { app, BrowserWindow, Menu, shell } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 const http = require("http");
@@ -38,10 +38,21 @@ function findGcli() {
     path.join(__dirname, "bin", exe),                   // desktop/bin/gcli
     path.join(process.resourcesPath || "", "bin", exe), // внутри сборки
   ];
-  // В репозитории сборка кладёт бинарники в ../builds (gcli-6.2.0-*): берём свежий.
+  // В репозитории сборка кладёт бинарники в ../builds (gcli-6.2.0-*): берём
+  // свежий СВОЕЙ платформы. Раньше выбор был просто «последний по имени»,
+  // и на Linux/macOS последним сортировался windows-amd64.exe — spawn
+  // падал с ENOEXEC, а без обработчика ошибки падал весь Electron.
   try {
     const buildsDir = path.join(__dirname, "..", "builds");
-    const m = fs.readdirSync(buildsDir).filter((f) => f.startsWith("gcli-")).sort().pop();
+    const goArch = { x64: "amd64", arm64: "arm64", arm: "arm", ia32: "386" }[process.arch] || process.arch;
+    const wanted =
+      process.platform === "win32" ? `-windows-${goArch}.exe`
+      : process.platform === "darwin" ? `-darwin-${goArch}`
+      : `-${process.platform}-${goArch}`;
+    const m = fs.readdirSync(buildsDir)
+      .filter((f) => f.startsWith("gcli-") && f.endsWith(wanted))
+      .sort()
+      .pop();
     if (m) candidates.push(path.join(buildsDir, m));
   } catch (_) {}
   candidates.push("/usr/local/bin/" + exe);
@@ -172,6 +183,14 @@ if (!gotLock) {
       });
       gcliProc.stdout.on("data", (d) => process.env.GCLI_DEBUG && process.stdout.write("[gcli] " + d));
       gcliProc.stderr.on("data", (d) => process.stderr.write("[gcli!] " + d));
+      // ENOENT/ENOEXEC без обработчика — необработанное исключение и крах
+      // главного процесса Electron с системным диалогом о падении.
+      gcliProc.on("error", (err) => {
+        console.error("gCLI Desktop: не удалось запустить", bin, err.message);
+        if (!quitRequested && win) {
+          win.setTitle("gCLI — сервер не запустился (" + err.code + ")");
+        }
+      });
       gcliProc.on("exit", (code) => {
         if (!quitRequested && win) {
           win.setTitle("gCLI — сервер остановлен (" + code + ")");

@@ -107,7 +107,10 @@ func (s *serveServer) handleHistory(w http.ResponseWriter, r *http.Request) {
 		case core.RoleTool:
 			// Результат инструмента в оболочке живёт под карточкой вызова:
 			// достаточно короткой выжимки, полный текст — в TUI.
+			// call_id связывает результат с вызовом: одноимённые
+			// параллельные вызовы больше не склеиваются.
 			entry["name"] = m.Name
+			entry["call_id"] = m.ToolCallID
 			entry["content"] = core.Truncate(core.OneLine(m.Content), 300)
 		}
 		msgs = append(msgs, entry)

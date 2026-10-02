@@ -10,11 +10,17 @@ const state = {
   token: "",
   running: false,
   viewing: null,      // id просматриваемой сессии (null = текущая)
+  sessionID: "",      // id текущей сессии (из /v1/status)
   currentMsg: null,   // карточка текущего ответа ассистента
   currentReason: null,// блок размышлений текущего ответа
-  tools: new Map(),   // pending tool card по имени+времени
+  tools: new Map(),   // незавершённые карточки инструментов по id вызова
   thinkT0: 0,
   thinkTimer: null,
+  // historyEpoch — защита от гонки «SSE против fetch»: живые события и
+  // новые обновления истории делают устаревший запрос, и его результат
+  // не затирает уже отрисованные карточки (раньше первые дельты ответа
+  // стирались завершившимся fetch-ем после turn_start).
+  historyEpoch: 0,
 };
 
 /* ---------- токен и связь ---------- */
@@ -65,7 +71,10 @@ async function enterRoot() {
     if (e.message !== "401") setConn(false);
     return;
   }
-  await Promise.all([refreshHistory(), refreshSessions(), refreshMission()]);
+  // allSettled, а не Promise.all: отказ одного списка (истории, сессий,
+  // миссии) раньше отменял connectSSE целиком — оболочка показывала
+  // «сервер недоступен» при валидном токене.
+  await Promise.allSettled([refreshHistory(), refreshSessions(), refreshMission()]);
   connectSSE();
 }
 
@@ -77,6 +86,7 @@ async function refreshStatus() {
   $("model-chip").textContent = st.provider + " · " + st.model;
   $("mode-chip").classList.toggle("hidden", !st.agent_mode);
   $("workdir").textContent = st.work_dir;
+  state.sessionID = st.session || "";
   state.running = !!st.running;
   setComposer();
 }
@@ -166,11 +176,16 @@ function finishTool(card, status, detail) {
 /* ---------- история и сессии ---------- */
 
 async function refreshHistory(sessionID) {
+  // Эпоха: если пока мы ждали ответ, пришли живые события или кто-то ещё
+  // запросил историю — наш ответ устарел, и затирать ленту им нельзя.
+  const epoch = ++state.historyEpoch;
   const q = sessionID ? "?session=" + encodeURIComponent(sessionID) : "";
   const h = await api("/v1/history" + q);
+  if (epoch !== state.historyEpoch) return;
   $("chat").innerHTML = "";
   state.currentMsg = null;
   state.currentReason = null;
+  state.tools.clear();
 
   let pendingTool = {};
   for (const m of h.messages) {
@@ -182,12 +197,12 @@ async function refreshHistory(sessionID) {
         addMessage("assistant", m.content, { reasoning: m.reasoning, sub: m.sub });
       }
       if (hasCalls) for (const tc of m.tool_calls) {
-        pendingTool[tc.name] = addTool(tc.name, shortArgs(tc.args));
+        pendingTool[tc.id || tc.name] = addTool(tc.name, shortArgs(tc.args));
       }
     } else if (m.role === "tool") {
-      const card = pendingTool[m.name];
+      const card = pendingTool[m.call_id || m.name];
       finishTool(card, "ok", m.content);
-      delete pendingTool[m.name];
+      delete pendingTool[m.call_id || m.name];
     }
   }
   $("view-chip").classList.toggle("hidden", !sessionID);
@@ -214,6 +229,7 @@ async function refreshSessions() {
   ul.innerHTML = "";
   for (const s of list) {
     const li = el("li", null, s.title || s.id);
+    li.dataset.id = s.id;
     li.append(el("span", "n", s.messages + ""));
     li.onclick = () => {
       state.viewing = s.id;
@@ -221,13 +237,14 @@ async function refreshSessions() {
     };
     ul.append(li);
   }
-  markActiveSession(null);
+  markActiveSession(state.viewing || state.sessionID);
 }
 
+// markActiveSession — подсветить конкретный элемент списка: раньше условие
+// не смотрело на сам элемент, и подсветка была либо «везде», либо нигде.
 function markActiveSession(id) {
   for (const li of $("sessions").children) {
-    li.classList.toggle("active",
-      state.viewing ? state.viewing === id : li.textContent.startsWith(id || ""));
+    li.classList.toggle("active", !!id && li.dataset.id === id);
   }
 }
 
@@ -242,15 +259,15 @@ async function refreshMission() {
   const m = await api("/v1/mission");
   const card = $("mission-card");
   const mission = m.mission || {};
-  const active = mission.active || mission.status === "running" ||
-    (m.status && m.status.state === "running");
+  const status = mission.status || {};
+  const active = !!mission.active || status.state === "running";
   if (!active) { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
-  $("mission-obj").textContent = mission.objective || mission.goal || "—";
+  $("mission-obj").textContent = mission.objective || "—";
   const meta = [];
   if (mission.mode) meta.push("режим: " + mission.mode);
-  if (m.status && m.status.elapsed) meta.push("время: " + m.status.elapsed);
-  if (m.status && m.status.spent_tokens) meta.push("токены: " + m.status.spent_tokens);
+  if (status.elapsed) meta.push("время: " + status.elapsed);
+  if (status.spent_tokens) meta.push("токены: " + status.spent_tokens);
   $("mission-meta").textContent = meta.join("\n");
 }
 
@@ -263,11 +280,25 @@ $("mission-stop").onclick = async () => {
 /* ---------- SSE ---------- */
 
 let sse = null;
+let sseErrCount = 0;
 function connectSSE() {
   if (sse) sse.close();
+  sseErrCount = 0;
   sse = new EventSource("/v1/events?token=" + encodeURIComponent(state.token));
-  sse.onopen = () => setConn(true);
-  sse.onerror = () => { setConn(false); };
+  sse.onopen = () => { sseErrCount = 0; setConn(true); };
+  sse.onerror = async () => {
+    setConn(false);
+    // Три ошибки подряд — проверяем токен: сервер мог перезапуститься с
+    // новым. Раньше 401 вешал бесконечный reconnect, и на экран токена
+    // оболочка не возвращалась никогда.
+    sseErrCount++;
+    if (sseErrCount < 3) return;
+    sseErrCount = 0;
+    try {
+      const res = await fetch("/v1/status", { headers: { Authorization: "Bearer " + state.token } });
+      if (res.status === 401) { sse.close(); showGate("сервер перезапущен — вставьте токен"); }
+    } catch (_) {}
+  };
   sse.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch (_) { return; }
@@ -287,6 +318,7 @@ function handleEvent(ev, data) {
 
     case "reason":
       if (state.viewing) break;
+      state.historyEpoch++; // живые события делают летящий fetch истории устаревшим
       if (!state.currentMsg) {
         state.currentMsg = addMessage("assistant", "");
         state.currentReason = buildReason("");
@@ -298,6 +330,7 @@ function handleEvent(ev, data) {
     case "delta":
       stopThinking();
       if (state.viewing) break;
+      state.historyEpoch++;
       if (!state.currentMsg) state.currentMsg = addMessage("assistant", "");
       let body = state.currentMsg.querySelector(".msg-body");
       if (!body) { body = el("div", "msg-body"); state.currentMsg.append(body); }
@@ -308,15 +341,22 @@ function handleEvent(ev, data) {
     case "tool_start":
       stopThinking();
       if (state.viewing) break;
+      state.historyEpoch++;
       state.currentMsg = null;
       state.currentReason = null;
-      state.tools.set(data.name, addTool(data.name, data.args, data.kind));
+      // Ключ — id вызова: два одноимённых параллельных вызова раньше
+      // склеивались в одну карточку, и вторая навсегда висела «работает...».
+      state.tools.set(data.id || data.name, addTool(data.name, data.args, data.kind));
       break;
 
     case "tool_done":
       if (state.viewing) break;
-      finishTool(state.tools.get(data.name), data.status, data.detail);
-      state.tools.delete(data.name);
+      state.historyEpoch++;
+      {
+        const key = data.id || data.name;
+        const card = state.tools.get(key);
+        if (card) { finishTool(card, data.status, data.detail); state.tools.delete(key); }
+      }
       break;
 
     case "turn_end":
@@ -325,7 +365,10 @@ function handleEvent(ev, data) {
       state.currentMsg = null;
       state.currentReason = null;
       setComposer();
-      // Обновим списки: сессия получила новые сообщения, миссия — счётчики.
+      // Пересинхронизация с авторитетной историей: всё, что стримилоcь
+      // живьём (в том числе потерянный из-за гонки кусок), гарантированно
+      // попадает в ленту.
+      if (!state.viewing) refreshHistory().catch(() => {});
       refreshSessions().catch(() => {});
       refreshMission().catch(() => {});
       if (data.error) toast(data.error);

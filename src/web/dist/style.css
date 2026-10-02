@@ -131,7 +131,7 @@ body {
 }
 .msg-head .mark { color: var(--accent); font-size: 13px; }
 .msg.assistant .msg-head .mark { color: var(--indigo); }
-.msg-user .bubble {
+.msg.user .bubble {
   background: var(--bg-panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 9px 13px; white-space: pre-wrap;
 }
@@ -164,9 +164,9 @@ body {
 .tool-args { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool-res { display: flex; gap: 8px; align-items: baseline; padding-left: 14px; font-size: 13px; color: var(--muted); }
 .tool-res .tick { color: var(--muted); }
-.tool-res.ok .st { color: var(--ok); }
-.tool-res.fail .st { color: var(--err); }
-.tool-res.denied .st { color: var(--warn); }
+.tool.ok .tool-res .st { color: var(--ok); }
+.tool.fail .tool-res .st { color: var(--err); }
+.tool.denied .tool-res .st { color: var(--warn); }
 .tool-res .st::before { content: "["; color: var(--muted); }
 .tool-res .st::after { content: "]"; color: var(--muted); }
 .tool.wait .tool-res { color: var(--muted); font-style: italic; }

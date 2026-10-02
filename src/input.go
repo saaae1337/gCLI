@@ -306,6 +306,7 @@ func (s *stdinReader) echoWrite(p []byte) {
 	_, _ = w.Write(p)
 }
 
-// trimEOL — убрать \r в конце строки (терминал Windows присылает CRLF)
-// и хвостовые пробелы-табуляции.
+// trimEOL — убрать \r в конце строки (терминал Windows присылает CRLF).
+// Хвостовые пробелы и табуляции нарочно сохраняются: это часть запроса
+// (например, блок кода, вставленный с отступом).
 func trimEOL(s string) string { return strings.TrimRight(s, "\r\n") }
