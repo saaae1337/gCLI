@@ -63,6 +63,10 @@ type app struct {
 	// не стоит проверять.
 	serveBus *serveBus
 
+	// missionChain — текущая цепочка миссий (nil = ещё не загружалась;
+	// missionChainEnsure лениво читает .gcli/mission_chain.json).
+	missionChain *core.MissionChain
+
 	registry *providers.Registry
 	client   *providers.Client
 	prov     *providers.Provider
