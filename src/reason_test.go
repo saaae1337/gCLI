@@ -130,6 +130,33 @@ func TestTwoCtrlOTogglesOpenAndClose(t *testing.T) {
 	}
 }
 
+// Показал всё → свернул → снова открыл без новых кусков: второй заголовок
+// «размышления» печататься не должен. Баг прошлой версии — маркер ставился
+// при каждом открытии потока, и под первым появлялся второй пустой.
+func TestThirdCtrlONoDuplicateMarker(t *testing.T) {
+	a, buf := reasonApp(t)
+	a.onReason("мысль целиком")
+	a.toggleReason() // показать всё
+	a.toggleReason() // свернуть
+	buf.Reset()
+
+	a.toggleReason() // снова открыть — новых кусков нет
+	got := buf.String()
+	if n := strings.Count(got, "размышления"); n != 0 {
+		t.Errorf("пустое переоткрытие не должно печатать заголовок (%d шт):\n%q", n, got)
+	}
+
+	// Первый же новый кусок открывает заголовок сам — один раз.
+	a.onReason(" добавка")
+	got = buf.String()
+	if n := strings.Count(got, "размышления"); n != 1 {
+		t.Errorf("заголовок потока напечатан %d раз, ждали один:\n%q", n, got)
+	}
+	if !strings.Contains(got, "добавка") {
+		t.Errorf("новый кусок не напечатан:\n%q", got)
+	}
+}
+
 // После показа следующие куски идут на экран сами (поток открыт).
 func TestReasonLiveAfterToggle(t *testing.T) {
 	a, buf := reasonApp(t)

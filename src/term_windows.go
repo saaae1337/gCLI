@@ -23,11 +23,11 @@ var (
 )
 
 const (
-	stdInputHandle           = ^uintptr(10) // (DWORD)-10
-	cEnableProcessedInput    = 0x0001
-	cEnableLineInput         = 0x0002
-	cEnableEchoInput         = 0x0004
-	cEnableWindowInput       = 0x0008
+	stdInputHandle            = ^uintptr(10) // (DWORD)-10
+	cEnableProcessedInput     = 0x0001
+	cEnableLineInput          = 0x0002
+	cEnableEchoInput          = 0x0004
+	cEnableWindowInput        = 0x0008
 	cEnableVirtualTerminInput = 0x0200
 )
 

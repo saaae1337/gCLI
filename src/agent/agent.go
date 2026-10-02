@@ -470,14 +470,10 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			streamErr = providers.Stream(rctx, a.d.Providers, a.d.Provider, creq, a.d.Think, ch)
 		}()
 
-		reasonOpen := false
 		for d := range ch {
 			if d.Reasoning != "" {
 				pReason += d.Reasoning
 				if !quiet && showReason && a.d.OnReason != nil {
-					if !reasonOpen {
-						reasonOpen = true
-					}
 					a.d.OnReason(d.Reasoning)
 				}
 			}
@@ -485,9 +481,6 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 				pSig += d.Sig
 			}
 			if d.Text != "" {
-				if gotAny && !reasonOpen {
-					reasonOpen = false
-				}
 				gotAny = true
 				pText += d.Text
 				if !quiet && a.d.OnDelta != nil {
