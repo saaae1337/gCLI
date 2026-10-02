@@ -65,6 +65,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdCompact()
 	case "/sessions":
 		a.cmdSessions()
+	case "/fork":
+		a.cmdFork(rest)
 	case "/resume":
 		a.cmdResume(arg)
 	case "/clear":
@@ -158,6 +160,7 @@ func (a *app) cmdHelp() {
 			{"/status, /usage", "состояние, токены, контекст"},
 			{"/context", "разбивка контекста по частям"},
 			{"/sessions, /resume", "сохранённые сессии"},
+			{"/fork [N]", "новая сессия из истории текущей до сообщения N"},
 			{"/clear", "новая сессия"},
 			{"/export", "экспорт диалога в Markdown"},
 			{"/undo", "отменить последнюю правку файла"},
