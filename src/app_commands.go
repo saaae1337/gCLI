@@ -79,6 +79,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdSandbox(rest)
 	case "/usage":
 		a.cmdUsage()
+	case "/stats":
+		a.cmdStats(rest)
 	case "/tools":
 		a.cmdTools()
 	case "/doctor":
@@ -158,6 +160,7 @@ func (a *app) cmdHelp() {
 		}},
 		{"Сессия", [][2]string{
 			{"/status, /usage", "состояние, токены, контекст"},
+			{"/stats [дней]", "дашборд расходов: по дням и моделям"},
 			{"/context", "разбивка контекста по частям"},
 			{"/sessions, /resume", "сохранённые сессии"},
 			{"/fork [N]", "новая сессия из истории текущей до сообщения N"},

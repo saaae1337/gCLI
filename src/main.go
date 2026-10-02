@@ -227,6 +227,7 @@ func main() {
 		flagDeadline     = flag.String("deadline", "", "срок прогона: 4h, 90m или число минут")
 		flagBudget       = flag.String("budget", "", "бюджет прогона: токены, деньги или оба через запятую (500000 или 500000,25)")
 		flagObjective    = flag.String("objective", "", "цель прогона одной строкой")
+		flagStats        = flag.Bool("stats", false, "дашборд расходов по сессиям и выход")
 	)
 	flag.Parse()
 
@@ -359,6 +360,12 @@ func main() {
 	}
 	if *flagSetup {
 		a.runSetup()
+	}
+	// -stats: дашборд и выход, до входа в REPL. Данные из sessions/*.json,
+	// поэтому достаточно ui и репо — агент и провайдеры не нужны.
+	if *flagStats {
+		a.printStats(a.repo.ListSessions(), 30)
+		return
 	}
 	a.repl()
 }
