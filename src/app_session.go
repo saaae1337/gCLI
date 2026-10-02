@@ -20,7 +20,18 @@ import (
 var sessMu sync.Mutex
 
 // Messages — история диалога.
-func (a *app) Messages() []core.Message { return a.sess.Messages }
+//
+// Отдаёт КОПИЮ под sessMu, а не сам слайц. Снаружи сессии историю читают из
+// чужих горутин — /v1/history в HTTP-обработчике, агент при сборке запроса к
+// модели, — и это идёт параллельно с AddMessage. Возврат живого слайца
+// означал гонку чтения-записи на нём же: добавление элемента переписывает
+// заголовок, и читатель видел половину старой и половину новой истории.
+// Тест TestAddMessageConcurrentNoRace ловит это под -race.
+func (a *app) Messages() []core.Message {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return append([]core.Message(nil), a.sess.Messages...)
+}
 
 // AddMessage — добавить сообщение в историю.
 //
