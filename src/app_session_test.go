@@ -398,3 +398,86 @@ func TestRecordCheckpointForNewFile(t *testing.T) {
 		t.Error("несуществующий файл не должен быть отмечен как существовавший")
 	}
 }
+
+// TestReadersOfSessionNoRace — регрессия на историю, которую читают не
+// через Messages(), а напрямую.
+//
+// Так было в четырёх местах: selfReport отдавал живой слайц истории
+// инструменту self_status, taskSummary и cmdCopy читали её без sessMu,
+// а /v1/message брал последний ответ прямо из a.sess.Messages. Снаружи это
+// выглядит безобидно — все эти читатели вызываются «после хода», — но
+// self_status и taskSummary зовутся изнутри хода и из горутин субагентов,
+// которые идут параллельно AddMessage. Тест держит запись и все четыре
+// чтения одновременно: без sessMu в читателях он падает под -race.
+func TestReadersOfSessionNoRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	a.AddMessage(core.Message{Role: core.RoleUser, Content: "исходная задача"})
+	a.sess.Title = "заголовок"
+
+	const workers, each = 6, 40
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Писатель: то же, что делает ход агента.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < workers*each; i++ {
+			a.AddMessage(core.Message{Role: core.RoleAssistant, Content: "ответ"})
+		}
+		close(stop)
+	}()
+
+	// Читатели — по одному на каждое исправленное место.
+	readers := map[string]func(){
+		"selfReport":   func() { _ = a.selfReport() },
+		"taskSummary":  func() { _ = a.taskSummary() },
+		"cmdCopy":      func() { a.cmdCopy() },
+		"sessionSpent": func() { _ = a.sessionSpent() },
+	}
+	for name, fn := range readers {
+		fn := fn
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					fn()
+				}
+			}
+		}()
+		_ = name
+	}
+	wg.Wait()
+
+	if got := len(a.Messages()); got != workers*each+1 {
+		t.Errorf("история потеряла сообщения: %d из %d", got, workers*each+1)
+	}
+	if a.taskSummary() == "" {
+		t.Error("taskSummary обязан вернуть хоть что-то: заголовок сессии")
+	}
+}
+
+// TestSelfReportHistoryIsCopy — снимок агента не должен отдавать живую
+// историю наружу. Если History указывает на слайц сессии, то правка истории
+// после вызова self_status изменит уже собранный отчёт — и модель увидит
+// не то, что было на момент опроса.
+func TestSelfReportHistoryIsCopy(t *testing.T) {
+	a, _ := cmdApp(t)
+	a.AddMessage(core.Message{Role: core.RoleUser, Content: "первое"})
+	rep := a.selfReport()
+
+	a.AddMessage(core.Message{Role: core.RoleUser, Content: "второе"})
+	if len(rep.History) != 1 {
+		t.Fatalf("в снимке должно быть состояние на момент вызова: %d сообщений", len(rep.History))
+	}
+
+	// И обратное направление: изменение снимка не трогает сессию.
+	rep.History[0].Content = "подменено"
+	if got := a.Messages()[0].Content; got != "первое" {
+		t.Fatalf("правка снимка изменила сессию: %q", got)
+	}
+}

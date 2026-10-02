@@ -1129,9 +1129,10 @@ func (a *app) cmdAutopilot(rest string) {
 
 func (a *app) cmdCopy() {
 	var last string
-	for i := len(a.sess.Messages) - 1; i >= 0; i-- {
-		if a.sess.Messages[i].Role == core.RoleAssistant && strings.TrimSpace(a.sess.Messages[i].Content) != "" {
-			last = a.sess.Messages[i].Content
+	msgs := a.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == core.RoleAssistant && strings.TrimSpace(msgs[i].Content) != "" {
+			last = msgs[i].Content
 			break
 		}
 	}

@@ -69,7 +69,9 @@ func safeForkCut(msgs []core.Message, n int) int {
 
 // cmdFork — /fork [номер сообщения]: новая сессия из истории текущей.
 func (a *app) cmdFork(rest string) {
-	msgs := a.sess.Messages
+	// Копия истории под sessMu: /fork режет историю на месте, а в serve-режиме
+	// ход идёт параллельно и дописывает сообщения.
+	msgs := a.Messages()
 	n := len(msgs)
 	if s := strings.TrimSpace(rest); s != "" {
 		v, err := strconv.Atoi(s)

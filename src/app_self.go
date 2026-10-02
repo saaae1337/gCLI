@@ -28,7 +28,11 @@ func (a *app) selfReport() tools.SelfReport {
 	rep.Usage = a.sess.Usage
 	rep.Stats = a.sess.Stats
 	sessMu.Unlock()
-	rep.History = a.sess.Messages
+	// Историю — копией, тем же Messages(). Раньше здесь лежал живой слайс
+	// a.sess.Messages: self_status зовут изнутри хода, а AddMessage пишет
+	// историю из горутин субагентов параллельно, и чтение слайца без
+	// sessMu — гонка на заголовке при append.
+	rep.History = a.Messages()
 
 	// Системный промпт берём у того агента, который сейчас работает,
 	// иначе агент сравнивал бы свой контекст с чужим.

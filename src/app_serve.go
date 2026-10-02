@@ -215,9 +215,12 @@ func (s *serveServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 	s.bus.publish("turn_start", map[string]string{"text": req.Text})
 	err := s.a.turn(req.Text)
 	// Последний содержательный ответ ассистента — из истории сессии.
+	// Снимок под sessMu: ход идёт в этой же функции, но в /v1/status и
+	// SSE историю читают параллельно, и живой слайц здесь — гонка.
+	msgs := s.a.Messages()
 	last := ""
-	for i := len(s.a.sess.Messages) - 1; i >= 0; i-- {
-		m := s.a.sess.Messages[i]
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
 		if m.Role == core.RoleAssistant && m.Content != "" && len(m.ToolCalls) == 0 {
 			last = m.Content
 			break

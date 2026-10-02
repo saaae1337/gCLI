@@ -284,17 +284,23 @@ func (a *app) routeModelFor(role subagents.Type) (string, string) {
 
 // taskSummary — краткое описание текущей задачи (для контекста субагента).
 func (a *app) taskSummary() string {
+	// Снимок истории под sessMu: задачу спрашивают из горутин субагентов,
+	// которые идут параллельно ходу, и живой слайц здесь — гонка.
+	msgs := a.Messages()
 	// Последнее сообщение пользователя + заголовок сессии.
-	for i := len(a.sess.Messages) - 1; i >= 0; i-- {
-		if a.sess.Messages[i].Role == core.RoleUser {
-			u := a.sess.Messages[i].Content
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == core.RoleUser {
+			u := msgs[i].Content
 			if i := strings.Index(u, "\n\n--- Приложенные файлы"); i > 0 {
 				u = u[:i]
 			}
 			return core.Truncate(core.OneLine(u), 400)
 		}
 	}
-	return a.sess.Title
+	sessMu.Lock()
+	title := a.sess.Title
+	sessMu.Unlock()
+	return title
 }
 
 // recordSubagent — записать запуск в журнал сессии.
