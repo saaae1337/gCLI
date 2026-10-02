@@ -43,9 +43,11 @@ func Stream(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, 
 
 // FetchModels — список моделей с endpoint-а: GET {base}/models.
 func FetchModels(ctx context.Context, c *Client, p *Provider) ([]string, error) {
-	base := strings.TrimRight(p.BaseURL, "/")
-	if p.Kind == ProtoAnthropic && !strings.HasSuffix(base, "/v1") {
-		base += "/v1"
+	base := p.BaseURL
+	if p.Kind == ProtoAnthropic {
+		base = anthropicBase(base)
+	} else {
+		base = strings.TrimRight(base, "/")
 	}
 	if ctx == nil {
 		ctx = context.Background()

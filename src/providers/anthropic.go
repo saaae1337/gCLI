@@ -204,6 +204,19 @@ func hasToolUse(bl []anBlock) bool {
 	return false
 }
 
+// anthropicBase — base URL с гарантированным суффиксом /v1.
+//
+// Пользователь мог ввести адрес уже с /v1 (прокси, шлюз): без проверки
+// получался «…/v1/v1/messages» — 404 на каждый запрос, хотя /models при
+// этом работал (там проверка была), и setup выглядел успешным.
+func anthropicBase(raw string) string {
+	base := strings.TrimRight(raw, "/")
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base
+}
+
 // StreamAnthropic — стриминг через протокол Anthropic.
 func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, think string, out chan<- core.Delta) error {
 	body := anRequest{
@@ -235,7 +248,7 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 	if err != nil {
 		return err
 	}
-	req, err := newChatRequest(ctx, p, strings.TrimRight(p.BaseURL, "/")+"/v1/messages", payload)
+	req, err := newChatRequest(ctx, p, anthropicBase(p.BaseURL)+"/messages", payload)
 	if err != nil {
 		return err
 	}

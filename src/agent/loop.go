@@ -143,10 +143,12 @@ func (d *LoopDetector) Record(calls []core.ToolCall, results []toolResult) strin
 	defer d.mu.Unlock()
 
 	for _, tc := range calls {
+		// В order — каждая встреча, а не только первая: при двух
+		// одинаковых вызовах в одной итерации раньше карта count
+		// обгоняла order, и после вытеснения ключ оставался в counts
+		// навсегда (фантомный счётчик — ложные «повторы» позже).
 		k := callKey(tc.Name, tc.Args)
-		if d.counts[k] == 0 {
-			d.order = append(d.order, k)
-		}
+		d.order = append(d.order, k)
 		d.counts[k]++
 	}
 	// Окно: вытесняем вызовы, выпавшие за пределы памяти.

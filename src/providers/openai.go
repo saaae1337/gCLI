@@ -164,6 +164,13 @@ func buildOAMessages(creq core.ChatRequest, keepReasoning bool) []oaMessage {
 					Function: oaFunc{Name: tc.Name, Arguments: tc.Args},
 				})
 			}
+			// Пустое assistant-сообщение (ни текста, ни вызовов — например,
+			// ответ, съеденный reasoning-бюджетом) в запрос API не идёт:
+			// строгое API отвечает на {"role":"assistant"} без полей 400-й
+			// ошибкой, и история отравляется на все следующие ходы.
+			if om.Content == "" && om.ToolCalls == nil {
+				continue
+			}
 			msgs = append(msgs, om)
 		case core.RoleTool:
 			msgs = append(msgs, oaMessage{Role: "tool", Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name})

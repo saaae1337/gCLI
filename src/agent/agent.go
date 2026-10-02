@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gcli/core"
@@ -149,7 +150,9 @@ type Agent struct {
 	// missionStop — просил ли человек остановить прогон (из /mission stop
 	// или по Escape в интерфейсе). Флаг, а не отмена трекера: остановка
 	// должна быть видна в статусе, а не исчезнуть по возвращении Run.
-	missionStop bool
+	// Атомарный: StopMission зовётся из HTTP-горутины (serve-режим), а
+	// читается в цикле Run.
+	missionStop atomic.Bool
 }
 
 // MissionTracker — трекер автономного прогона (nil, если прогона нет).
@@ -176,7 +179,7 @@ func (a *Agent) StopMission() {
 	if a == nil || a.mission == nil {
 		return
 	}
-	a.missionStop = true
+	a.missionStop.Store(true)
 	a.mission.stop(core.StopCancelled)
 }
 
@@ -189,7 +192,7 @@ func (a *Agent) StartMission(m core.Mission, deps MissionDeps) bool {
 		return false
 	}
 	a.mission = startMission(m, deps)
-	a.missionStop = false
+	a.missionStop.Store(false)
 	return a.mission != nil
 }
 
@@ -435,7 +438,10 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 	// счётчике не появлялось: /usage врал, а оценка контекста в /context
 	// занижалась, и сжатие не срабатывало вовремя.
 	defer func() {
-		if quiet || a.d.Session == nil {
+		// quiet экономит только печать, а не учёт: выжимка Compact,
+		// отчёты субагентов и RepairReport жгут настоящие токены, и
+		// раньше они не доходили ни до /usage, ни до бюджетов миссии.
+		if a.d.Session == nil {
 			return
 		}
 		a.d.Session.AddUsage(usage)
@@ -553,6 +559,12 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			reason += pReason
 			sig += pSig
 			msg.Content = text
+			// Размышления, показанные человеку во время потока,
+			// обязаны пережить ход: без этого Ctrl+O после ответа
+			// показывал бы пустоту — поток оборвался, а мы вернулись
+			// раньше строки, где размышления сохраняются.
+			msg.Reasoning = reason
+			msg.ReasoningSig = sig
 			return msg, nil
 		}
 
@@ -659,10 +671,12 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		if a.mission != nil {
 			a.mission.countTools(len(assistant.ToolCalls))
 			if reason := a.mission.tick(1); reason != "" {
+				a.abortToolCalls(assistant)
 				a.finishMission(ctx, reason)
 				break
 			}
-			if a.missionStop {
+			if a.missionStop.Load() {
+				a.abortToolCalls(assistant)
 				a.finishMission(ctx, core.StopCancelled)
 				break
 			}
@@ -774,6 +788,25 @@ func (a *Agent) finishMission(ctx context.Context, reason string) {
 	if a.OnNote != nil {
 		a.OnNote("миссия", fmt.Sprintf("автономный прогон остановлен: %s (%s)",
 			core.StopReasonLabel(reason), a.mission.tracker().Status()))
+	}
+}
+
+// abortToolCalls — закрыть вызовы инструментов, которые не будут выполнены.
+//
+// Прогон может остановиться ровно на итерации, где модель уже вызвала
+// инструменты (StopTools срабатывает по построению на такой итерации,
+// так же приземляются лимиты токенов/денег и /mission stop). Без ответов
+// на эти вызовы история остаётся отравленной: OpenAI и Anthropic отвергают
+// assistant-сообщение с tool_calls без следующих tool-сообщений, финальный
+// отчёт молча умирает с 400-й ошибкой, и каждый следующий запрос тоже.
+func (a *Agent) abortToolCalls(assistant core.Message) {
+	for _, tc := range assistant.ToolCalls {
+		a.d.Session.AddMessage(core.Message{
+			Role:       core.RoleTool,
+			ToolCallID: tc.ID,
+			Name:       tc.Name,
+			Content:    "ход остановлен — вызов не выполнен",
+		})
 	}
 }
 
@@ -970,17 +1003,21 @@ func (a *Agent) canRunParallel(name string) bool {
 func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) {
 	res.tc = tc
 	t0 := time.Now()
+	// Get — до defer: восстановитель обязан передать хосту настоящий
+	// инструмент, а не nil. Обратный вызов хоста разыменовывает его
+	// (категория для карточки UI), и паника внутри recover-обработчика
+	// в параллельной ветке убивала бы весь процесс.
+	tool := a.d.Registry.Get(tc.Name)
 
 	defer func() {
 		if r := recover(); r != nil {
 			res.text = fmt.Sprintf("Ошибка: инструмент %s завершился с ошибкой: %v", tc.Name, r)
 			if a.d.OnToolDone != nil {
-				a.d.OnToolDone(tc, nil, tools.Result{}, fmt.Errorf("panic: %v", r), time.Since(t0))
+				a.d.OnToolDone(tc, tool, tools.Result{}, fmt.Errorf("panic: %v", r), time.Since(t0))
 			}
 		}
 	}()
 
-	tool := a.d.Registry.Get(tc.Name)
 	if tool == nil {
 		res.text = "Ошибка: неизвестный инструмент " + tc.Name
 		return
