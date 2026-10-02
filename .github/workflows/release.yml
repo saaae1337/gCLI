@@ -98,7 +98,7 @@ jobs:
           cat /tmp/release-notes.md
 
       - name: Черновик релиза на GitHub
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: gcli ${{ github.event.inputs.tag || github.ref_name }}
