@@ -1,0 +1,51 @@
+# Ревью PR агентом gcli: читает дифф и оставляет комментарий.
+# Требуется секрет GCLI_API_KEY (или замените на ZAI_API_KEY/OpenAI_API_KEY
+# и соответствующие флаги провайдера).
+name: gcli review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Ревью не должно блокировать merge: это подсказка, а не контроль.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Полная история нужна для git diff между ветками.
+          fetch-depth: 0
+
+      - name: Установить gcli
+        run: |
+          curl -fsSL -o gcli.tar.gz https://github.com/saaae1337/gCLI/releases/latest/download/gcli-linux-amd64.tar.gz || true
+          # Если релизов ещё нет — собираем из исходников:
+          if [ ! -s gcli.tar.gz ]; then
+            git clone --depth 1 https://github.com/saaae1337/gCLI.git /tmp/gcli-src
+            cd /tmp/gcli-src && ./build.sh one linux amd64
+            cp builds/gcli-*-linux-amd64/gcli /usr/local/bin/gcli || cp builds/gcli /usr/local/bin/gcli
+            exit 0
+          fi
+          tar -xzf gcli.tar.gz && mv gcli-*-linux-amd64/gcli /usr/local/bin/gcli && chmod +x /usr/local/bin/gcli
+
+      - name: Дифф PR
+        run: git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+
+      - name: Ревью агентом
+        env:
+          GCLI_API_KEY: ${{ secrets.GCLI_API_KEY }}
+        run: |
+          gcli -p "Отревьюй дифф из файла /tmp/pr.diff. Найди: баги, риски безопасности, упрощения. Отвечай по-русски, коротко, по пунктам. Если проблем нет — так и скажи." -json > /tmp/review.md
+
+      - name: Опубликовать комментарий
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "$(cat /tmp/review.md)"

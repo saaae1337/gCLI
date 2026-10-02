@@ -1,0 +1,85 @@
+# Автономная миссия gcli по кнопке: цель, режим, срок — утром разбираете PR.
+# Требуется секрет GCLI_API_KEY.
+name: gcli mission
+
+on:
+  workflow_dispatch:
+    inputs:
+      objective:
+        description: "Цель прогона одной строкой"
+        required: true
+      mode:
+        description: "Режим"
+        type: choice
+        options: [long-time, overnight, long-time-4h]
+        default: long-time
+      deadline:
+        description: "Срок (например 4h)"
+        default: "4h"
+      budget_tokens:
+        description: "Потолок токенов"
+        default: "500000"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  mission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # больше лимита job GitHub всё равно не даст
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить gcli
+        run: |
+          curl -fsSL -o gcli.tar.gz https://github.com/saaae1337/gCLI/releases/latest/download/gcli-linux-amd64.tar.gz || true
+          if [ ! -s gcli.tar.gz ]; then
+            git clone --depth 1 https://github.com/saaae1337/gCLI.git /tmp/gcli-src
+            cd /tmp/gcli-src && ./build.sh one linux amd64
+            cp builds/gcli-*-linux-amd64/gcli /usr/local/bin/gcli || cp builds/gcli /usr/local/bin/gcli
+            exit 0
+          fi
+          tar -xzf gcli.tar.gz && mv gcli-*-linux-amd64/gcli /usr/local/bin/gcli && chmod +x /usr/local/bin/gcli
+
+      - name: Ветка для работы агента
+        run: |
+          git config user.name "gcli-agent"
+          git config user.email "gcli-agent@users.noreply.github.com"
+          git checkout -b gcli/mission-${{ github.run_id }}
+
+      - name: Прогон
+        env:
+          GCLI_API_KEY: ${{ secrets.GCLI_API_KEY }}
+        run: |
+          gcli -mission ${{ inputs.mode }} \
+               -objective "${{ inputs.objective }}" \
+               -deadline ${{ inputs.deadline }} \
+               -budget ${{ inputs.budget_tokens }} \
+               -yolo -autopilot-all on
+
+      - name: Отчёт в артефакты
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mission-report
+          path: |
+            .gcli/mission_report.md
+            .gcli/mission_journal.log
+          if-no-files-found: ignore
+
+      - name: Commit и PR
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Изменений нет — PR не нужен"; exit 0
+          fi
+          git commit -m "gcli mission: ${{ inputs.objective }}"
+          git push origin gcli/mission-${{ github.run_id }}
+          gh pr create \
+            --title "gcli: ${{ inputs.objective }}" \
+            --body "Автономный прогон по миссии. Отчёт — в артефактах job." \
+            --base main --head gcli/mission-${{ github.run_id }}

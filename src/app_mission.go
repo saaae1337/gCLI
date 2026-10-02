@@ -543,8 +543,10 @@ func (a *app) cmdMission(rest string) {
 		a.missionStop()
 	case rest == "save":
 		a.missionSave()
-	case rest == "report":
+	case rest == "report" || rest == "report md":
 		a.missionReport()
+	case rest == "report html":
+		a.missionReportHTML()
 	case rest == "chain" || strings.HasPrefix(rest, "chain "):
 		a.cmdMissionChain(strings.TrimSpace(strings.TrimPrefix(rest, "chain")))
 	case rest == "help" || rest == "?":
