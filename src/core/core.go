@@ -258,6 +258,11 @@ type Config struct {
 	// хочет выключить даже попытки.
 	LSPEnabled *bool `json:"lsp_enabled,omitempty"`
 
+	// MissionAutoSkill — писать ли навык (в .gcli/skills) после успешно
+	// завершённой миссии (nil = включено). Тело строится из журнала
+	// детерминированно: факты прогона, без вызова модели.
+	MissionAutoSkill *bool `json:"mission_auto_skill,omitempty"`
+
 	// Permissions — правила разрешений для этого запуска (allow/ask/deny).
 	//
 	// Поле необязательное: у человека, который правил конфиг только

@@ -270,6 +270,10 @@ func (a *app) missionDeps() agent.MissionDeps {
 				a.ui.Warn("автономный прогон остановлен: " + core.StopReasonLabel(reason))
 			}
 			a.missionJournalStop(reason)
+			// Удачная миссия — источник опыта: навык в .gcli/skills.
+			if reason == core.StopDone {
+				a.distillMissionSkill()
+			}
 		},
 		Resumed: a.missionResume != "",
 		Resume:  a.missionResume,
