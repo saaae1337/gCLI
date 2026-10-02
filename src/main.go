@@ -240,6 +240,7 @@ func main() {
 		flagWatch        = flag.String("watch", "", "режим слежения: команда проверки; упала — агент чинит (gcli -watch \"go test ./...\")")
 		flagServe        = flag.String("serve", "", "HTTP-сервер: адрес (127.0.0.1:8642); API: /v1/status, /v1/message, /v1/events")
 		flagServeToken   = flag.String("serve-token", "", "токен доступа для -serve (по умолчанию случайный)")
+		flagUI           = flag.String("ui", "", "веб-интерфейс: адрес (127.0.0.1:8642); открывает оболочку в браузере")
 		flagMCPServe     = flag.Bool("mcp-serve", false, "работать MCP-сервером по stdio (для MCP-хостов: Claude Desktop и др.)")
 		flagBench        = flag.String("bench", "", "self-bench: каталог задач (по умолчанию .gcli/bench); прогон и счёт")
 	)
@@ -371,6 +372,17 @@ func main() {
 			if !a.quiet {
 				a.ui.Err(err.Error())
 			}
+			os.Exit(1)
+		}
+		return
+	}
+
+	// UI: тот же сервер, что у -serve, плюс встроенная оболочка и
+	// браузер поверх. Десктоп-обёртка (desktop/) подключается сюда же.
+	if *flagUI != "" {
+		a.serveBus = newServeBus()
+		if err := a.runUI(*flagUI, *flagServeToken); err != nil {
+			fmt.Fprintln(os.Stderr, "gcli ui:", err)
 			os.Exit(1)
 		}
 		return
@@ -925,6 +937,15 @@ func (a *app) onReason(s string) {
 	a.markReasonPrinted(len(s))
 }
 
+// onReasonPub — onReason плюс публикация куска в SSE-шину для машинных
+// клиентов (/v1/events): терминал показывает размышления по Ctrl+O,
+// оболочка — свёрнутым блоком. Отдельный метод: тест проверяет, что
+// размышления доезжают до подписчиков, не поднимая агента.
+func (a *app) onReasonPub(s string) {
+	a.onReason(s)
+	a.serveBus.publish("reason", s)
+}
+
 // openThinkStream — открыть на экране поток размышлений: погасить строку
 // ожидания и напечатать маркер события. Дальше текст печатается через
 // ThinkChunk, и перевод строки закрывает ThinkEnd.
@@ -1343,13 +1364,22 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 			// дешёвые события, медленный подписчик их не тормозит.
 			a.serveBus.publish("delta", s)
 		},
-		OnReason: a.onReason,
+		// Размышления в TUI показываются по Ctrl+O, в оболочке — свёрнутым
+		// блоком; накопление в буфере размышлений делает onReason.
+		OnReason: a.onReasonPub,
 		OnToolStart: func(tc core.ToolCall, tool *tools.Tool) {
-			a.serveBus.publish("tool_start", tc.Name)
+			a.serveBus.publish("tool_start", map[string]any{
+				"name": tc.Name, "args": shortArgs(tc), "kind": tool.Category,
+			})
 			a.onToolStart(tc, tool)
 		},
 		OnToolDone: func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
-			a.serveBus.publish("tool_done", tc.Name)
+			status, detail := serveToolStatus(res, err)
+			a.serveBus.publish("tool_done", map[string]any{
+				"name": tc.Name, "status": status,
+				"detail":     core.Truncate(core.OneLine(detail), 200),
+				"elapsed_ms": elapsed.Milliseconds(),
+			})
 			a.onToolDone(tc, tool, res, err, elapsed)
 		},
 		OnUsage: a.onUsage,
@@ -1456,19 +1486,25 @@ func (a *app) onToolStart(tc core.ToolCall, tool *tools.Tool) {
 	})
 }
 
+// serveToolStatus — статус и выжимка результата инструмента для машинных
+// клиентов (SSE /v1/events) и карточки TUI. Одна точка правды: то, что
+// пользователь видит в карточке инструмента, то и уходит в оболочку.
+func serveToolStatus(res tools.Result, err error) (string, string) {
+	if err != nil {
+		return "fail", err.Error()
+	}
+	if res.Error != "" {
+		return "fail", res.Error
+	}
+	if strings.Contains(res.Summary, "отклонено") || strings.Contains(res.Summary, "отменено") {
+		return "denied", res.Summary
+	}
+	return "ok", res.Summary
+}
+
 // onToolDone — показать результат инструмента.
 func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
-	status := "ok"
-	detail := res.Summary
-	if err != nil {
-		status = "fail"
-		detail = err.Error()
-	} else if res.Error != "" {
-		status = "fail"
-		detail = res.Error
-	} else if strings.Contains(res.Summary, "отклонено") || strings.Contains(res.Summary, "отменено") {
-		status = "denied"
-	}
+	status, detail := serveToolStatus(res, err)
 	if status == "fail" {
 		a.sess.Stats.RecordTool(true)
 	}

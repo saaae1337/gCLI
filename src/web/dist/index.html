@@ -1,0 +1,88 @@
+<!doctype html>
+<!--
+  Оболочка gcli — фирменный стиль «УГОЛЬ» (ember).
+  Без сборки и зависимостей: открывается из бинарника (go:embed) и
+  говорит с тем же сервером, что и терминал: /v1/*.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>gCLI</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23141417'/%3E%3Cpath d='M16 5 27 16 16 27 5 16Z' fill='%23CB843A'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Экран токена: оболочка без данных, данные под /v1/* закрыты токеном -->
+<div id="gate" class="gate hidden">
+  <div class="gate-card">
+    <div class="gate-mark">◆</div>
+    <h1>gCLI</h1>
+    <p class="muted">Вставьте токен сервера — он печатается при запуске<br><code>gcli -serve</code> или <code>gcli -ui</code></p>
+    <input id="gate-token" type="password" placeholder="токен" autocomplete="off" spellcheck="false">
+    <button id="gate-ok" class="btn btn-accent">Подключиться</button>
+    <p id="gate-err" class="gate-err"></p>
+  </div>
+</div>
+
+<div id="root" class="root hidden">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">◆</span> gCLI <span id="ver" class="muted"></span></div>
+    <div class="topinfo">
+      <span id="model-chip" class="chip"></span>
+      <span id="mode-chip" class="chip hidden">агент</span>
+      <span id="view-chip" class="chip chip-view hidden">просмотр истории</span>
+      <span id="conn" class="conn conn-off" title="связь с сервером"></span>
+    </div>
+  </header>
+
+  <aside class="side">
+    <div class="side-head">
+      <span class="side-title">сессии</span>
+      <button id="back-current" class="btn-ghost hidden">← текущая</button>
+    </div>
+    <ul id="sessions" class="sessions"></ul>
+
+    <div id="mission-card" class="mission hidden">
+      <div class="side-title">◆ миссия</div>
+      <div id="mission-obj" class="mission-obj"></div>
+      <div id="mission-meta" class="mission-meta"></div>
+      <button id="mission-stop" class="btn btn-danger small">остановить</button>
+    </div>
+
+    <div class="side-foot muted">
+      <span id="workdir"></span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="empty" class="empty">
+      <pre class="cat">   /\_/\
+  ( -.- )  zZ
+  /|   |\
+ (_|   |_)</pre>
+      <div class="empty-mark">◆ gCLI — агент в вашем терминале. И теперь — здесь.</div>
+      <div class="hints">
+        <button class="hint" data-fill="Осмотрись в проекте и коротко расскажи, что здесь происходит">Осмотрись в проекте</button>
+        <button class="hint" data-fill="Найди в коде TODO и составь список того, что стоит сделать">Собери TODO из кода</button>
+        <button class="hint" data-fill="Объясни структуру этого проекта: где что лежит и зачем">Объясни структуру</button>
+      </div>
+    </div>
+    <div id="chat" class="chat" aria-live="polite"></div>
+  </main>
+
+  <footer class="composer">
+    <div id="think-line" class="think-line hidden"><span class="shimmer">thinking...</span><span id="think-time" class="muted"></span></div>
+    <div class="composer-row">
+      <textarea id="input" rows="1" placeholder="чем помочь? — Enter отправить, Shift+Enter перенос"></textarea>
+      <button id="send" class="btn btn-accent">отправить</button>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+  </footer>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

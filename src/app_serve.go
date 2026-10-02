@@ -113,6 +113,9 @@ func (s *serveServer) mux() *http.ServeMux {
 	m.HandleFunc("/v1/mission", s.handleMission)
 	m.HandleFunc("/v1/mission/stop", s.handleMissionStop)
 	m.HandleFunc("/v1/sessions", s.handleSessions)
+	m.HandleFunc("/v1/history", s.handleHistory)
+	m.HandleFunc("/ui", s.handleUIRedirect)
+	m.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(webRoot()))))
 	return m
 }
 
@@ -138,7 +141,7 @@ func (a *app) runServe(addr, token string) error {
 			{"токен", token},
 			{"модель", a.model},
 		})
-		a.ui.Info("эндпоинты: /v1/status · /v1/message · /v1/events · /v1/mission · /v1/sessions")
+		a.ui.Info("эндпоинты: /v1/status · /v1/message · /v1/events · /v1/mission · /v1/sessions · /v1/history · /ui/")
 		if strings.HasPrefix(ln.Addr().String(), "0.0.0.0") || strings.HasPrefix(ln.Addr().String(), "[::]") {
 			a.ui.Warn("сервер слушает все интерфейсы — токен обязателен")
 		}
@@ -151,7 +154,11 @@ func (a *app) runServe(addr, token string) error {
 
 func (s *serveServer) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.auth(r) {
+		// Оболочка (/ui*) отдаётся без токена: в ней нет данных — только
+		// HTML/CSS/JS, одинаковые для всех. Всё содержимое лежит под /v1/*
+		// и закрыто токеном; оболочка спрашивает токен сама и хранит его
+		// в localStorage. Так токен не обязателен в ссылке на страницу.
+		if !strings.HasPrefix(r.URL.Path, "/ui") && !s.auth(r) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="gcli"`)
 			jsonWrite(w, http.StatusUnauthorized, map[string]string{"error": "нужен токен: Authorization: Bearer <token>"})
 			return
