@@ -236,11 +236,19 @@ func main() {
 		flagWatch        = flag.String("watch", "", "режим слежения: команда проверки; упала — агент чинит (gcli -watch \"go test ./...\")")
 		flagServe        = flag.String("serve", "", "HTTP-сервер: адрес (127.0.0.1:8642); API: /v1/status, /v1/message, /v1/events")
 		flagServeToken   = flag.String("serve-token", "", "токен доступа для -serve (по умолчанию случайный)")
+		flagMCPServe     = flag.Bool("mcp-serve", false, "работать MCP-сервером по stdio (для MCP-хостов: Claude Desktop и др.)")
 	)
 	flag.Parse()
 
 	if *flagVersion {
 		fmt.Println("gcli v" + version() + " · " + runtime.GOOS + "/" + runtime.GOARCH + " · " + runtime.Version())
+		return
+	}
+
+	// MCP-сервер: stdio — протокол, stdout трогать нельзя. Поэтому это
+	// раньше всего остального: ни UI, ни баннера, ни хранилища.
+	if *flagMCPServe {
+		runMCPServer()
 		return
 	}
 
