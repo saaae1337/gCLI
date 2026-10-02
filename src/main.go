@@ -241,6 +241,7 @@ func main() {
 		flagServe        = flag.String("serve", "", "HTTP-сервер: адрес (127.0.0.1:8642); API: /v1/status, /v1/message, /v1/events")
 		flagServeToken   = flag.String("serve-token", "", "токен доступа для -serve (по умолчанию случайный)")
 		flagMCPServe     = flag.Bool("mcp-serve", false, "работать MCP-сервером по stdio (для MCP-хостов: Claude Desktop и др.)")
+		flagBench        = flag.String("bench", "", "self-bench: каталог задач (по умолчанию .gcli/bench); прогон и счёт")
 	)
 	flag.Parse()
 
@@ -380,6 +381,20 @@ func main() {
 		a.runWatch(*flagWatch, 5)
 		a.closeMissionJournal()
 		a.saveSession()
+		return
+	}
+
+	// Bench: задачи из каталога, прогон агентом, счёт. Работает на
+	// собранном app: нужен workDir и репозиторий конфигов.
+	if *flagBench != "" {
+		bench := *flagBench
+		if bench == "" {
+			bench = ".gcli/bench"
+		}
+		a.store.Ensure()
+		if a.runBench(bench) {
+			os.Exit(1) // провалы — ненулевой код выхода для CI
+		}
 		return
 	}
 
