@@ -14,14 +14,24 @@ set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/src"
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/builds"
-VERSION="${GCLI_VERSION:-6.2.1}"
-LDFLAGS="-s -w -X main.buildVersion=$VERSION"
 
 # Версия в core/core.go — источник правды для всего, что читает core.Version:
 # User-Agent, MCP handshake, баннер без ldflags. Если она разошлась с
 # $VERSION, в бинарнике окажутся два разных номера: имя файла и -v скажут одно,
 # а User-Agent и MCP-сервер — другое. Ловим это до сборки, а не после.
 core_version() { grep -oE '^var Version = "[^"]+"' "$SRC_DIR/core/core.go" | grep -oE '[0-9][^"]*' || true; }
+
+# Версию берём из core/core.go, а не дублируем числом здесь. Раньше стояло
+# «6.2.1» вторым местом, и это была мина: бамп в core.go проходил, а сборка
+# называла файлы старой версией и в ldflags клала старый номер — расхождение
+# ловилось постфактум. GCLI_VERSION остаётся escape-клапаном для сборки
+# не-релизного номера (например v6.2.2-rc1), но по умолчанию источник один.
+VERSION="${GCLI_VERSION:-$(core_version)}"
+if [ -z "$VERSION" ]; then
+    echo "[build] не нашёл var Version в $SRC_DIR/core/core.go" >&2
+    exit 1
+fi
+LDFLAGS="-s -w -X main.buildVersion=$VERSION"
 
 # GOOS/GOARCH/имя файла. Первые четыре — то, что реально отдаётся пользователю.
 TARGETS=(
@@ -69,8 +79,26 @@ cmd_clean() {
   echo "Готово."
 }
 
+check_version() {
+  local cv
+  cv="$(core_version)"
+  if [ -z "$cv" ]; then
+    echo "Не нашёл Version в core/core.go — проверь строку 'var Version = ...'"; return 1
+  fi
+  if [ "$cv" != "$VERSION" ]; then
+    echo "Версии разошлись: core/core.go = $cv, сборка = $VERSION"
+    echo "Поправь одну из них (или задай GCLI_VERSION=$cv) и повтори."
+    return 1
+  fi
+}
+
 cmd_one() {
   local goos="${1:-$(go env GOOS)}" goarch="${2:-$(go env GOARCH)}"
+  # Одиночная сборка тоже обязана сверять версии. Раньше проверка жила
+  # только в cmd_all, и «build.sh one linux amd64» собирал бинарник с
+  # номером из ldflags, не сверяя его с core/core.go — расхождение
+  # доходило до готового файла.
+  check_version || return 1
   local ext=""
   [ "$goos" = "windows" ] && ext=".exe"
   local out="$OUT_DIR/gcli-$VERSION-$goos-$goarch$ext"
@@ -86,16 +114,7 @@ cmd_one() {
 
 cmd_all() {
   echo "▎ Сборка $VERSION"
-  local cv
-  cv="$(core_version)"
-  if [ -z "$cv" ]; then
-    echo "Не нашёл Version в core/core.go — проверь строку 'var Version = ...'"; return 1
-  fi
-  if [ "$cv" != "$VERSION" ]; then
-    echo "Версии разошлись: core/core.go = $cv, сборка = $VERSION"
-    echo "Поправь одну из них (или задай GCLI_VERSION=$cv) и повтори."
-    return 1
-  fi
+  check_version || return 1
   mkdir -p "$OUT_DIR"
   # Бинарники прошлых версий — не артефакты этого релиза. Без этого в
   # SHA256SUMS.txt попали бы и 5.0.3, и 5.1.0, и проверка сумм у пользователя
