@@ -19,6 +19,7 @@ jobs:
   lint:
     name: gofmt + go vet
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: src
@@ -28,6 +29,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+          # go.mod без зависимостей, но кэш всё равно ускоряет распаковку
+          # тулчейна и компиляцию стандартной библиотеи.
+          cache: true
 
       - name: gofmt
         run: |
@@ -52,6 +56,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: src
@@ -61,6 +66,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+          cache: true
 
       - name: go test
         run: go test ./... -count=1
@@ -75,3 +81,45 @@ jobs:
 
       - name: go build
         run: go build -o /tmp/gcli-check .
+
+  # Покрытие: считаем один раз на Linux, результат — артефактом и в отчёт.
+  coverage:
+    name: покрытие
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      # -covermode=atomic обязателен вместе с -race: иначе счётчики
+      # обновляются из горутин без синхронизации и профиль «считает не то».
+      # Покрытие считаем по всем пакетам одним прогоном, иначе профили
+      # разных пакетов нельзя сложить в один отчёт.
+      - name: go test -covermode=atomic -coverprofile
+        run: |
+          go test -covermode=atomic -coverprofile=coverage.out -coverpkg=./... ./... -count=1
+
+      - name: Итог по пакетам
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Краткий отчёт в сводку запуска
+        run: |
+          echo '### Покрытие' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tail -20 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Профиль покрытия как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: src/coverage.out
+          retention-days: 14
