@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -609,24 +610,37 @@ func missionModesHelp() string {
 }
 
 // missionStart — запустить прогон прямо из разговора.
-func (a *app) missionStart(args string) {
+func (a *app) missionStart(args string) error {
 	m, err := parseMissionArgs(args)
 	if err != nil {
 		a.ui.Err(err.Error())
-		return
+		return err
 	}
+	return a.startMission(m)
+}
+
+// startMission — запустить прогон по готовому заданию.
+//
+// Отдельно от разбора аргументов, потому что источников два: строка
+// команды и JSON у HTTP-клиента, и у них разные представления о цели.
+// Кроме того, отказ возвращается ошибкой, а не только печатью: по
+// HTTP клиент не видит терминала, и «прогон не запустился» должен
+// доехать до него ответом, иначе отказ выглядит как успех.
+func (a *app) startMission(m core.Mission) error {
 	if m.Objective == "" {
 		m.Objective = a.mission.Objective
 	}
 	if m.Mode == core.MissionNormal && !m.Budgeted() && m.Deadline <= 0 && len(m.Acceptance) == 0 {
-		a.ui.Err("нечего запускать: задай режим, срок или бюджет — " +
+		err := errors.New("нечего запускать: задай режим, срок или бюджет — " +
 			"например /mission start long-time 2h 500k")
-		return
+		a.ui.Err(err.Error())
+		return err
 	}
 	a.mission = m.Apply()
 	if !a.startTracker() {
-		a.ui.Err("задание не задаёт ни одного потолка — прогон вёл бы себя как обычный ход")
-		return
+		err := errors.New("задание не задаёт ни одного потолка — прогон вёл бы себя как обычный ход")
+		a.ui.Err(err.Error())
+		return err
 	}
 	// Состояние пишется сразу: человек уйдёт через минуту, и прогон
 	// должен пережить перезапуск, а не начинаться заново.
@@ -637,6 +651,7 @@ func (a *app) missionStart(args string) {
 	if tr := a.currentMissionTr(); tr != nil {
 		a.ui.Println("  " + tr.Status())
 	}
+	return nil
 }
 
 // missionStop — остановить прогон.

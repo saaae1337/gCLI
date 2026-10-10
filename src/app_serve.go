@@ -267,23 +267,75 @@ func (s *serveServer) handleMission(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		jsonWrite(w, http.StatusOK, missionPayload(s.a))
 	case http.MethodPost:
-		var req struct {
-			Mode      string `json:"mode"`
-			Objective string `json:"objective"`
-			Deadline  string `json:"deadline"`
-			Budget    string `json:"budget"`
-		}
+		var req missionReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonWrite(w, http.StatusBadRequest, map[string]string{"error": "ждал JSON mission"})
 			return
 		}
-		args := strings.TrimSpace(strings.Join([]string{
-			req.Mode, req.Deadline, req.Budget, req.Objective}, " "))
-		s.a.missionStart(args)
+		m, err := parseMissionReq(req)
+		if err == nil {
+			err = s.a.startMission(m)
+		}
+		if err != nil {
+			jsonWrite(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		jsonWrite(w, http.StatusOK, missionPayload(s.a))
 	default:
 		jsonWrite(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET или POST"})
 	}
+}
+
+// missionReq — тело POST /v1/mission.
+type missionReq struct {
+	Mode      string `json:"mode"`
+	Objective string `json:"objective"`
+	Deadline  string `json:"deadline"`
+	Budget    string `json:"budget"`
+}
+
+// parseMissionReq — разобрать запуск прогона из JSON.
+//
+// Поля здесь именованные, и разбирать их надо как именованные. Раньше
+// обработчик склеивал их в строку и звал разбор команды, и граница цели
+// при этом терялась: «починить тесты» превращалось в цель «починить» и
+// критерий приёмки «тесты». Агент получал задание «починить» и
+// невыполнимое требование, которого никто не просил, — и прогон не
+// останавливался там, где человек его остановил бы.
+//
+// Режим тоже проверяется строго: неизвестное имя — ошибка, а не тихая
+// подстановка в цель. В команде «/mission start починить тесты» это
+// удобно, в JSON же режим назван отдельным полем, и «вечность» там —
+// опечатка, которую надо назвать, а не истолковать.
+func parseMissionReq(r missionReq) (core.Mission, error) {
+	var m core.Mission
+	if s := strings.TrimSpace(r.Mode); s != "" {
+		mode, ok := core.ValidMissionMode(s)
+		if !ok {
+			return core.Mission{}, fmt.Errorf("не знаю режима %q — ждал один из: %s",
+				s, missionModesHelp())
+		}
+		m.Mode = mode
+	}
+	if s := strings.TrimSpace(r.Deadline); s != "" {
+		d, err := core.ParseDur(s)
+		if err != nil {
+			return core.Mission{}, err
+		}
+		m.Deadline = d
+	}
+	if s := strings.TrimSpace(r.Budget); s != "" {
+		tok, cost, err := parseBudget(s)
+		if err != nil {
+			return core.Mission{}, err
+		}
+		m.TokenBudget, m.CostBudget = tok, cost
+	}
+	m.Objective = strings.TrimSpace(r.Objective)
+	if err := m.Normalize(); err != nil {
+		return core.Mission{}, err
+	}
+	return m.Apply(), nil
 }
 
 // missionPayload — задание и живое состояние прогона в структурированном
