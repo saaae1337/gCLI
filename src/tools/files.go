@@ -72,6 +72,8 @@ const (
 	schemaAskTrace = `{"type":"object","properties":{}}`
 
 	schemaOutline = `{"type":"object","properties":{"path":{"type":"string","description":"Файл для разбора структуры"},"filter":{"type":"string","description":"Оставить только объявления, где эта строка встречается в сигнатуре или описании"}},"required":["path"]}`
+
+	schemaGitDiff = `{"type":"object","properties":{"path":{"type":"string","description":"Ограничить diff одним файлом или каталогом"},"ref":{"type":"string","description":"С чем сравнить: HEAD (по умолчанию), HEAD~3, имя ветки или тега. Правки в чужих коммитах удобнее смотреть относительно них, а не через git log в bash"},"staged":{"type":"boolean","description":"Показать только подготовленные к коммиту правки (git diff --staged)"},"stat":{"type":"boolean","description":"Только сводка по файлам вместо самого diff"}},"description":"Изменения относительно HEAD или указанного ref. Ничего не меняет и подтверждения не требует."}`
 )
 
 // registerBuiltins — все встроенные инструменты.
@@ -113,6 +115,8 @@ func (r *Registry) registerBuiltins() {
 		schemaProject, "read", false, func(r *Registry) Handler { return r.hProjectInfo })
 	r.registerBound("changes", "Что я поменял в этом ходе: список файлов, строки, плюс состояние рабочего дерева git — без шума вроде «LF will be replaced by CRLF».",
 		schemaChanges, "read", false, func(r *Registry) Handler { return r.hChanges })
+	r.registerBound("git_diff", "Изменения относительно HEAD или указанного ref — сами строки diff, а не список файлов. Ничего не меняет и подтверждения не требует. stat:true — сводка по файлам вместо самого diff; ref — смотреть правки в чужих коммитах (например HEAD~3 или имя ветки).",
+		schemaGitDiff, "read", false, func(r *Registry) Handler { return r.hGitDiff })
 	r.registerBound("revert_last", "Откатить последнюю правку (write_file или edit_file). По умолчанию показывает, что изменится; для применения не передавай dry_run. Откажется, если файл уже меняли не ты — чтобы не затереть чужую работу.",
 		schemaRevert, "write", true, func(r *Registry) Handler { return r.hRevertLast })
 	r.registerBound("inspect", "Показать файл с видимыми невидимыми символами: табы как →, CR при CRLF, неразрывные пробелы, BOM. Звони, когда edit_file не находит old_string: сразу видно, чем текст отличается от того, что в файле. То же делает read_file с escape:true.",
