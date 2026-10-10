@@ -30,36 +30,65 @@ type secretRule struct {
 	// «KEY="value"» последняя группа — закрывающая кавычка, и маскирование
 	// «последней» замаскировало бы кавычку вместо значения.
 	value int
+	// trigger — подстроки, без которых правило совпасть не может.
+	//
+	// Нужны быстрому выходу looksSecret: он решает, стоит ли вообще
+	// гонять регулярки, и решение принимается по подстрокам, а не разбором
+	// регулярного выражения. Список жил отдельно от таблицы правил, и
+	// разъехался с ней: в правила добавили «passwd» и «private-key», а в
+	// список — нет, и эти формы уходили в текст целиком, молча и без
+	// единого признака.
+	//
+	// Теперь триггер лежит рядом с регуляркой, а выводится из таблицы, так
+	// что забыть его нельзя: TestEveryRuleHasTrigger падает на правиле без
+	// триггера, а TestLooksSecretCoversEveryRule — на форме, которую
+	// правило маскирует, а быстрый выход не видит.
+	//
+	// Все триггеры в нижнем регистре: сравнение идёт по уже приведённой
+	// строке. Регистр в самих регулярках часть правил требует заглавных
+	// (AKIA, AIza, ghp_), часть — нет ((?i) у присваиваний и JSON).
+	// Лишнее срабатывание быстрого выхода на «akia» в нижнем регистре стоит
+	// одного прохода регулярки, а вот незамеченный «PASSWORD=…» стоит
+	// утечки: цена ошибки несимметрична, и выбор сделан в её пользу.
+	trigger []string
 }
 
 // reSecret — правила маскирования.
 var reSecret = []secretRule{
 	// AWS: AKIA…, ASIA…, AIDA… — маскируем целиком.
-	{regexp.MustCompile(`\b(?:AKIA|ASIA|AIDA|AROA|AGPA|ANPA|ANVA|APKA)[A-Z0-9]{16}\b`), 0},
+	{regexp.MustCompile(`\b(?:AKIA|ASIA|AIDA|AROA|AGPA|ANPA|ANVA|APKA)[A-Z0-9]{16}\b`), 0,
+		[]string{"akia", "asia", "aida", "aroa", "agpa", "anpa", "anva", "apka"}},
 	// Google API: AIza…
-	{regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`), 0},
+	{regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`), 0, []string{"aiza"}},
 	// OpenAI / Anthropic / прочие sk-…
-	{regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{16,}\b`), 0},
+	{regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{16,}\b`), 0, []string{"sk-"}},
 	// GitHub: ghp_, gho_, ghu_, ghs_, ghr_, github_pat_
-	{regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b`), 0},
-	{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}\b`), 0},
+	{regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b`), 0,
+		[]string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_"}},
+	{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}\b`), 0, []string{"github_pat_"}},
 	// GitLab: glpat-…
-	{regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{16,}\b`), 0},
+	{regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{16,}\b`), 0, []string{"glpat-"}},
 	// Slack: xox[baprs]-…
-	{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}\b`), 0},
+	{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}\b`), 0, []string{"xox"}},
 	// npm_…
-	{regexp.MustCompile(`\bnpm_[A-Za-z0-9]{30,}\b`), 0},
+	{regexp.MustCompile(`\bnpm_[A-Za-z0-9]{30,}\b`), 0, []string{"npm_"}},
 	// Telegram: 123456789:AA…
-	{regexp.MustCompile(`\b\d{8,12}:AA[A-Za-z0-9_\-]{30,}\b`), 0},
+	{regexp.MustCompile(`\b\d{8,12}:AA[A-Za-z0-9_\-]{30,}\b`), 0, []string{":aa"}},
 	// Присваивания «KEY=value». Имя-метка (группа 1) и разделитель (2)
 	// сохраняются — чтобы было видно, ЧТО замаскировано; маскируется
 	// значение (группа 4). Требование длины значения (8+) отсекает
 	// «token=ok».
-	{regexp.MustCompile(`(?i)\b([A-Za-z0-9_.\-]*(?:token|secret|passwd|password|api[_-]?key|apikey|auth|credential|private[_-]?key)[A-Za-z0-9_.\-]*)(\s*[:=]\s*)("?)([^\s"'` + "`" + `,;)\]}]{8,})`), 4},
+	{regexp.MustCompile(`(?i)\b([A-Za-z0-9_.\-]*(?:token|secret|passwd|password|api[_-]?key|apikey|auth|credential|private[_-]?key)[A-Za-z0-9_.\-]*)(\s*[:=]\s*)("?)([^\s"'` + "`" + `,;)\]}]{8,})`), 4,
+		[]string{"token", "secret", "passwd", "password", "apikey", "api_key", "api-key",
+			"auth", "credential", "private_key", "private-key"}},
 	// Bearer / Basic в заголовке: маскируется сам токен (группа 3).
-	{regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*)(bearer|basic)\s+([A-Za-z0-9._\-+/=]{12,})`), 3},
+	{regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*)(bearer|basic)\s+([A-Za-z0-9._\-+/=]{12,})`), 3,
+		[]string{"bearer", "basic"}},
 	// JSON-поля "api_key": "…" — маскируется значение (группа 2).
-	{regexp.MustCompile(`(?i)("(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|password|secret|private[_-]?key)"\s*:\s*")([^"]{8,})`), 2},
+	{regexp.MustCompile(`(?i)("(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|password|secret|private[_-]?key)"\s*:\s*")([^"]{8,})`), 2,
+		[]string{"apikey", "api_key", "api-key", "accesstoken", "access_token", "access-token",
+			"refreshtoken", "refresh_token", "refresh-token", "password", "secret",
+			"private_key", "private-key"}},
 }
 
 // secretMask — чем заменяем значение.
@@ -89,26 +118,18 @@ func RedactSecrets(s string) string {
 }
 
 // looksSecret — дешёвая проверка «стоит ли вообще проверять».
+//
+// Триггеры берутся из таблицы правил, а не из отдельного списка: правило и
+// его признаки лежат рядом, и добавить одно, забыв другое, уже нельзя.
+// Проверка регистронезависимая — см. комментарий к secretRule.trigger,
+// где объяснено, почему лишнее срабатывание дешевле пропуска.
 func looksSecret(s string) bool {
 	low := strings.ToLower(s)
-	if strings.Contains(low, "token") || strings.Contains(low, "secret") ||
-		strings.Contains(low, "password") || strings.Contains(low, "api_key") ||
-		strings.Contains(low, "apikey") || strings.Contains(low, "api-key") ||
-		strings.Contains(low, "bearer ") || strings.Contains(low, "basic ") ||
-		strings.Contains(low, "credential") || strings.Contains(low, "private_key") ||
-		strings.Contains(low, "auth") {
-		return true
-	}
-	// Формы, не привязанные к слову-маркеру. Список обязан покрывать
-	// ВСЕ префиксы из reSecret: быстрый выход не маскирует ничего, а
-	// незаметный пропуск правила тихо оставлял секрет в тексте.
-	for _, p := range []string{
-		"sk-", "AKIA", "ASIA", "AIDA", "AROA", "AGPA", "ANPA", "ANVA", "APKA",
-		"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-",
-		"xox", "npm_", "AIza", "authorization", ":AA",
-	} {
-		if strings.Contains(s, p) {
-			return true
+	for _, rule := range reSecret {
+		for _, t := range rule.trigger {
+			if strings.Contains(low, t) {
+				return true
+			}
 		}
 	}
 	return false
