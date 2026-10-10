@@ -394,6 +394,44 @@ func isTruncatedFinish(finish string) bool {
 	return false
 }
 
+// ErrRefused — провайдер не отдал ответ по своим правилам.
+var ErrRefused = errors.New("провайдер не отдал ответ")
+
+// ErrEmptyTurn — модель вернула ход, в котором нет ничего: ни текста,
+// ни вызовов инструментов, ни размышлений.
+var ErrEmptyTurn = errors.New("пустой ответ модели")
+
+// turnProblem — объяснить, почему ход не дал ответа. nil — всё в порядке.
+//
+// Есть два разных случая, и их важно не смешивать:
+//
+//   - провайдер ответил, но ответ withheld: finish_reason content_filter
+//     у OpenAI-совместимых, refusal у Anthropic. Тело пустое, ошибки
+//     HTTP нет, запрос успешен. Раньше это уходило в ветку «модель не
+//     звала инструменты» и тихо закрывало цикл;
+//   - провайдер не объяснил ничего, а ход всё равно пустой.
+//
+// Оба молчат, и оба выглядят одинаково: человек отправил запрос и
+// получил приглашение ввести следующий. Тишина хуже отказа — отказ
+// хотя бы можно исправить.
+func turnProblem(finish, text string, tools int, reasoning string) error {
+	f := strings.ToLower(strings.TrimSpace(finish))
+	switch f {
+	case "content_filter", "refusal":
+		return fmt.Errorf("%w: провайдер остановил генерацию (finish_reason=%s). "+
+			"Обычно это срабатывание фильтра безопасности на стороне провайдера; "+
+			"попробуй переформулировать запрос или сменить модель",
+			ErrRefused, f)
+	}
+	if text != "" || tools > 0 || reasoning != "" {
+		return nil
+	}
+	return fmt.Errorf("%w: модель не вернула ни текста, ни вызовов инструментов"+
+		" (finish_reason=%q). Обычно размышления изъели весь лимит ответа — "+
+		"попробуй /think off или модель без thinking",
+		ErrEmptyTurn, f)
+}
+
 // growTokens — следующий потолок ответа после неудачного по длине.
 //
 // Растём быстро: обрезанный размышлениями ответ стоит полного повтора
@@ -529,6 +567,17 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 				isTruncatedFinish(finishReason) && attempt < 3 && ctx.Err() == nil {
 				creq.MaxTokens = growTokens(creq.MaxTokens, attempt)
 				continue
+			}
+			// Молчание вместо ответа. Сюда попадают два случая, которые
+			// раньше просто закрывали цикл: провайдер withheld-нул ответ
+			// (content_filter, refusal) и ход, в котором нет вообще
+			// ничего. Проверка после повторов по max_tokens: сначала
+			// даём шанс выросшему бюджету, и только потом признаём, что
+			// ответа не будет.
+			if attempt >= 3 || ctx.Err() != nil {
+				if err := turnProblem(finishReason, pText, len(pAcc), pReason); err != nil {
+					return msg, err
+				}
 			}
 			text += pText
 			reason += pReason
