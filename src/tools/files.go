@@ -70,6 +70,8 @@ const (
 	schemaJob = `{"type":"object","properties":{"action":{"type":"string","enum":["run","status","output","stop","clear"],"description":"run — запустить в фоне; status — список с кодами выхода; output — забрать вывод (без id — последний); stop — завершить; clear — убрать завершённые"},"command":{"type":"string","description":"Команда для action=run"},"id":{"type":"string","description":"ID процесса для output/stop"},"workdir":{"type":"string","description":"Каталог запуска"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах для action=run; не задан — без ограничения"}}}`
 
 	schemaAskTrace = `{"type":"object","properties":{}}`
+
+	schemaOutline = `{"type":"object","properties":{"path":{"type":"string","description":"Файл для разбора структуры"},"filter":{"type":"string","description":"Оставить только объявления, где эта строка встречается в сигнатуре или описании"}},"required":["path"]}`
 )
 
 // registerBuiltins — все встроенные инструменты.
@@ -83,6 +85,8 @@ func (r *Registry) registerBuiltins() {
 	r.registerBound("list_dir", "Список файлов и папок в каталоге.", schemaList, "read", false, func(r *Registry) Handler { return r.hListDir })
 	r.registerBound("glob", "Найти файлы по шаблону (поддерживается **).", schemaGlob, "read", false, func(r *Registry) Handler { return r.hGlob })
 	r.registerBound("grep", "Поиск по регулярному выражению в файлах проекта.", schemaGrep, "read", false, func(r *Registry) Handler { return r.hGrep })
+	r.registerBound("outline", "Структура файла: что объявлено и на какой строке — функции, типы, методы с сигнатурами и первой строкой описания. Дешевле, чем читать файл целиком, чтобы понять, где что лежит; дальше открывай нужное место через read_file с offset. Точный разбор для Go, эвристика для Python, TypeScript, JavaScript, Rust и Java.",
+		schemaOutline, "read", false, func(r *Registry) Handler { return r.hOutline })
 	r.registerBound("bash", "Выполнить shell-команду и получить вывод. Не запускай интерактивные команды. Требует подтверждения пользователя.",
 		schemaBash, "exec", true, func(r *Registry) Handler { return r.hBash })
 	r.registerBound("web_search", "Поиск в интернете. Возвращает заголовки, ссылки и сниппеты.", schemaSearch, "net", false, func(r *Registry) Handler { return r.hWebSearch })

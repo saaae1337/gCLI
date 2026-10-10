@@ -363,7 +363,10 @@ func ToolsFor(t Type) (allow []string, deny []string) {
 	// размножились бы в 6×6×6 задач.
 	noMeta := []string{"write_file", "edit_file", "bash", "spawn_agent", "spawn_agents", "ask_user"}
 
-	readBase := []string{"read_file", "list_dir", "glob", "grep", "think", "load_skill",
+	// outline — карта файла без чтения целиком. Именно эти три роли
+	// отвечают за устройство кода, и именно им карта нужнее всего: им
+	// положено сначала понять, где что лежит, и только потом читать.
+	readBase := []string{"read_file", "list_dir", "glob", "grep", "outline", "think", "load_skill",
 		"multi_read", "multi_grep"}
 	switch t {
 	case TypeExplorer:
