@@ -167,9 +167,16 @@ func (r *Registry) noteChange(p, label, old, new string, existed bool) {
 // Предупреждения git вроде «LF will be replaced by CRLF» приходят в stderr и
 // не имеют отношения к результату. Раньше они попадали в контекст модели
 // вместе с выводом и заслоняли единственное полезное — список файлов.
+//
+// Git зовётся напрямую, а не через оболочку. Раньше аргументы склеивались в
+// строку и уходили в «bash -c git …», и любой символ с особым смыслом в
+// аргументе становился командой: «HEAD; echo … > файл» создавал файл.
+// Тогда все вызовы передавали константы, и мина не рвалась — но стояла под
+// любым будущим аргументом из данных: путём файла или именем ветки, а они
+// приходят от модели. Склейка в строку здесь не давала ничего, чего не даёт
+// exec.Command, поэтому убрана без потерь.
 func gitOut(dir string, args ...string) (string, error) {
-	shell, sargs := ShellCommand("git " + strings.Join(args, " "))
-	ce := exec.Command(shell, sargs...)
+	ce := exec.Command("git", args...)
 	ce.Dir = dir
 	ce.Env = append(os.Environ(), "GIT_PAGER=cat", "GIT_OPTIONAL_LOCKS=0", "GCLI=1")
 	var stderr strings.Builder
