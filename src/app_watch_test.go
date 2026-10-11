@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -77,9 +78,19 @@ func shellCmd(code int) string {
 }
 
 // slowCmd — команда, которая гарантированно живёт дольше таймаута.
+//
+// Выбирается по ОС, а не по оболочке. Раньше ветка для cmd была
+// «ping -n 6 127.0.0.1 >nul», но на Windows gcli запускает команды через
+// Git Bash, и «>nul» там не перенаправление, а создание файла с
+// именем nul. Windows считает это имя зарезервированным устройством,
+// файл не удаляется, и уборка временного каталого падала уже после
+// зелёного результата.
+//
+// На POSIX «sleep» есть, на Windows его нет — там ping. Вывод не глушим:
+// он всё равно уходит в буфер.
 func slowCmd() string {
-	if strings.Contains(strings.ToLower(shellOf()), "cmd") {
-		return "ping -n 6 127.0.0.1 >nul"
+	if runtime.GOOS == "windows" {
+		return "ping -n 6 127.0.0.1"
 	}
 	return "sleep 5"
 }

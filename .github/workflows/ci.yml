@@ -80,7 +80,11 @@ jobs:
         run: go test -race -count=1 ./...
 
       - name: go build
-        run: go build -o /tmp/gcli-check .
+        # Путь в runner.temp, а не /tmp: на Windows-раннере pwsh понимает
+        # «/tmp/...» как «C:\tmp\...», и такого каталога там может не быть.
+        # Шаг не доходил до этого места — тесты падали раньше, — но после их
+        # починки упал бы он.
+        run: go build -o "${{ runner.temp }}/gcli-check" .
 
   # Покрытие: считаем один раз на Linux, результат — артефактом и в отчёт.
   coverage:

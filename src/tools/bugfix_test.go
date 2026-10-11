@@ -7,6 +7,7 @@ package tools
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -64,19 +65,43 @@ func TestVerifyCancelDoesNotTouchBaseline(t *testing.T) {
 	}
 }
 
+// slowCmd — команда, которая работает около пяти секунд и работает
+// везде.
+//
+// Раньше под Windows писали «ping -n 6 127.0.0.1 >nul», и это ломало две
+// вещи сразу. Первая: gcli на Windows запускает команды через Git Bash,
+// а не через cmd, и «>nul» там не перенаправление в нулевое устройство,
+// а создание файла с именем nul. Windows считает это имя
+// зарезервированным устройством, файл не удаляется — и падала не
+// проверка, а уборка временного каталога, уже после зелёного
+// результата. Вторая: на macOS «ping -n» не существует (там -c), команда
+// падала мгновенно, и проверка таймаута видела не таймаут.
+//
+// На POSIX остаётся sleep: он там есть всегда, и переход на ping ничего
+// бы не выиграл, а лишних зависимостей добавил бы. Вывод не глушим —
+// он всё равно уходит в буфер, а перенаправление стоило двух платформ.
+func slowCmd(t *testing.T) string {
+	t.Helper()
+	name, cmd := "sleep", "sleep 5"
+	if runtime.GOOS == "windows" {
+		name, cmd = "ping.exe", "ping -n 6 127.0.0.1"
+	}
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("%s не найден в системе: проверка таймаута невозможна", name)
+	}
+	return cmd
+}
+
 // TestVerifyTimeoutLabel — убитый по таймауту процесс помечается как
 // таймаут, а не как обычный код 1.
 //
-// Команда выбирается под платформу: под Windows «sleep» не существует и
-// падает мгновенно, а не по таймауту. Проверяется ветка runVerifyCmd,
-// а не наличие sleep в системе.
+// Команда выбирается под платформу: под Windows и macOS «sleep» не
+// существует и падает мгновенно, а не по таймауту. Проверяется ветка
+// runVerifyCmd, а не наличие sleep в системе.
 func TestVerifyTimeoutLabel(t *testing.T) {
 	dir := t.TempDir()
 	r := New(Env{WorkDir: dir})
-	slow := "sleep 5"
-	if runtime.GOOS == "windows" {
-		slow = "ping -n 6 127.0.0.1 >nul"
-	}
+	slow := slowCmd(t)
 	out, err := r.runVerifyCmd(context.Background(), slow, dir, 1)
 	if err != nil {
 		t.Fatalf("runVerifyCmd: %v", err)
