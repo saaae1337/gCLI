@@ -1,8 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
   - name: Вопрос по использованию
     url: https://github.com/saaae1337/gCLI/discussions
     about: Как настроить провайдера, что делает команда, как устроены прогоны.
-  - name: Целочисленная проверка кандидата
+  - name: Уязвимость
+    url: https://github.com/saaae1337/gCLI/security/advisories/new
+    about: Сообщить приватно, без публичного issue — см. SECURITY.md.
+  - name: Релизы и сборки
     url: https://github.com/saaae1337/gCLI/releases
-    about: Пре-релизные сборки публикуются здесь — на них удобно ловить баги до релиза.
+    about: Готовые бинарники для пяти платформ и SHA256SUMS.txt для сверки.

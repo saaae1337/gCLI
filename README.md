@@ -26,8 +26,11 @@
 - **сервер и MCP**: gcli слушает HTTP+SSE, отдаёт себя другим агентам как
   MCP-сервер, умеет встроенную веб-оболочку и Electron-десктоп.
 
-История изменений — в [CHANGELOG.md](CHANGELOG.md), правила работы над
-проектом — в [CONTRIBUTING.md](CONTRIBUTING.md).
+История изменений — в [CHANGELOG.md](CHANGELOG.md). Правила работы над
+проектом — в [CONTRIBUTING.md](CONTRIBUTING.md), куда писать по разным
+вопросам — в [SUPPORT.md](SUPPORT.md), правила общения — в
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), уязвимости — в
+[SECURITY.md](SECURITY.md).
 
 ## Содержание
 
