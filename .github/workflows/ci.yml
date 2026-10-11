@@ -91,10 +91,14 @@ jobs:
           go test ./... -count=1 2>&1 | tee ./ci-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            echo "::group::упавшие тесты"
-            grep -E '^(--- FAIL|FAIL|panic:)' ./ci-test.log || true
-            grep -E '\.go:[0-9]+:' ./ci-test.log | head -60 || true
-            echo "::endgroup::"
+            # Именно ::error::, а не просто echo: аннотацию создаёт только
+            # команда протокола Actions, обычный вывод остаётся в логе и
+            # без открытия лога не виден вообще. Проценты и CR экранируются
+            # по правилам протокола, иначе строка вырежется по этим символам.
+            while IFS= read -r line; do
+              clean=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+              echo "::error title=go test::${clean}"
+            done < <(grep -E '^(--- FAIL|FAIL|panic:|# )|^[[:space:]]+\S+\.go:[0-9]+:' ./ci-test.log | head -40)
           fi
           exit "$status"
 
