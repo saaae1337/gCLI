@@ -175,10 +175,17 @@ func (r *Registry) noteChange(p, label, old, new string, existed bool) {
 // любым будущим аргументом из данных: путём файла или именем ветки, а они
 // приходят от модели. Склейка в строку здесь не давала ничего, чего не даёт
 // exec.Command, поэтому убрана без потерь.
+//
+// GIT_TERMINAL_PROMPT=0 — обязателен: без него git на репозитории, где
+// нужна авторизация, спросит пароль и будет ждать. Ход агента не
+// интерактивен, и Ctrl+C тут не помогает — процесс висит в чтении с
+// терминала, а не в сетевом вызове. Лучше ошибка, которую видно, чем
+// молчаливое ожидание.
 func gitOut(dir string, args ...string) (string, error) {
 	ce := exec.Command("git", args...)
 	ce.Dir = dir
-	ce.Env = append(os.Environ(), "GIT_PAGER=cat", "GIT_OPTIONAL_LOCKS=0", "GCLI=1")
+	ce.Env = append(os.Environ(),
+		"GIT_PAGER=cat", "GIT_OPTIONAL_LOCKS=0", "GCLI=1", "GIT_TERMINAL_PROMPT=0")
 	var stderr strings.Builder
 	ce.Stderr = &stderr
 	out, err := ce.Output()
