@@ -60,16 +60,40 @@ jobs:
     defaults:
       run:
         working-directory: src
+        # bash на всех трёх ОС, включая Windows-раннер (там это Git Bash).
+        # Нужен один язык сценариев: без него шаг «покажи, что упало»
+        # пришлось бы писать трижды и он разъехался бы между ОС.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache: true
+          # Кэш выключен намеренно: setup-go ищет go.sum, которого в проекте
+          # нет — зависимостей нет вообще. Без go.sum ключ не собрать,
+          # setup-go пишет «Dependencies file is not found» и всё равно
+          # ничего не кэширует. Пустой кэш честнее предупреждения.
+          cache: false
 
+      # Падение теста на Windows и macOS держалось с октября, и его не
+      # было видно нигде, кроме лога, который без прав админа не прочесть.
+      # go test печатает названия упавших тестов просто в stdout — GitHub
+      # их не подхватывает. Разбираем вывод сами и превращаем строки
+      # «--- FAIL» в аннотации: они видны в списке проверок без логов.
       - name: go test
-        run: go test ./... -count=1
+        run: |
+          set -o pipefail
+          go test ./... -count=1 2>&1 | tee "$RUNNER_TEMP/test.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::group::упавшие тесты"
+            grep -E '^(--- FAIL|FAIL|ok  |panic:)' "$RUNNER_TEMP/test.log" || true
+            grep -E '(FAIL|\.go:[0-9]+:|Error|error)' "$RUNNER_TEMP/test.log" \
+              | grep -v '^ok  ' | head -60 || true
+            echo "::endgroup::"
+          fi
+          exit "$status"
 
       # Гонки данных ловятся только под -race, и только если тесты
       # действительно пишут в одни счётчики из горутин. Стоит дороже
