@@ -178,6 +178,16 @@ func TestSandboxRootAliasResolves(t *testing.T) {
 	if err := sb.Check(filepath.Join(real, "файл.txt")); err != nil {
 		t.Fatalf("файл своего же рабочего каталога должен проходить: %v", err)
 	}
+
+	// Обратная сторона: корень назван прямо, а путь пришёл через псевдоним.
+	// На раннере Windows именно так и выходило — рабочий каталог приходил
+	// коротким именем C:\Users\RUNNER~1\..., а песочница помнила его
+	// разыменованным, в виде C:\Users\runneradmin\... Обе стороны проверки
+	// обязаны быть приведены к одному виду.
+	sb2 := NewSandbox(real)
+	if err := sb2.Check(filepath.Join(alias, "файл.txt")); err != nil {
+		t.Fatalf("файл своего же рабочего каталога через псевдоним должен проходить: %v", err)
+	}
 }
 
 // TestSandboxAllowsMissingFile — песочница не должна ломать создание файлов:
