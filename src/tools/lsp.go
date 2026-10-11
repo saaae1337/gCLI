@@ -65,6 +65,11 @@ type LSPHub struct {
 
 	mu    sync.Mutex
 	conns map[string]*lspConn // ключ: workDir + "\x00" + расширение
+	// diagWait — сколько ждать push-диагностику в Diagnostics. Ноль =
+	// обычные 5 с. Поле, а не константа внутри метода: тест обязан
+	// проверять обе ветки — и push, и откат в pull, — а второй ждать
+	// по пять секунд на каждый.
+	diagWait time.Duration
 }
 
 // NewLSPHub — хаб. enabled=false (конфиг lsp_enabled: false) или nil-карта —
@@ -176,7 +181,14 @@ func (h *LSPHub) Diagnostics(workDir, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return c.diagnosticsAfterEdit(path, 5*time.Second), nil
+	// Здесь ждём дольше тихого хука: человек позвал инструмент явно и
+	// ждёт ответа, а хук вызывается изнутри правки и обязан уложиться
+	// в пару секунд, чтобы не тормозить ход.
+	wait := 5 * time.Second
+	if h.diagWait > 0 {
+		wait = h.diagWait
+	}
+	return c.diagnosticsAfterEdit(path, wait), nil
 }
 
 // Hover — что знает сервер о символе в позиции (строка с 1, столбец в рунах с 0).
