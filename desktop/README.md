@@ -11,14 +11,30 @@
 ## Быстрый старт (режим разработки)
 
 ```bash
-# 1. Бинарник gcli — положить рядом (desktop/bin/) или собрать:
-cd src && ./build.sh one && mkdir -p ../desktop/bin && cp builds/gcli-* ../desktop/bin/gcli
+# 1. Собрать бинарник. ./build.sh лежит в корне репозитория и кладёт
+#    результат в builds/ оттуда же — из desktop/ путь вверх:
+./build.sh one
 
 # 2. Зависимости и запуск:
 cd desktop
 npm install
 npm start
 ```
+
+Шаг 1 необязателен: если `gcli` уже стоит в `PATH`, Electron найдёт его
+там. Собранный файл лежит в `builds/` под именем
+`gcli-<версия>-<ос>-<арх>` — Electron узнаёт его по этому шаблону сам и
+переименовывать не нужно.
+
+Если бинарник всё-таки положить рядом с приложением, имя должно быть
+ровно `gcli` (на Windows — `gcli.exe`), иначе Electron его не увидит:
+
+```bash
+mkdir -p desktop/bin
+cp builds/gcli-*-linux-amd64 desktop/bin/gcli
+```
+
+Либо указать путь явно: `GCLI_BIN=/путь/к/gcli npm start`.
 
 Приложение само поднимет `gcli -serve 127.0.0.1:8642`, дождётся
 готовности и откроет окно с оболочкой.
