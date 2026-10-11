@@ -83,14 +83,17 @@ jobs:
       # «--- FAIL» в аннотации: они видны в списке проверок без логов.
       - name: go test
         run: |
-          set -o pipefail
-          go test ./... -count=1 2>&1 | tee "$RUNNER_TEMP/test.log"
+          # set +e, а не наоборот: Actions запускает bash с ключом -e, и
+          # первая же упавшая команда вышла бы из скрипта раньше, чем мы
+          # успеваем показать, что именно упало. Выключаем -e, а выход
+          # определяем сами последней строкой.
+          set +e
+          go test ./... -count=1 2>&1 | tee ./ci-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             echo "::group::упавшие тесты"
-            grep -E '^(--- FAIL|FAIL|ok  |panic:)' "$RUNNER_TEMP/test.log" || true
-            grep -E '(FAIL|\.go:[0-9]+:|Error|error)' "$RUNNER_TEMP/test.log" \
-              | grep -v '^ok  ' | head -60 || true
+            grep -E '^(--- FAIL|FAIL|panic:)' ./ci-test.log || true
+            grep -E '\.go:[0-9]+:' ./ci-test.log | head -60 || true
             echo "::endgroup::"
           fi
           exit "$status"
