@@ -84,6 +84,8 @@ type serveServer struct {
 	a     *app
 	token string
 	bus   *serveBus
+	// keepalive — пауза между комментариями в SSE. Ноль = обычные 15 с.
+	keepalive time.Duration
 
 	mu      sync.Mutex
 	running bool // ход в работе: второй /v1/message получает 409
@@ -244,22 +246,49 @@ func (s *serveServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Обратные прокси (nginx и подобные) буферизуют поток по умолчанию,
+	// и события доходят пачкой в конце ответа — то есть не приходят
+	// вовсе. Заголовок выключает буферизацию явно.
+	w.Header().Set("X-Accel-Buffering", "no")
 	ch := s.bus.subscribe()
 	defer s.bus.unsubscribe(ch)
 	fmt.Fprint(w, "retry: 2000\n\n")
 	fl.Flush()
+	// Один таймер на весь поток, а не time.After в каждой итерации:
+	// иначе на каждое событие создавался бы новый, и при бойком ответе
+	// с тысячей кусков в памяти лежало бы столько же живых таймеров.
+	timer := time.NewTimer(s.keepaliveEvery())
+	defer timer.Stop()
 	for {
 		select {
 		case data := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			fl.Flush()
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(s.keepaliveEvery())
 		case <-r.Context().Done():
 			return
-		case <-time.After(15 * time.Second):
+		case <-timer.C:
 			fmt.Fprint(w, ": keepalive\n\n")
 			fl.Flush()
+			timer.Reset(s.keepaliveEvery())
 		}
 	}
+}
+
+// keepaliveEvery — пауза между комментариями keepalive. Поле, а не
+// константа внутри обработчика: тест обязан проверять идлевое поведение
+// потока, а ждать по пятнадцать секунд в тесте нельзя.
+func (s *serveServer) keepaliveEvery() time.Duration {
+	if s.keepalive > 0 {
+		return s.keepalive
+	}
+	return 15 * time.Second
 }
 
 func (s *serveServer) handleMission(w http.ResponseWriter, r *http.Request) {
