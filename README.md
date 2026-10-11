@@ -693,14 +693,17 @@ exit-код при провалах — для CI.
 
 ## Расширяемость
 
-| Что | Глобально | В проекте | Пример |
+| Что | Глобально | В проекте | Примеры |
 |---|---|---|---|
-| Навыки | `~/.gcli/skills/*.md` | `./.gcli/skills/*.md` | `examples/skills/` |
+| Навыки | `~/.gcli/skills/*.md` | `./.gcli/skills/*.md` | [code-reviewer](examples/skills/code-reviewer.md), [commit-helper](examples/skills/commit-helper.md), [project-onboarding](examples/skills/project-onboarding.md) |
 | Агенты | `~/.gcli/agents/*.md` | `./.gcli/agents/*.md` | — |
-| Расширения | `~/.gcli/extensions/*.json` | `./.gcli/extensions/*.json` | `examples/extensions/` |
-| Команды | `~/.gcli/commands/*.md` | `./.gcli/commands/*.md` | `examples/commands/` |
+| Расширения | `~/.gcli/extensions/*.json` | `./.gcli/extensions/*.json` | [dev-tools](examples/extensions/dev-tools.json), [web-api](examples/extensions/web-api.json) |
+| Команды | `~/.gcli/commands/*.md` | `./.gcli/commands/*.md` | [commit](examples/commands/commit.md), [review](examples/commands/review.md) |
 | MCP-серверы | `~/.gcli/mcp.json` | `./.gcli/mcp.json` | — |
 | Память проекта | `~/.gcli/GCLI.md` | `./GCLI.md` | — |
+
+Готовые workflows для GitHub Actions — в
+[examples/github/](examples/github/README.md).
 
 ### Навыки
 
