@@ -114,18 +114,36 @@ func AddMemory(fact, note string) (string, error) {
 	}
 
 	entries := ReadMemory()
-	// Дедупликация: тот же факт с тем же комментарием — уже не пишем.
-	dup := ""
-	for _, e := range entries {
-		if normFact(e.Fact) == normFact(fact) {
-			dup = e.Date
-			break
+	// Дедупликация: тот же факт второй раз не добавляется.
+	//
+	// Но он не и игнорируется: комментарий обновляется, а запись
+	// поднимается в начало. Раньше здесь стоял writeMemory с
+	// нетронутым списком, то есть обещанное в комментарии не
+	// происходило, а файл переписывался впустую. Для памяти это не
+	// мелочь: записи уходят в хвост, потом сворачиваются в архив, и
+	// факт, который агент только что подтвердил как важный, мог
+	// исчезнуть из выжимки для промпта — молча, по прямой просьбе
+	// его же и забывшего.
+	nf := normFact(fact)
+	for i, e := range entries {
+		if normFact(e.Fact) != nf {
+			continue
 		}
-	}
-	if dup != "" {
-		// Обновляем комментарий, если он изменился, и двигаем запись вверх.
-		return fmt.Sprintf("Факт уже был записан %s — повторно не добавляю.\n- %s %s", dup, date, fact),
-			writeMemory(entries)
+		upd := entries[i]
+		upd.Fact = fact
+		if note != "" {
+			upd.Note = note
+		}
+		upd.Date = date
+		rest := append([]MemoryEntry(nil), entries[:i]...)
+		rest = append(rest, entries[i+1:]...)
+		entries = append([]MemoryEntry{upd}, rest...)
+		what := "Факт уже был записан " + e.Date + " — обновил"
+		if note != "" && note != e.Note {
+			what += " пометку"
+		}
+		what += " и поднял его вверх, чтобы не ушёл в архив."
+		return what, writeMemory(entries)
 	}
 
 	entries = append([]MemoryEntry{{Date: date, Fact: fact, Note: note}}, entries...)
@@ -168,12 +186,6 @@ func MemoryDigest(maxItems int) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	pinned := 0
-	for _, e := range entries {
-		if e.Note != "" {
-			pinned++
-		}
-	}
 	budget := maxItems / 2
 	if budget < 3 {
 		budget = 3
@@ -193,9 +205,7 @@ func MemoryDigest(maxItems int) string {
 		if e.Note == "" {
 			continue
 		}
-		if e.Note != "" {
-			fmt.Fprintf(&b, "- %s  # %s\n", e.Fact, e.Note)
-		}
+		fmt.Fprintf(&b, "- %s  # %s\n", e.Fact, e.Note)
 		n++
 	}
 	if n > 0 {
