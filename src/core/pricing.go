@@ -91,13 +91,29 @@ func lookupPrice(providerID, model string) (Price, bool) {
 	if p, ok := byModel[m]; ok {
 		return p, true
 	}
-	best, bestLen := Price{}, 0
+	return pickPrice(byModel, m)
+}
+
+// pickPrice — самый длинный ключ, встречающийся в имени модели.
+//
+// При равной длине побеждает первый по алфавиту, а не «какой
+// попался». Обход map в Go случаен, и без явного порядка два ключа
+// одинаковой длины давали бы разный ответ от запуска к запуску:
+// расход в /stats прыгал бы на одной и той же сессии, а маршрутизация
+// моделей выбирала бы разное при одной конфигурации. Сейчас таких
+// ключей в таблице нет, и это латентно — но стоит добавить один, и
+// дефект стал бы видимым в день, когда никто его не ждал.
+func pickPrice(byModel map[string]Price, model string) (Price, bool) {
+	best, bestKey := Price{}, ""
 	for key, p := range byModel {
-		if strings.Contains(m, key) && len(key) > bestLen {
-			best, bestLen = p, len(key)
+		if !strings.Contains(model, key) {
+			continue
+		}
+		if len(key) > len(bestKey) || (len(key) == len(bestKey) && key < bestKey) {
+			best, bestKey = p, key
 		}
 	}
-	if bestLen == 0 {
+	if bestKey == "" {
 		return Price{}, false
 	}
 	return best, true
