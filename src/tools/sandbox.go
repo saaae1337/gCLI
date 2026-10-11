@@ -34,22 +34,45 @@ type Sandbox struct {
 // Корни нормализуются и разворачиваются в абсолютные пути, потому что
 // сравнение префиксов на «C:\gcli» и «C:\gclix» дало бы ложное срабатывание
 // (классическая ошибка HasPrefix по путям).
+//
+// Разрешаются они и по ссылкам — тем же самым, что и проверяемый путь в
+// Check. Без этого один и тот же каталог, названный по-разному, выглядит
+// для песочницы двумя разными: на Windows «C:\Users\RUNNER~1\...» и
+// «C:\Users\runneradmin\...» — это один каталог (короткое имя и длинное),
+// на macOS то же с «/var» и «/private/var». Проверяемый путь
+// разыменовывался, корень оставался как написан — и песочница отказывала
+// в собственном рабочем каталоге.
 func NewSandbox(roots ...string) *Sandbox {
 	s := &Sandbox{enabled: true}
 	for _, r := range roots {
-		if a, err := filepath.Abs(r); err == nil {
-			s.roots = append(s.roots, filepath.Clean(a))
-		}
+		s.roots = append(s.roots, canonical(r))
 	}
 	return s
+}
+
+// canonical — путь в том же виде, в каком окажется проверяемый путь:
+// абсолютный, очищенный и разыменованный.
+//
+// Каталога может ещё не существовать (корень создают позже, deny обычно
+// указывает на ~/.ssh, которого нет), поэтому resolveSymlinks берёт самый
+// глубокий существующий предок и приклеивает остаток — результат всё равно
+// един для обеих сторон сравнения.
+func canonical(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	real, err := resolveSymlinks(abs)
+	if err != nil || real == "" {
+		return filepath.Clean(abs)
+	}
+	return real
 }
 
 // WithDeny — добавить запрещённые поддеревья.
 func (s *Sandbox) WithDeny(paths ...string) *Sandbox {
 	for _, p := range paths {
-		if a, err := filepath.Abs(p); err == nil {
-			s.deny = append(s.deny, filepath.Clean(a))
-		}
+		s.deny = append(s.deny, canonical(p))
 	}
 	return s
 }

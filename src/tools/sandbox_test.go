@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -129,6 +130,53 @@ func TestSandboxSymlinkEscape(t *testing.T) {
 	}
 	if err := sb.Check(filepath.Join(root, "link", "новый-файл.go")); err == nil {
 		t.Fatal("несуществующий файл под ссылкой тоже должен быть запрещён")
+	}
+}
+
+// linkAlias — второе имя для каталога dir.
+//
+// Под Windows симлинк требует прав разработчика, а junction для каталогов
+// создаётся без них, поэтому там пробуем junction. Если не вышло ни то, ни
+// другое — честно пропускаем: тест про содержательную часть, а не про
+// наличие симлинков в системе.
+func linkAlias(t *testing.T, dir, alias string) {
+	t.Helper()
+	if err := os.Symlink(dir, alias); err == nil {
+		return
+	} else if runtime.GOOS != "windows" {
+		t.Skipf("симлинки недоступны: %v", err)
+	}
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", alias, dir).CombinedOutput()
+	if err != nil {
+		t.Skipf("не создался ни симлинк, ни junction: %v (%s)", err, out)
+	}
+}
+
+// TestSandboxRootAliasResolves — песочница создана по одному имени
+// каталога, а агент работает по другому, и это один и тот же каталог.
+//
+// Так выглядит рабочий каталог, до которого дошли не по тому имени.
+// На Windows это «C:\Users\RUNNER~1\AppData\Local\Temp» против
+// «C:\Users\runneradmin\AppData\Local\Temp» — короткое имя и длинное,
+// один каталог, две записи. На macOS то же самое с «/var» и «/private/var»:
+// TMPDIR отдаёт /var/folders/..., а разыменование возвращает /private/var/...
+// Раньше разыменовывался только проверяемый путь, а корень оставался как
+// есть, и песочница отказывала в собственном рабочем каталоге.
+func TestSandboxRootAliasResolves(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "работа")
+	alias := filepath.Join(base, "псевдоним")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "файл.txt"), []byte("данные"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkAlias(t, real, alias)
+
+	sb := NewSandbox(alias)
+	if err := sb.Check(filepath.Join(real, "файл.txt")); err != nil {
+		t.Fatalf("файл своего же рабочего каталога должен проходить: %v", err)
 	}
 }
 
