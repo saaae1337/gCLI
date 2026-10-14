@@ -7,6 +7,11 @@ import "os"
 // enableVT — на POSIX escape-последовательности поддерживаются всегда.
 func EnableVT() bool { return true }
 
+// ConsoleUTF8 — на POSIX решение принимает локаль, а не консоль:
+// переключать кодовую страницу нечем и незачем. Здесь всегда «умеет»,
+// а отсекает юникод проверка LANG/LC_ALL в main.
+func ConsoleUTF8(tty bool) bool { return true }
+
 // terminalWidth — ширина терминала через переменные COLUMNS или ioctl не делаем:
 // достаточно читать COLUMNS, иначе возвращаем 0 (взять дефолт).
 func terminalWidth() int {

@@ -16,12 +16,88 @@ var (
 	procGetConsoleMode  = modkernel32.NewProc("GetConsoleMode")
 	procSetConsoleMode  = modkernel32.NewProc("SetConsoleMode")
 	procGetConsoleSInfo = modkernel32.NewProc("GetConsoleScreenBufferInfo")
+	procGetConsoleCP    = modkernel32.NewProc("GetConsoleCP")
+	procSetConsoleCP    = modkernel32.NewProc("SetConsoleCP")
+	procGetConsoleOCP   = modkernel32.NewProc("GetConsoleOutputCP")
+	procSetConsoleOCP   = modkernel32.NewProc("SetConsoleOutputCP")
 )
 
 const (
 	stdOutputHandle              = ^uintptr(10) // (DWORD)-11
 	enableVirtualTerminalProcess = 0x0004
+	// cpUTF8 — кодовая страница 65001. Единственная, на которой
+	// псевдографика доезжает до экрана без искажений.
+	cpUTF8 = 65001
 )
+
+// consoleCanShowUnicode — решение по кодовой странице вывода.
+//
+// Чистая функция: настоящую консоль в тесте не создать, а решение
+// обязано быть проверяемым.
+//
+// outCP == 0 означает «консоли нет»: вывод ушёл в файл или в пайп.
+// Спрашивать и переключать нечего — считаем, что умеет, иначе тесты и
+// CI, где вывод перенаправлен, сочли бы терминал непригодным.
+//
+// Решение принимается только по выводу. Кодовая страница ввода отвечает
+// за чтение клавиш, а псевдографику мы печатаем: негодный ввод не мешает
+// показать рамку, и запрещать её из-за ввода незачем.
+func consoleCanShowUnicode(outCP int, canSwitch bool) bool {
+	if outCP == 0 || outCP == cpUTF8 {
+		return true
+	}
+	// Не UTF-8: рисуем, только если консоль удалось переключить.
+	return canSwitch
+}
+
+// consoleOutputCP — текущая кодовая страница вывода, 0 если консоли нет.
+func consoleOutputCP() int {
+	if r, _, _ := procGetConsoleOCP.Call(); r != 0 {
+		return int(r)
+	}
+	return 0
+}
+
+// switchConsoleToUTF8 — перевести консоль в UTF-8, если она ещё не там.
+//
+// Возвращает, удалось ли перевести вывод. Ввод переводится попутно и на
+// ответ не влияет: печатать псевдографику можно и тогда, когда читать
+// кириллицу с клавиатуры не вышло.
+//
+// Отказ — норма, а не авария: прав на смену кодовой страницы может не
+// быть, и тогда остаётся ASCII-режим вместо нечитаемых символов.
+func switchConsoleToUTF8() bool {
+	// Ввод: чтобы кириллица с клавиатуры не превращалась в мусор.
+	if r, _, _ := procGetConsoleCP.Call(); r != 0 && r != uintptr(cpUTF8) {
+		procSetConsoleCP.Call(uintptr(cpUTF8))
+	}
+	out := consoleOutputCP()
+	if out == 0 || out == cpUTF8 {
+		return true
+	}
+	if r, _, _ := procSetConsoleOCP.Call(uintptr(cpUTF8)); r != 0 {
+		return true
+	}
+	return false
+}
+
+// ConsoleUTF8 — можно ли печатать псевдографику в эту консоль.
+//
+// tty=false — вывод ушёл в файл или пайп. Тогда UTF-8 всё равно
+// правильный ответ: Go пишет UTF-8 независимо от консоли, и
+// переключать кодовую страницу пользователя незачем, он этого не просил.
+// Это не мелочь: «gcli -json > отчёт.json» не должен переводить окно
+// терминала.
+//
+// Пытается перевести консоль в UTF-8 и только потом отвечает. Смысл: у
+// пользователя не должно быть способа случайно получить «тФВ» вместо
+// «│». Если перевести не вышло — честно откатываемся на ASCII.
+func ConsoleUTF8(tty bool) bool {
+	if !tty {
+		return true
+	}
+	return consoleCanShowUnicode(consoleOutputCP(), switchConsoleToUTF8())
+}
 
 // EnableVT — включить обработку ANSI-последовательностей для stdout.
 // Возвращает true, если escape-коды поддерживаются.

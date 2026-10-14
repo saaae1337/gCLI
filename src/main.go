@@ -246,6 +246,11 @@ func main() {
 	)
 	flag.Parse()
 
+	// Консоль готовим до первого же вывода, а не внутри setupUI: до неё
+	// уже печатаются -v и -help, где тоже есть «·». На Windows консоль
+	// по умолчанию CP866, и UTF-8 там читается как «тФВ».
+	unicodeOK = unicodeSupported()
+
 	if *flagVersion {
 		fmt.Println("gcli v" + version() + " · " + runtime.GOOS + "/" + runtime.GOARCH + " · " + runtime.Version())
 		return
@@ -526,7 +531,9 @@ func resolveColor(e colorEnv) (color bool, grade ui.ColorLevel) {
 func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 	vtOK := ui.EnableVT()
 	tty := isTerminal()
-	unicodeOK := !ascii && unicodeSupported()
+	// Решение принято один раз, до первого вывода: ascii — явное требование
+	// пользователя, а unicodeOK к этому моменту уже известно.
+	useUnicode := !ascii && unicodeOK
 
 	// Уровень цвета: флаг -color важнее GCLI_COLOR, тот важнее автоопределения.
 	mode := colorMode
@@ -552,14 +559,14 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 		Color:     color,
 		Machine:   machine,
 		ASCII:     ascii,
-		UnicodeOK: unicodeOK,
+		UnicodeOK: useUnicode,
 		NoAnimEnv: os.Getenv("GCLI_NO_ANIM") != "",
 		Cfg:       a.repo.Cfg.Animations,
 	})
 
 	a.ui = ui.New(ui.Options{
 		Theme:      "ember", // стиль один — «УГОЛЬ»
-		Unicode:    unicodeOK,
+		Unicode:    useUnicode,
 		Color:      color,
 		Animations: animations,
 		Compact:    compact,
@@ -1714,10 +1721,26 @@ func (a *app) statusItems() []ui.StatusItem {
 // osMascotEnv — значение GCLI_MASCOT для решения о маскоте.
 func osMascotEnv() string { return os.Getenv("GCLI_MASCOT") }
 
+// unicodeOK — решение о псевдографике, принятое до первого вывода.
+//
+// Отдельная переменная, а не поле app, потому что ответ нужен до того,
+// как интерфейс создан: -v и -help печатаются раньше. Значение по
+// умолчанию — «умеет», чтобы вызов в тестах не зависел от окружения.
+var unicodeOK = true
+
 // unicodeSupported — умеет ли терминал показывать псевдографику.
 func unicodeSupported() bool {
 	if os.Getenv("GCLI_ASCII") != "" {
 		return false
+	}
+	// На Windows решает кодовая страница консоли, а не локаль.
+	// Переменных LANG/LC_ALL там обычно нет вообще, так что старая
+	// проверка локали давала «да» всегда — а консоль по умолчанию
+	// CP866. «│» в ней читается как «тФВ», и весь интерфейс рассыпался
+	// в кракозябры. ConsoleUTF8 сначала переводит консоль в UTF-8 и
+	// только потом отвечает; если перевести не вышло, отвечает «нет».
+	if runtime.GOOS == "windows" {
+		return ui.ConsoleUTF8(isTerminal())
 	}
 	enc := strings.ToLower(os.Getenv("LC_ALL") + os.Getenv("LC_CTYPE") + os.Getenv("LANG"))
 	if enc != "" {
@@ -1726,7 +1749,6 @@ func unicodeSupported() bool {
 		}
 		return false
 	}
-	// На Windows 10+ и в современных терминалах — да.
 	return true
 }
 
