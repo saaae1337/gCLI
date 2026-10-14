@@ -419,7 +419,7 @@ func (u *UI) mascotRedrawLines(lines []string) {
 		b.WriteString("\r\033[K" + u.mascotPaintLine(j, line))
 	}
 	b.WriteString("\0338")
-	_, _ = u.out.Write([]byte(b.String()))
+	u.put(b.String())
 }
 
 // MascotIdleStart — усадить кота на пост и запустить его фоновую жизнь:

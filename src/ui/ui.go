@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"gcli/core"
 )
@@ -325,6 +326,27 @@ func (u *UI) Write(s string) {
 	defer u.mu.Unlock()
 	u.clearSpinLocked()
 	u.mascotAnchored = false
+	u.put(s)
+}
+
+// put — единственная точка, где интерминал получает байты.
+//
+// Здесь, а не в каждом вызывающем, чинится невалидный UTF-8. В поток
+// попадает чужой текст: вывод инструмента, содержимое файла, ответ
+// модели. Файл в windows-1251 — обычное дело (выгрузка из 1С, старый
+// .txt), и его байты, попав в UTF-8-консоль, дают мусор на весь вывод.
+//
+// Замена на U+FFFD вместо молчаливого пропуска: пропуск склеивает слова
+// («п??ивет» → «ппивет»), а знак замены прямо показывает, где потерялось.
+// Валидная строка возвращается как есть, без копии.
+//
+// Обёртка именно здесь, а не в Write, потому что Write держит блокировку
+// и гасит строку ожидания, а спиннер, маскот и прогресс пишут в u.out
+// напрямую. Отдельная точка нужна, чтобы ни один путь её не обошёл.
+func (u *UI) put(s string) {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, string(utf8.RuneError))
+	}
 	_, _ = u.out.Write([]byte(s))
 }
 
@@ -352,7 +374,7 @@ func (u *UI) RawWrite(s string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.mascotAnchored = false
-	_, _ = u.out.Write([]byte(s))
+	u.put(s)
 }
 
 // ClearScreen — очистить экран. Отдельный метод, а не голый RawWrite:
@@ -693,7 +715,7 @@ func (u *UI) SpinnerStart(label string) {
 				if maxl > 8 && runeLen(label) > maxl {
 					label = truncate(label, maxl)
 				}
-				_, _ = u.out.Write([]byte("\r" + cReset + "\033[K" + u.pal.Accent + frame + cReset + " " + label + " " + u.pal.Muted + el.String() + cReset))
+				u.put("\r" + cReset + "\033[K" + u.pal.Accent + frame + cReset + " " + label + " " + u.pal.Muted + el.String() + cReset)
 				i++
 				u.mu.Unlock()
 			}
@@ -779,7 +801,7 @@ func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 						line = withHint
 					}
 				}
-				_, _ = u.out.Write([]byte(line))
+				u.put(line)
 				u.mu.Unlock()
 			}
 		}
@@ -795,7 +817,7 @@ func (u *UI) SpinnerStop() {
 	}
 	u.spin = false
 	stop, done := u.spinStop, u.spinDone
-	_, _ = u.out.Write([]byte("\r" + cReset + "\033[K"))
+	u.put("\r" + cReset + "\033[K")
 	u.mu.Unlock()
 	close(stop)
 	<-done
@@ -810,7 +832,7 @@ func (u *UI) clearSpinLocked() {
 	}
 	u.spin = false
 	stop, done := u.spinStop, u.spinDone
-	_, _ = u.out.Write([]byte("\r" + cReset + "\033[K"))
+	u.put("\r" + cReset + "\033[K")
 	u.mu.Unlock()
 	close(stop)
 	<-done

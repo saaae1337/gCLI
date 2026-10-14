@@ -65,7 +65,7 @@ func (u *UI) Progress(ev ProgressUpdate) {
 
 	// Отступ добавляется здесь, а не внутри progressLine: иначе строка
 	// получалась шириной на весь отступ больше терминала.
-	_, _ = u.out.Write([]byte(u.progressLine(ev) + "\n"))
+	u.put(u.progressLine(ev) + "\n")
 }
 
 // progressLine — собрать одну строку прогресса. Вызывается под mu.
