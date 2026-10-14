@@ -29,9 +29,10 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.22"
-          # go.mod без зависимостей, но кэш всё равно ускоряет распаковку
-          # тулчейна и компиляцию стандартной библиотеи.
-          cache: true
+          # Кэш выключен: setup-go ищет go.sum, которого в проекте нет —
+          # зависимостей нет вообще. Ключ не собрать, setup-go пишет
+          # «Dependencies file is not found» и ничего не кэширует.
+          cache: false
 
       - name: gofmt
         run: |
@@ -149,7 +150,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.22"
-          cache: true
+          cache: false
 
       # -covermode=atomic обязателен вместе с -race: иначе счётчики
       # обновляются из горутин без синхронизации и профиль «считает не то».
