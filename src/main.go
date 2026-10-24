@@ -498,7 +498,7 @@ func main() {
 	// -stats: дашборд и выход, до входа в REPL. Данные из sessions/*.json,
 	// поэтому достаточно ui и репо — агент и провайдеры не нужны.
 	if *flagStats {
-		a.printStats(a.repo.ListSessions(), 30)
+		a.printStats(a.repo.ListSessionInfos(), 30)
 		return
 	}
 	// Полноэкранный цикл: ввод, сырые клавиши и подтверждения целиком его.
@@ -669,7 +669,7 @@ func (a *app) cfgShowTime() bool {
 // loadInitialSession — определить стартовую сессию по флагам.
 func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 	if resume > 0 {
-		ss := a.repo.ListSessions()
+		ss := a.repo.ListSessionInfos()
 		if resume <= len(ss) {
 			if s, err := a.repo.LoadSession(ss[resume-1].ID); err == nil {
 				return s
@@ -680,7 +680,7 @@ func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 		}
 	}
 	if cont {
-		ss := a.repo.ListSessions()
+		ss := a.repo.ListSessionInfos()
 		if len(ss) > 0 {
 			if s, err := a.repo.LoadSession(ss[0].ID); err == nil {
 				return s

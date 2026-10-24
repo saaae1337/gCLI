@@ -13,7 +13,7 @@ import (
 func TestStatsAggregateGroups(t *testing.T) {
 	day := time.Date(2026, 10, 1, 12, 0, 0, 0, time.Local)
 	old := day.AddDate(0, 0, -40)
-	sessions := []core.Session{
+	sessions := []core.SessionInfo{
 		{Updated: day, Provider: "zai", Model: "glm-4.6",
 			Usage: core.Usage{PromptTokens: 1000, CompletionTokens: 500},
 			Stats: core.Stats{Requests: 3, Tools: 5}},

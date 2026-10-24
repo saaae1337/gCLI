@@ -840,7 +840,7 @@ func (a *app) cmdDoctor(rest string) {
 	}
 
 	// Хранилище.
-	ns := len(a.repo.ListSessions())
+	ns := len(a.repo.ListSessionInfos())
 	add(true, "хранилище", fmt.Sprintf("сессий: %d · чекпоинтов: %d · навыков: %d · расширений: %d",
 		ns, len(a.sess.Checkpoints), len(a.tools.LoadSkills()), len(a.tools.LoadExtensions())))
 
