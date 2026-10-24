@@ -4,6 +4,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"gcli/wcwidth"
@@ -318,6 +319,10 @@ func (s *Screen) Plain() string {
 // Renderer — вывод экрана с минимальными обновлениями: в терминал уходят
 // только изменившиеся клетки, а не весь кадр.
 type Renderer struct {
+	// mu защищает поля ниже: Start/Close/Invalidate зовутся из горутины
+	// Run, а Draw/Cursor/HideCursor — из той, что рисует кадр (Text и др.).
+	// Без общего лока на Linux с -race это была настоящая гонка данных.
+	mu     sync.Mutex
 	w      io.Writer
 	color  bool
 	colors int
@@ -340,6 +345,8 @@ func NewRenderer(w io.Writer, color bool, colors int) *Renderer {
 
 // Start — перейти в полноэкранный режим.
 func (r *Renderer) Start(unicode bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.prev = nil
 	r.ready = false
 	// 1049 — альтернативный экран; 25 — спрятать курсор; 2004 — вставка;
@@ -355,6 +362,8 @@ func (r *Renderer) Start(unicode bool) error {
 
 // Close — вернуть терминал в исходное состояние.
 func (r *Renderer) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.ready {
 		return nil
 	}
@@ -365,10 +374,16 @@ func (r *Renderer) Close() error {
 
 // Invalidate — перерисовать всё заново (после ресайза или выхода из
 // внешней программы).
-func (r *Renderer) Invalidate() { r.prev = nil }
+func (r *Renderer) Invalidate() {
+	r.mu.Lock()
+	r.prev = nil
+	r.mu.Unlock()
+}
 
 // Draw — вывести изменившиеся клетки кадра и вернуть позицию курсора.
 func (r *Renderer) Draw(s *Screen) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.ready || s == nil {
 		return
 	}
@@ -452,6 +467,8 @@ func (r *Renderer) moveTo(b *strings.Builder, x, y int) {
 
 // Cursor — показать курсор в позиции (x,y) и вернуть true.
 func (r *Renderer) Cursor(x, y int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.ready {
 		return
 	}
@@ -474,6 +491,8 @@ func (r *Renderer) Cursor(x, y int) {
 
 // HideCursor — спрятать курсор.
 func (r *Renderer) HideCursor() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if !r.ready || !r.shown {
 		return
 	}
