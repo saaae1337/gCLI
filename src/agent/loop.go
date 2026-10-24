@@ -95,9 +95,13 @@ func canonical(v any) any {
 // Успешный вывод в ключ не входит: одинаковый вывод bash может быть
 // ожидаемым (сборка дважды), а вот одинаковая ошибка три раза подряд —
 // почти всегда тупик.
+//
+// Префиксы — те же константы errPrefix/warnPrefix, что ставит execOne
+// (agent.go). Это один контракт, а не совпадение строк.
 func errKey(text string) string {
 	t := strings.ToLower(strings.TrimSpace(text))
-	if !strings.HasPrefix(t, "ошибка") && !strings.HasPrefix(t, "предупреждение") {
+	if !strings.HasPrefix(t, strings.ToLower(errPrefix)) &&
+		!strings.HasPrefix(t, strings.ToLower(warnPrefix)) {
 		return ""
 	}
 	if len([]rune(t)) > 200 {

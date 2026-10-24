@@ -785,7 +785,7 @@ func (a *app) cmdCompact() {
 	a.ui.SpinnerStart("Сжимаю историю")
 	ag := a.newAgent(true)
 	ag.WithAgentMode(false)
-	ok := ag.Compact(false)
+	ok := ag.Compact(context.Background(), false)
 	a.ui.SpinnerStop()
 	if ok {
 		a.saveSession()
