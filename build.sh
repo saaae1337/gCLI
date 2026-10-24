@@ -73,9 +73,11 @@ cmd_fmt() {
 
 cmd_clean() {
   echo "▎ Чистка builds/"
+  # gcli-* покрывает и хвосты "~" (отложенные при перезаписи запущенные
+  # бинарники Windows), поэтому отдельный шаблон не нужен.
   rm -f "$OUT_DIR"/gcli-* 2>/dev/null || true
-  # хвосты "~" — отложенные при перезаписи запущенные бинарники (Windows)
-  rm -f "$OUT_DIR"/gcli-*"~" 2>/dev/null || true
+  # Суммы без файлов — ложная проверка для того, кто скачает релиз.
+  rm -f "$OUT_DIR/SHA256SUMS.txt" 2>/dev/null || true
   echo "Готово."
 }
 
@@ -130,13 +132,15 @@ cmd_all() {
 
 # drop_other_versions — убрать из builds/ бинарники с версией не этой сборки.
 drop_other_versions() {
-  local keep="$1" stale
-  stale="$(cd "$OUT_DIR" && ls -1 2>/dev/null | grep -E '^gcli-[0-9]' | grep -vE "^gcli-$keep[-~]" || true)"
-  if [ -n "$stale" ]; then
-    echo "$stale" | while read -r f; do
-      [ -n "$f" ] && rm -f "$OUT_DIR/$f" && echo "  удалён устаревший $f"
-    done
-  fi
+  local keep="$1" f
+  # case, а не grep -E: версия — не регулярное выражение, точки в ней не
+  # должны совпадать с любым символом.
+  for f in $(cd "$OUT_DIR" && ls -1 2>/dev/null | grep -E '^gcli-[0-9]' || true); do
+    case "$f" in
+      "gcli-$keep"[-~]*) ;;
+      *) rm -f "$OUT_DIR/$f" && echo "  удалён устаревший $f" ;;
+    esac
+  done
 }
 
 write_sums() {

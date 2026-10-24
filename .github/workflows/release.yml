@@ -35,13 +35,17 @@ jobs:
           go-version: "1.22"
 
       - name: Проверка версии
+        env:
+          # При workflow_dispatch GITHUB_REF_NAME — это ветка (main), а не
+          # выбранный тег: версия и заметки обязаны брать именно input.
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # Тег должен совпадать с var Version в core/core.go: вложения
           # названы по одному номеру, а -v внутри бинарника должен печатать
           # тот же. Расхождение означало бы, что человек проверяет версию
           # не того файла, который скачал.
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           ver=$(grep -oE '^var Version = "[^"]+"' src/core/core.go | grep -oE '[0-9][^"]*')
           echo "тег: $tag, версия в коде: $ver"
           if [ "$tag" != "v$ver" ]; then
@@ -69,21 +73,26 @@ jobs:
           test -f builds/SHA256SUMS.txt || { echo "нет SHA256SUMS.txt" >&2; exit 1; }
 
       - name: Заметки релиза из CHANGELOG
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           version="${tag#v}"
-          # Блок раздела этой версии из CHANGELOG.md — до следуого заголовка
+          # Блок раздела этой версии из CHANGELOG.md — до следующего заголовка
           # «## [» или конца файла. Заголовки вида «###» в блок входят.
           #
           # Ищем по началу строки, а не точным равенством. Заголовок бывает
           # двух видов: «## [6.2.1]» и «## [6.2.3] - 2026-10-11». Точное
           # равенство находит первый и не находит второй, и релиз падает с
           # «в CHANGELOG.md нет раздела» на версии, которая там есть.
-          # Дальше «[» означала бы, что номер версии не кончился:
-          # «## [6.2.1]» не должен поймать «## [6.2.10]».
+          # После «]» допустимы только конец строки, пробел или дефис:
+          # иначе «## [6.2.1]» поймал бы «## [6.2.10]».
           awk -v want="## [$version]" '
-            index($0, want) == 1 && substr($0, length(want) + 1, 1) != "[" {grab=1; next}
+            index($0, want) == 1 {
+              rest = substr($0, length(want) + 1)
+              if (rest == "" || rest ~ /^[ \t-]/) {grab=1; next}
+            }
             grab && /^## \[/ {exit}
             grab {print}
           ' CHANGELOG.md > /tmp/notes.md
