@@ -33,11 +33,14 @@ if [ -z "$VERSION" ]; then
 fi
 LDFLAGS="-s -w -X main.buildVersion=$VERSION"
 
-# GOOS/GOARCH/имя файла. Первые четыре — то, что реально отдаётся пользователю.
+# GOOS/GOARCH/имя файла. Первые шесть — то, что реально отдаётся пользователю.
+# linux/arm64 — Raspberry Pi (64-битные), ARM-серверы и контейнеры на Apple
+# Silicon: без него на таких машинах оставался только "собери сам".
 TARGETS=(
   "windows amd64 gcli-$VERSION-windows-amd64.exe"
   "windows arm64 gcli-$VERSION-windows-arm64.exe"
   "linux   amd64 gcli-$VERSION-linux-amd64"
+  "linux   arm64 gcli-$VERSION-linux-arm64"
   "darwin  amd64 gcli-$VERSION-darwin-amd64"
   "darwin  arm64 gcli-$VERSION-darwin-arm64"
 )
