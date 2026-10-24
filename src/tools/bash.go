@@ -99,6 +99,14 @@ func ShellName() string {
 // maxBashOutput — сколько символов вывода команды отдаём модели.
 const maxBashOutput = 16000
 
+// bashCaptureLimit — сколько байт вывода храним в памяти (начало + конец).
+//
+// Раньше весь вывод читался через CombinedOutput, и команда с гигабайтным
+// логом укладывала процесс, хотя модели всё равно нужны только первые
+// 16 тысяч символов. Потолок с запасом перекрывает maxBashOutput после
+// конвертации байт в руны (кириллица — 2 байта на символ).
+const bashCaptureLimit = 64 * 1024
+
 // hBash — выполнить shell-команду.
 func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) {
 	cmd := ArgStr(m, "command")
@@ -133,8 +141,14 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 	cmdEx.Dir = workdir
 	cmdEx.Env = append(os.Environ(), "GCLI=1")
 
-	outBytes, err := cmdEx.CombinedOutput()
-	out := string(outBytes)
+	// Вывод — через Capture: первые и последние 64 КБ, середина
+	// выбрасывается. Иначе `yes` или слепая рекурсия логов уложили бы
+	// процесс по памяти, а модель видела бы лишь начало и так.
+	captured := core.NewCapture(bashCaptureLimit)
+	cmdEx.Stdout = captured
+	cmdEx.Stderr = captured
+	err := cmdEx.Run()
+	out := captured.String()
 	out = core.TruncateUTF8(out, maxBashOutput/2, maxBashOutput/2)
 
 	if err != nil {

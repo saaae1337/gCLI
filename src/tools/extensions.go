@@ -289,8 +289,13 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		if input != "" {
 			cmdEx.Stdin = strings.NewReader(input + "\n")
 		}
-		outBytes, err := cmdEx.CombinedOutput()
-		out := string(outBytes)
+		// Capture вместо CombinedOutput: расширение — чужой код, и он
+		// тоже может выдать бесконечный лог.
+		captured := core.NewCapture(32 * 1024)
+		cmdEx.Stdout = captured
+		cmdEx.Stderr = captured
+		err := cmdEx.Run()
+		out := captured.String()
 		lines := len(core.SplitLines(out))
 		out = core.TruncateUTF8(out, 8000, 8000)
 		if err != nil {

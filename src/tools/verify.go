@@ -614,8 +614,13 @@ func (r *Registry) runVerifyCmd(ctx context.Context, cmd, dir string, timeout in
 	ce.Dir = dir
 	ce.Env = append(os.Environ(), "GCLI=1", "CI=1")
 	t0 := time.Now()
-	data, err := ce.CombinedOutput()
-	out := verifyOut{text: string(data), elapsed: time.Since(t0)}
+	// Capture вместо CombinedOutput: go test с горящими тестами может
+	// выдать сотни мегабайт, и verify уложил бы процесс по памяти.
+	captured := core.NewCapture(64 * 1024)
+	ce.Stdout = captured
+	ce.Stderr = captured
+	err := ce.Run()
+	out := verifyOut{text: captured.String(), elapsed: time.Since(t0)}
 	if err != nil {
 		// Таймаут разбираем ПЕРВЫМ, по ctx.Err(), а не по коду возврата.
 		// Убитый по контексту процесс отдаёт ExitError, но код у него
