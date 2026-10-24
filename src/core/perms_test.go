@@ -1,6 +1,7 @@
 package core
 
 import (
+	"os"
 	"path/filepath"
 
 	"strings"
@@ -151,20 +152,18 @@ func TestParseRuleKeepsColonInPattern(t *testing.T) {
 	}
 }
 
-func TestParseRulesKeepsOrder(t *testing.T) {
-	rs, err := ParseRules([]string{"bash: allow", "bash(rm *): deny"})
-	if err != nil {
-		t.Fatalf("ParseRules: %v", err)
-	}
+func TestRulesKeepOrder(t *testing.T) {
+	rs := mustRules(t, "bash: allow", "bash(rm *): deny")
 	if rs.Len() != 2 {
 		t.Fatalf("ожидалось 2 правила, получили %d", rs.Len())
 	}
 }
 
-// TestParseRulesReportsIndex — ошибка должна называть номер строки:
+// TestRulesReportsIndex — ошибка должна называть номер строки:
 // иначе в конфиге из двадцати правил искать её вручную.
-func TestParseRulesReportsIndex(t *testing.T) {
-	_, err := ParseRules([]string{"bash: allow", "bash: maybe", "read: allow"})
+func TestRulesReportsIndex(t *testing.T) {
+	var rs Rules
+	err := (&PermissionCfg{Rules: []string{"bash: allow", "bash: maybe", "read: allow"}}).AddTo(&rs)
 	if err == nil {
 		t.Fatal("ждалась ошибка")
 	}
@@ -173,11 +172,21 @@ func TestParseRulesReportsIndex(t *testing.T) {
 	}
 }
 
+// mustRules — разобрать компактные правила боевым путём конфига.
+func mustRules(t *testing.T, lines ...string) Rules {
+	t.Helper()
+	var rs Rules
+	if err := (&PermissionCfg{Rules: lines}).AddTo(&rs); err != nil {
+		t.Fatalf("разбор правил: %v", err)
+	}
+	return rs
+}
+
 // ---------- Решение ----------
 
 // TestDecideLastMatchWins — базовое правило системы.
 func TestDecideLastMatchWins(t *testing.T) {
-	rs, _ := ParseRules([]string{"bash: allow", "bash(git push *): ask", "bash(git push --force *): deny"})
+	rs := mustRules(t, "bash: allow", "bash(git push *): ask", "bash(git push --force *): deny")
 	for _, c := range []struct {
 		subj string
 		want Permission
@@ -206,7 +215,7 @@ func TestDecideNoRuleIsAsk(t *testing.T) {
 }
 
 func TestDecideEmptyPatternIsWholeTool(t *testing.T) {
-	rs, _ := ParseRules([]string{"edit: allow"})
+	rs := mustRules(t, "edit: allow")
 	if d, _, ok := rs.Decide("edit", "src/main.go"); !ok || d != PermAllow {
 		t.Errorf("правило без скобок должно ловить любой аргумент: %s %v", d, ok)
 	}
@@ -260,6 +269,24 @@ func TestMatchGlobWindowsSeparators(t *testing.T) {
 func TestMatchGlobStarCrossesPath(t *testing.T) {
 	if !matchGlob("go *", "go test ./pkg/...") {
 		t.Error("одиночный * должен пересекать разделители пути")
+	}
+}
+
+// TestMatchGlobUnicodeQuestion — «?» обязан совпадать с одной руной, а не
+// с одним байтом: иначе правило с кириллицей не ловило бы ничего.
+func TestMatchGlobUnicodeQuestion(t *testing.T) {
+	for _, c := range []struct {
+		pat, s string
+		want   bool
+	}{
+		{"файл?.go", "файл1.go", true},
+		{"д?м", "дом", true},
+		{"д?м", "драм", false},
+		{"путь/?.txt", "путь/я.txt", true},
+	} {
+		if got := matchGlob(c.pat, c.s); got != c.want {
+			t.Errorf("matchGlob(%q, %q) = %v, ждали %v", c.pat, c.s, got, c.want)
+		}
 	}
 }
 
@@ -368,23 +395,29 @@ func TestPermissionCfgModeNotBeatenByToollessRule(t *testing.T) {
 // проверяется раньше строки без имени: иначе короткая строка забила бы
 // явный запрет.
 func TestDecideAnyPrefersNamedOverToolless(t *testing.T) {
-	rs, err := ParseRules([]string{"git push*: ask", "bash(git push*): deny"})
-	if err != nil {
-		t.Fatalf("разбор правил: %v", err)
-	}
+	rs := mustRules(t, "git push*: ask", "bash(git push*): deny")
 	d, hit, ok := rs.DecideAny(ToolsForPermission("exec"), "git push --force")
 	if !ok || d != PermDeny {
 		t.Errorf("ожидался deny, получили %s %v (правило %q)", d, ok, hit.String())
 	}
 }
 
+// TestDecideAnyNamedRuleWinsEvenWhenToollessComesLater — регрессия: первый
+// проход звал Match, который ловил и правило «*», поэтому строка без имени,
+// стоящая ниже, перекрывала явный запрет для bash.
+func TestDecideAnyNamedRuleWinsEvenWhenToollessComesLater(t *testing.T) {
+	rs := mustRules(t, "bash(git push*): deny", "git push*: ask")
+	d, hit, ok := rs.DecideAny(ToolsForPermission("exec"), "git push origin main")
+	if !ok || d != PermDeny {
+		t.Errorf("ожидался deny от именованного правила, получили %s %v (правило %q)",
+			d, ok, hit.String())
+	}
+}
+
 // TestDecideAnyFallsBackToToollessRule — если по именам группы ничего нет,
 // строка без имени инструмента всё равно применяется.
 func TestDecideAnyFallsBackToToollessRule(t *testing.T) {
-	rs, err := ParseRules([]string{"npm *: deny"})
-	if err != nil {
-		t.Fatalf("разбор правил: %v", err)
-	}
+	rs := mustRules(t, "npm *: deny")
 	d, _, ok := rs.DecideAny(ToolsForPermission("exec"), "npm publish")
 	if !ok || d != PermDeny {
 		t.Errorf("ожидался deny для job по правилу без имени, получили %s %v", d, ok)
@@ -459,6 +492,33 @@ func TestPatternForPathOutsideKeepsAbsolute(t *testing.T) {
 	got := PatternForPath(work, "/etc/passwd")
 	if !strings.HasPrefix(got, "/") {
 		t.Errorf("вне проекта должен остаться абсолютный путь, получили %q", got)
+	}
+}
+
+// TestPatternForPathKeepsDotDotChild — каталог «..foo» внутри проекта не
+// должен считаться выходом из него.
+func TestPatternForPathKeepsDotDotChild(t *testing.T) {
+	work := t.TempDir()
+	got := PatternForPath(work, filepath.Join(work, "..foo", "x.go"))
+	if got != "..foo/x.go" {
+		t.Errorf("получили %q, ждали ..foo/x.go", got)
+	}
+}
+
+// TestReadProjectConfigFileReportsReadError — каталог на месте gcli.json
+// это ошибка, а не «конфига нет»: молча пропустить её значит соврать о
+// применённых правилах.
+func TestReadProjectConfigFileReportsReadError(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "gcli.json")
+	if err := os.Mkdir(name, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProjectConfigFile(name); err == nil {
+		t.Error("нечитаемый конфиг проекта должен давать ошибку")
+	}
+	if _, _, err := LoadProjectConfig(dir); err == nil {
+		t.Error("LoadProjectConfig не должен молча пропускать нечитаемый файл")
 	}
 }
 

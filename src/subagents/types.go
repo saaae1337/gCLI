@@ -394,9 +394,6 @@ func ToolsFor(t Type) (allow []string, deny []string) {
 	}
 }
 
-// BatchTools — инструменты пакетного (параллельного) режима.
-func BatchTools() []string { return []string{"multi_read", "multi_edit", "multi_grep", "multi_bash"} }
-
 // ---------- Пользовательские агенты (.gcli/agents/*.md) ----------
 
 // CustomAgent — агент, определённый пользователем в markdown-файле.
@@ -482,7 +479,9 @@ func ParseCustomAgent(p, scope string) (CustomAgent, error) {
 		return CustomAgent{}, err
 	}
 	ca := CustomAgent{Path: p, Scope: scope}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	// BOM появляется от редакторов Windows и ломает распознавание front matter:
+	// файл начинался бы с «\ufeff---», и весь блок оставался бы в промпте.
+	text := strings.TrimPrefix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\ufeff")
 	body := text
 	if strings.HasPrefix(text, "---") {
 		if end := strings.Index(text[3:], "\n---"); end >= 0 {
@@ -491,23 +490,23 @@ func ParseCustomAgent(p, scope string) (CustomAgent, error) {
 			for _, line := range strings.Split(fm, "\n") {
 				line = strings.TrimSpace(line)
 				if v, ok := strings.CutPrefix(line, "name:"); ok {
-					ca.Name = strings.TrimSpace(strings.Trim(v, `"'`))
+					ca.Name = yamlValue(v)
 				}
 				if v, ok := strings.CutPrefix(line, "description:"); ok {
-					ca.Desc = strings.TrimSpace(strings.Trim(v, `"'`))
+					ca.Desc = yamlValue(v)
 				}
 				if v, ok := strings.CutPrefix(line, "model:"); ok {
-					ca.Model = strings.TrimSpace(strings.Trim(v, `"'`))
+					ca.Model = yamlValue(v)
 				}
 				if v, ok := strings.CutPrefix(line, "tools:"); ok {
-					for _, t := range strings.Split(strings.ReplaceAll(v, ";", ","), ",") {
+					for _, t := range strings.Split(strings.ReplaceAll(yamlValue(v), ";", ","), ",") {
 						if t = strings.TrimSpace(t); t != "" {
 							ca.Tools = append(ca.Tools, t)
 						}
 					}
 				}
 				if v, ok := strings.CutPrefix(line, "read_only:"); ok {
-					ca.ReadOnly = strings.EqualFold(strings.TrimSpace(v), "true")
+					ca.ReadOnly = strings.EqualFold(yamlValue(v), "true")
 				}
 			}
 		}
@@ -517,4 +516,29 @@ func ParseCustomAgent(p, scope string) (CustomAgent, error) {
 	}
 	ca.Prompt = body
 	return ca, nil
+}
+
+// yamlValue — значение front matter без inline-комментария и кавычек.
+//
+// Шаблон AgentTemplate намеренно содержит подсказки после двоеточия
+// («tools:  # через запятую…»). Без отсечения по «#» эти подсказки попадали
+// в список инструментов и в имя модели, и новый агент из шаблона получал
+// несуществующие настройки.
+func yamlValue(v string) string {
+	v = strings.TrimSpace(v)
+	var quote byte
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '#' && (i == 0 || v[i-1] == ' ' || v[i-1] == '\t'):
+			v = v[:i] // дальше комментарий; цикл завершится сам
+		}
+	}
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(v), `"'`))
 }

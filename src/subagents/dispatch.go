@@ -43,17 +43,25 @@ type DispatchSignal struct {
 	Weight int
 }
 
-// HasRoleMention — был ли указан тип явно.
-//
-// Отдельное поле, а не сравнение с "": главный агент может указать
-// пользовательского агента из .gcli/agents/*.md, которого нет в списке
-// типов. Считать это «не указал» нельзя — тогда dispatcher перезаписал бы
-// выбор модели.
-func (v DispatchVerdict) HasRoleMention() bool { return v.Score > 0 }
+// dispatchSpan — байтовый интервал найденного признака в тексте задачи.
+type dispatchSpan struct{ from, to int }
+
+// spanCovered — пересекается ли интервал с уже засчитанным совпадением.
+func spanCovered(spans []dispatchSpan, from, to int) bool {
+	for _, s := range spans {
+		if from < s.to && s.from < to {
+			return true
+		}
+	}
+	return false
+}
 
 // Reason — краткое объяснение выбора для отчёта и подсказки модели.
 func (v DispatchVerdict) Reason() string {
-	if len(v.Signals) == 0 {
+	// Неуверенный вердикт роль не выбирает, поэтому и объяснять нечего:
+	// «роль выбрана автоматически: custom (уверенность 0)» — ложь, которая
+	// ещё и прячет, что решение осталось за вызывающим кодом.
+	if v.Score < minDispatchScore || len(v.Signals) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -208,10 +216,42 @@ func Dispatch(task string) DispatchVerdict {
 		signal DispatchSignal
 	}
 	byRole := map[Type]*agg{}
+	covered := map[Type][]dispatchSpan{}
 	var order []Type
 	for _, r := range dispatchRules {
-		if !strings.Contains(lower, r.word) {
+		// Все вхождения слова: короткое правило может быть частью длинного
+		// («тест» внутри «тесты», «план» внутри «планирование»). Такое
+		// совпадение — один и тот же признак, и суммировать его дважды нельзя:
+		// иначе «поправь баг и добавь тесты» уходило бы в tester с весом 6,
+		// хотя «исправь» весит столько же, сколько весь тестовый признак.
+		var starts []int
+		for off := 0; ; {
+			i := strings.Index(lower[off:], r.word)
+			if i < 0 {
+				break
+			}
+			i += off
+			starts = append(starts, i)
+			off = i + len(r.word)
+			if off >= len(lower) {
+				break
+			}
+		}
+		if len(starts) == 0 {
 			continue
+		}
+		fresh := false
+		for _, st := range starts {
+			if !spanCovered(covered[r.role], st, st+len(r.word)) {
+				fresh = true
+				break
+			}
+		}
+		if !fresh {
+			continue
+		}
+		for _, st := range starts {
+			covered[r.role] = append(covered[r.role], dispatchSpan{from: st, to: st + len(r.word)})
 		}
 		a := byRole[r.role]
 		if a == nil {

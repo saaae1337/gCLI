@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"gcli/core"
 )
@@ -92,6 +93,9 @@ type MissionDeps struct {
 // missionEngine — движок прогона внутри хода агента.
 type missionEngine struct {
 	deps MissionDeps
+	// mu защищает notified: stop приходит из HTTP-горутины, а tick —
+	// из агентного цикла, и оба могут одновременно решить уведомить хост.
+	mu sync.Mutex
 	// pendingTools — вызовы инструментов с прошлой отметки бюджета.
 	//
 	// Именно с прошлой отметки, а не за весь ход: Tick эти вызовы
@@ -136,7 +140,10 @@ func newMissionEngine(d MissionDeps) *missionEngine {
 // проверяет нулевые потолки.
 func startMission(m core.Mission, d MissionDeps) *missionEngine {
 	m = m.Apply()
-	if !m.Long() && !m.HasAcceptance() && !m.Budgeted() {
+	// MaxIters — такой же потолок прогона, как токены и время: задание
+	// «не больше 50 итераций» без режима и критериев обязано работать,
+	// иначе потолок в mission.json молча игнорируется.
+	if !m.Long() && !m.HasAcceptance() && !m.Budgeted() && m.MaxIters <= 0 {
 		return nil
 	}
 	return newMissionEngine(d)
@@ -173,11 +180,20 @@ func (e *missionEngine) spent() int {
 
 // notify — один раз сообщить хосту причину остановки.
 func (e *missionEngine) notify(reason string) {
-	if e == nil || e.deps.Stopped == nil || e.notified == reason {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.deps.Stopped == nil || e.notified == reason {
+		e.mu.Unlock()
 		return
 	}
 	e.notified = reason
-	e.deps.Stopped(reason)
+	stopped := e.deps.Stopped
+	e.mu.Unlock()
+	// Колбэк вызывается без мьютекса: хост вправе перейти в StopMission,
+	// и повторный вход в notify не должен блокироваться на самом себе.
+	stopped(reason)
 }
 
 // countTools — отметить вызовы инструментов текущей итерации.
@@ -192,8 +208,22 @@ func (e *missionEngine) stop(reason string) {
 	if e == nil {
 		return
 	}
-	e.deps.Tracker.Stop(reason)
-	e.notify(reason)
+	// Причина берётся из трекера: если прогон уже остановлен бюджетом,
+	// Stop вернёт её, и хост не получит второе, противоречащее уведомление.
+	actual := e.deps.Tracker.Stop(reason)
+	e.notify(actual)
+}
+
+// progress — отметить реальное продвижение прогона.
+//
+// Без этой отметки трекер считает застой от старта прогона: длинная
+// работа, где каждая итерация приносит новые вызовы, хоронила себя на
+// StallLimit*3 итерации, хотя стоять на месте не начинала.
+func (e *missionEngine) progress() {
+	if e == nil {
+		return
+	}
+	e.deps.Tracker.Progress()
 }
 
 // tracker — трекер для UI и команд.
@@ -284,15 +314,6 @@ func (e *missionEngine) resumeNote() string {
 	e.deps.Tracker.MarkResumeShown()
 	ago := core.FormatDur(e.deps.Tracker.Elapsed())
 	return fmt.Sprintf(missionResumedNote, ago, e.deps.Resume)
-}
-
-// resumePending — ждёт ли прогон вставки приглашения к продолжению.
-//
-// Отдельно от resumeNote, потому что приглашение обязано появиться
-// именно в том ходе, где прогон реально пойдёт дальше: вставка в
-// историю обычного хода была бы сообщением без работы.
-func (e *missionEngine) resumePending() bool {
-	return e != nil && !e.deps.Tracker.ResumeShown() && strings.TrimSpace(e.deps.Resume) != ""
 }
 
 // continueMessage — попросить модель продолжить вместо остановки.

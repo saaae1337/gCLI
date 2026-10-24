@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +25,9 @@ func ThinkState(cfg core.Config) string {
 
 // Stream — единая точка стриминга: выбирает протокол провайдера.
 func Stream(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, think string, out chan<- core.Delta) error {
+	if p == nil {
+		return fmt.Errorf("провайдер не задан")
+	}
 	if creq.Model == "" {
 		return fmt.Errorf("не выбрана модель — задай: /model <имя> или пройди /setup")
 	}
@@ -43,6 +46,15 @@ func Stream(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, 
 
 // FetchModels — список моделей с endpoint-а: GET {base}/models.
 func FetchModels(ctx context.Context, c *Client, p *Provider) ([]string, error) {
+	if p == nil {
+		return nil, fmt.Errorf("провайдер не задан")
+	}
+	if p.BaseURL == "" {
+		return nil, fmt.Errorf("у провайдера %s не задан base URL", p.ID)
+	}
+	if c == nil || c.HTTP == nil {
+		return nil, fmt.Errorf("нет HTTP-клиента для запроса к провайдеру")
+	}
 	base := p.BaseURL
 	if p.Kind == ProtoAnthropic {
 		base = anthropicBase(base)
@@ -55,27 +67,21 @@ func FetchModels(ctx context.Context, c *Client, p *Provider) ([]string, error) 
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
+	// Список моделей идёт с перебором ключей: мёртвый первый ключ не
+	// должен ронять /models.
+	_, body, err := c.fetchWithKeys(ctx, p, func(key string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
+		if err != nil {
+			return nil, err
+		}
+		p.applyKey(req, key)
+		for k, v := range p.ExtraHeaders {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	if p.Kind == ProtoAnthropic {
-		req.Header.Set("x-api-key", p.Key)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else if p.Key != "" {
-		req.Header.Set("Authorization", "Bearer "+p.Key)
-	}
-	for k, v := range p.ExtraHeaders {
-		req.Header.Set(k, v)
-	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, coreTruncate(oneLine(string(body)), 160))
 	}
 	var ids []string
 	var obj struct {
@@ -131,18 +137,68 @@ func FetchModels(ctx context.Context, c *Client, p *Provider) ([]string, error) 
 // reHTTPStatus — код HTTP из текста ошибки.
 var reHTTPStatus = regexp.MustCompile(`HTTP (\d{3})`)
 
-// TestKey — реальная проверка ключа запросом GET /models.
+// TestKey — реальная проверка ключей запросом GET /models.
 // Возвращает (ok, человекочитаемое объяснение).
+//
+// При пуле ключей проверяются все: человек должен видеть, какой ключ
+// годен, а какой уже отвергнут провайдером. Иначе пришлось бы гадать,
+// почему после смены ключа провайдер всё ещё не пускает.
 func TestKey(c *Client, p *Provider) (bool, string) {
+	if p == nil {
+		return false, "провайдер не задан"
+	}
 	if p.NoKey {
 		return true, "локальный провайдер — ключ не требуется"
 	}
-	if p.Key == "" {
+	if p.KeyCount() == 0 {
 		return false, "ключ не задан — задай: /provider key " + p.ID + " <ключ> или /setup"
 	}
-	_, err := FetchModels(context.Background(), c, p)
+	keys := p.Pool.Keys()
+	if len(keys) == 0 {
+		keys = []string{p.Key}
+	}
+	var (
+		good    []string
+		problem []string
+		lastErr error
+	)
+	for _, k := range keys {
+		err := testOneKey(c, p, k)
+		if err == nil {
+			good = append(good, k)
+			continue
+		}
+		lastErr = err
+		problem = append(problem, k)
+	}
+	switch {
+	case len(good) > 0:
+		msg := "рабочих ключей: " + strconv.Itoa(len(good)) + " из " + strconv.Itoa(len(keys))
+		if len(good) == 1 {
+			msg = "ключ " + MaskKey(good[0]) + " рабочий"
+		}
+		if len(problem) > 0 {
+			msg += "; не прошли: " + strconv.Itoa(len(problem))
+		}
+		return true, msg
+	case len(problem) > 0:
+		return false, keyProblemText(p, lastErr, len(problem))
+	}
+	return false, "проверка не удалась"
+}
+
+// testOneKey — проверка одного ключа.
+func testOneKey(c *Client, p *Provider, key string) error {
+	probe := *p
+	probe.Pool = NewKeyPool([]string{key})
+	_, err := FetchModels(context.Background(), c, &probe)
+	return err
+}
+
+// keyProblemText — объяснение по последней ошибке проверки ключа.
+func keyProblemText(p *Provider, err error, count int) string {
 	if err == nil {
-		return true, "сервер принял ключ " + MaskKey(p.Key) + " — он рабочий"
+		return "ключ не прошёл проверку"
 	}
 	msg := oneLine(err.Error())
 	m := reHTTPStatus.FindStringSubmatch(msg)
@@ -152,50 +208,63 @@ func TestKey(c *Client, p *Provider) (bool, string) {
 	}
 	switch status {
 	case "401":
-		return false, "401 — сервер отклонил ключ: чужой для этого провайдера или с опечаткой. " +
+		return "401 — сервер отклонил ключ: чужой для этого провайдера или с опечаткой. " +
 			"Вставь заново: /provider key " + p.ID + " <ключ>"
 	case "403":
-		return false, "403 — доступ запрещён: у ключа нет прав на этот endpoint либо регион заблокирован"
+		return "403 — доступ запрещён: у ключа нет прав на этот endpoint либо регион заблокирован"
 	case "402":
-		return false, "402 — на балансе провайдера нет средств — пополни аккаунт (ключ при этом правильный)"
+		return "402 — на балансе провайдера нет средств — пополни аккаунт (ключ при этом правильный)"
 	case "404":
-		return false, "404 — base URL неверный: " + p.BaseURL + "/models не найден — исправь: /provider add " + p.ID + " <url>"
+		base := strings.TrimRight(p.BaseURL, "/")
+		if p.Kind == ProtoAnthropic {
+			base = anthropicBase(p.BaseURL)
+		}
+		return "404 — base URL неверный: " + base + "/models не найден — исправь: /provider add " + p.ID + " <url>"
 	case "429":
-		return false, "429 — лимит запросов: ключ живой, но квота исчерпана — подожди и повтори"
+		return "429 — лимит запросов: ключ живой, но квота исчерпана — подожди и повтори"
 	}
 	low := strings.ToLower(msg)
 	for _, s := range []string{"deadline", "timeout", "connection refused", "no such host", "dial tcp", "network is unreachable"} {
 		if strings.Contains(low, s) {
-			return false, "сеть недоступна или DNS не резолвит " + p.BaseURL + " — " + coreTruncate(msg, 80)
+			return "сеть недоступна или DNS не резолвит " + p.BaseURL + " — " + coreTruncate(msg, 80)
 		}
 	}
-	return false, coreTruncate(msg, 120)
+	if count > 1 {
+		return "ни один ключ из " + strconv.Itoa(count) + " не прошёл: " + coreTruncate(msg, 100)
+	}
+	return coreTruncate(msg, 120)
 }
 
 // Ping — быстрая проверка доступности endpoint-а.
 func Ping(c *Client, p *Provider) (time.Duration, int, error) {
+	if p == nil {
+		return 0, 0, fmt.Errorf("провайдер не задан")
+	}
+	if p.BaseURL == "" {
+		return 0, 0, fmt.Errorf("у провайдера %s не задан base URL", p.ID)
+	}
+	if c == nil || c.HTTP == nil {
+		return 0, 0, fmt.Errorf("нет HTTP-клиента для запроса к провайдеру")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.BaseURL, "/"), nil)
-	if err != nil {
-		return 0, 0, err
-	}
-	if p.Key != "" {
-		if p.Kind == ProtoAnthropic {
-			req.Header.Set("x-api-key", p.Key)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+p.Key)
-		}
-	}
-	for k, v := range p.ExtraHeaders {
-		req.Header.Set(k, v)
-	}
 	t0 := time.Now()
-	resp, err := c.HTTP.Do(req)
+	// Пинг тоже идёт с перебором ключей: недоступный ключ не должен
+	// выглядеть как недоступный сервер.
+	status, _, err := c.fetchWithKeys(ctx, p, func(key string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.BaseURL, "/"), nil)
+		if err != nil {
+			return nil, err
+		}
+		p.applyKey(req, key)
+		for k, v := range p.ExtraHeaders {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	})
 	el := time.Since(t0)
 	if err != nil {
-		return el, 0, err
+		return el, status, err
 	}
-	defer resp.Body.Close()
-	return el, resp.StatusCode, nil
+	return el, status, nil
 }

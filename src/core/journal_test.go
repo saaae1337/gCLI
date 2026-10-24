@@ -1,9 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -302,6 +304,101 @@ func TestJournalNilSafe(t *testing.T) {
 	recs, _, _ := ReadJournal(JournalPath(work))
 	if len(recs) != 1 || recs[0].Summary != "без трекера" {
 		t.Errorf("запись без трекера не записалась: %+v", recs)
+	}
+}
+
+// TestJournalSkipsBlankLines — пустая строка между записями не событие:
+// раньше она превращалась в нулевую запись, и журнал «набирал» лишние
+// элементы без времени и смысла.
+func TestJournalSkipsBlankLines(t *testing.T) {
+	work := t.TempDir()
+	j, _ := OpenJournal(work)
+	tr := NewTracker(Mission{Mode: MissionLongTime}.Apply(), 0, 0)
+	if err := j.Checkpoint("первый", tr); err != nil {
+		t.Fatal(err)
+	}
+	_ = j.Close()
+	appendGarbage(t, JournalPath(work), "\n")
+
+	j2, _ := OpenJournal(work)
+	if err := j2.Checkpoint("второй", tr); err != nil {
+		t.Fatal(err)
+	}
+	_ = j2.Close()
+
+	recs, ok, err := ReadJournal(JournalPath(work))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("пустая строка — не обрыв журнала")
+	}
+	if len(recs) != 2 {
+		t.Fatalf("записей %d, хотели 2: %+v", len(recs), recs)
+	}
+	for i, rec := range recs {
+		if rec.TS == "" || rec.Kind != JournalCheckpoint {
+			t.Errorf("запись %d пустая или неверная: %+v", i, rec)
+		}
+	}
+}
+
+// TestJournalConcurrentAppend — журнал пишут агентный цикл и обработчик
+// выхода. Без замка параллельные Append гонялись за j.f/j.err, а -race
+// видел порчу состояния.
+func TestJournalConcurrentAppend(t *testing.T) {
+	work := t.TempDir()
+	j, err := OpenJournal(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const writers, perWriter = 4, 10
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				rec := JournalRecord{
+					Kind:    JournalCheckpoint,
+					Summary: fmt.Sprintf("писатель %d, запись %d", w, i),
+				}
+				if err := j.Append(rec); err != nil {
+					t.Errorf("Append: %v", err)
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recs, ok, err := ReadJournal(JournalPath(work))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("параллельная запись не должна рвать журнал")
+	}
+	if len(recs) != writers*perWriter {
+		t.Errorf("записей %d, хотели %d", len(recs), writers*perWriter)
+	}
+}
+
+// TestMissionResumeSkipsStopWithoutReason — запись JournalStop означает
+// необратимый конец и без причины: продолжать такой прогон нечего.
+func TestMissionResumeSkipsStopWithoutReason(t *testing.T) {
+	work := t.TempDir()
+	j, _ := OpenJournal(work)
+	tr := NewTracker(Mission{Mode: MissionLongTime}.Apply(), 0, 0)
+	if err := j.Stop("", tr); err != nil {
+		t.Fatal(err)
+	}
+	_ = j.Close()
+
+	if _, has, _ := MissionResumeFromJournal(JournalPath(work), time.Now(), 24*time.Hour); has {
+		t.Error("после JournalStop продолжение предлагаться не должно")
 	}
 }
 

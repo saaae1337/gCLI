@@ -60,17 +60,6 @@ func CostClassOf(t Type) CostClass {
 	return CostNormal
 }
 
-// Label — человекочитаемое имя класса.
-func (c CostClass) Label() string {
-	switch c {
-	case CostCheap:
-		return "простая"
-	case CostDemanding:
-		return "требовательная"
-	}
-	return "средняя"
-}
-
 // Budget — состояние бюджета токенов.
 type Budget struct {
 	// Spent — потрачено токенов за сессию (главный агент + субагенты).
@@ -102,11 +91,13 @@ const (
 
 // JudgeBudget — перевести расход в решение: жмёт ли бюджет.
 func JudgeBudget(b Budget) BudgetVerdict {
-	v := BudgetVerdict{Left: b.Limit - b.Spent}
+	v := BudgetVerdict{}
 	if b.Limit <= 0 {
-		// Потолка нет — судить не о чем.
+		// Потолка нет — судить не о чем. Остаток тоже не считаем: 0 - Spent
+		// дал бы отрицательное «осталось», хотя бюджета просто нет.
 		return v
 	}
+	v.Left = b.Limit - b.Spent
 	if v.Left < 0 {
 		v.Left = 0
 	}
@@ -228,11 +219,17 @@ func TurnsForBudget(base int, opts RouteOptions) int {
 		return base
 	}
 	bv := JudgeBudget(opts.Budget)
+	// Нижняя граница не может поднять лимит выше базового: если вызывающий
+	// уже дал два хода, «минимум четыре» превратило бы урезание в увеличение.
+	floor := 4
+	if base < floor {
+		floor = base
+	}
 	switch {
 	case bv.Critical:
-		return maxInt(4, base/2)
+		return maxInt(floor, base/2)
 	case bv.Tight:
-		return maxInt(4, base*3/4)
+		return maxInt(floor, base*3/4)
 	}
 	return base
 }

@@ -78,7 +78,11 @@ type Deps struct {
 	// Memory — собрать память проекта для промпта.
 	Memory func() string
 	// SkillsPrompt — блок со списком навыков.
-	SkillsPrompt func() string
+	//
+	// Принимает текст задачи: полный список навыков с описаниями стоит
+	// около двух тысяч токенов и уходит в каждый запрос, а под задачу
+	// подходит обычно один-два навыка. Хост решает, что показать.
+	SkillsPrompt func(query string) string
 	// MaxIters — лимит итераций (0 = DefaultMaxIters).
 	MaxIters int
 	// MaxItersAbs — абсолютный потолок итераций с учётом продлений
@@ -153,6 +157,14 @@ type Agent struct {
 	// Атомарный: StopMission зовётся из HTTP-горутины (serve-режим), а
 	// читается в цикле Run.
 	missionStop atomic.Bool
+	// econ — счётчики экономии за текущий ход: сколько токенов срезано
+	// подрезкой истории, сколько повторов взято из кеша, сколько одинаковых
+	// вызовов не выполнено дважды.
+	econ core.EconomyStats
+	// cache — кеш результатов инструментов, которые ничего не меняют.
+	// Живёт на агенте, а не внутри Run: кеш должен переживать ходы —
+	// повторное чтение того же файла в следующем ходе — это тоже повтор.
+	cache *resultCache
 }
 
 // MissionTracker — трекер автономного прогона (nil, если прогона нет).
@@ -261,7 +273,7 @@ func New(d Deps, workDir string) *Agent {
 	if d.MaxParallelTools <= 0 {
 		d.MaxParallelTools = 4
 	}
-	return &Agent{d: d, WorkDir: workDir, AgentMode: true}
+	return &Agent{d: d, WorkDir: workDir, AgentMode: true, cache: newResultCache()}
 }
 
 // WithAgentMode — включить/выключить инструменты.
@@ -319,14 +331,29 @@ func (a *Agent) subagentPrompt() string { return a.System }
 
 // BuildRequest — собрать запрос к модели.
 func (a *Agent) BuildRequest() core.ChatRequest {
+	var msgs []core.Message
+	if a.d.Session != nil {
+		msgs = a.d.Session.Messages()
+	}
+	// В запрос уходит подрезанная копия истории, а сессия хранит полную:
+	// подрезка экономит токены на каждом запросе, но человек должен видеть
+	// в сессии и в экспорте всё, что на самом деле происходило.
+	msgs, saved, pruned := pruneMessages(msgs, a.economyOptions())
+	if saved > 0 {
+		a.econ.PrunedTokens += saved
+		a.econ.PrunedCount += pruned
+	}
+	// Картинки возвращаются в запрос из файла: в сессии лежит только
+	// путь, иначе она раздувалась бы на мегабайты.
+	fillImages(msgs)
 	creq := core.ChatRequest{
 		Model:     a.d.Model,
 		System:    a.SystemPrompt(),
-		Messages:  a.d.Session.Messages(),
+		Messages:  msgs,
 		MaxTokens: a.maxTokens(),
 		Temp:      0.4,
 	}
-	if a.AgentMode {
+	if a.AgentMode && a.d.Registry != nil {
 		creq.ToolDefs = a.d.Registry.Defs()
 	}
 	if mem := a.memoryBlock(); mem != "" {
@@ -378,7 +405,24 @@ func (a *Agent) skillsBlock() string {
 	if a.d.SkillsPrompt == nil {
 		return ""
 	}
-	return a.d.SkillsPrompt()
+	return a.d.SkillsPrompt(a.taskQuery())
+}
+
+// taskQuery — текст текущей задачи: последнее сообщение пользователя.
+//
+// По нему подбираются навыки и решается, какие из них стоит описать
+// подробно, а какие оставить одним именем.
+func (a *Agent) taskQuery() string {
+	if a == nil || a.d.Session == nil {
+		return ""
+	}
+	msgs := a.d.Session.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == core.RoleUser && strings.TrimSpace(msgs[i].Content) != "" {
+			return msgs[i].Content
+		}
+	}
+	return ""
 }
 
 // isTruncatedFinish — генерация оборвалась по лимиту токенов.
@@ -423,7 +467,7 @@ func turnProblem(finish, text string, tools int, reasoning string) error {
 			"попробуй переформулировать запрос или сменить модель",
 			ErrRefused, f)
 	}
-	if text != "" || tools > 0 || reasoning != "" {
+	if strings.TrimSpace(text) != "" || tools > 0 || strings.TrimSpace(reasoning) != "" {
 		return nil
 	}
 	return fmt.Errorf("%w: модель не вернула ни текста, ни вызовов инструментов"+
@@ -453,6 +497,10 @@ func growTokens(cur, attempt int) int {
 
 // callModel — один проход стриминга с накоплением текста и вызовов инструментов.
 func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool) (msg core.Message, err error) {
+	// Каждый запрос к модели — это деньги: считаем их, чтобы человек видел
+	// в /usage, сколько запросов стоила сессия и сколько токенов ушло в
+	// среднем на один.
+	a.econ.Requests++
 	// Защита от паники в хендлерах инструментов и парсерах.
 	defer func() {
 		if r := recover(); r != nil {
@@ -462,7 +510,7 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 
 	msg = core.Message{Role: core.RoleAssistant, Sub: a.SubagentName}
 	var text, reason, sig string
-	acc := map[int]*core.ToolCall{}
+	var acc map[int]*core.ToolCall
 	var order []int
 	var usage core.Usage
 	t0 := time.Now()
@@ -499,7 +547,11 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 
 		rctx, rcancel := context.WithTimeout(ctx, 10*time.Minute)
 		ch := make(chan core.Delta, 512)
-		var streamErr error
+		// Ошибка потока возвращается через канал, а не через общую
+		// переменную: горутина обязана закончить запись до close(ch), и
+		// получатель видит результат после последнего чтения из ch — без
+		// общей переменной, которую кто-то однажды прочитает раньше.
+		streamDone := make(chan error, 1)
 		// recover обязателен именно здесь: это единственная горутина на
 		// пути к провайдеру, и паника в парсере ответа (кривой SSE, битый
 		// ответ вебхука) без него убивала бы весь процесс вместе с
@@ -508,10 +560,10 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			defer close(ch)
 			defer func() {
 				if r := recover(); r != nil {
-					streamErr = fmt.Errorf("паника при разборе потока провайдера: %v", r)
+					streamDone <- fmt.Errorf("паника при разборе потока провайдера: %v", r)
 				}
 			}()
-			streamErr = providers.Stream(rctx, a.d.Providers, a.d.Provider, creq, a.d.Think, ch)
+			streamDone <- providers.Stream(rctx, a.d.Providers, a.d.Provider, creq, a.d.Think, ch)
 		}()
 
 		for d := range ch {
@@ -556,6 +608,7 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			}
 		}
 		rcancel()
+		streamErr := <-streamDone
 
 		if streamErr == nil {
 			// Модель размышляла впустую: потратила весь max_tokens на
@@ -571,13 +624,12 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			// Молчание вместо ответа. Сюда попадают два случая, которые
 			// раньше просто закрывали цикл: провайдер withheld-нул ответ
 			// (content_filter, refusal) и ход, в котором нет вообще
-			// ничего. Проверка после повторов по max_tokens: сначала
-			// даём шанс выросшему бюджету, и только потом признаём, что
-			// ответа не будет.
-			if attempt >= 3 || ctx.Err() != nil {
-				if err := turnProblem(finishReason, pText, len(pAcc), pReason); err != nil {
-					return msg, err
-				}
+			// ничего. Проверка стоит после повторов по max_tokens, но
+			// выполняется на любой попытке: для пустого ответа без
+			// признака обрезки повтора не будет, и раньше такой ход
+			// молча возвращался как успешный — человек видел тишину.
+			if err := turnProblem(finishReason, pText, len(pAcc), pReason); err != nil {
+				return msg, err
 			}
 			text += pText
 			reason += pReason
@@ -647,9 +699,31 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("внутренняя ошибка агента: %v", r)
 		}
+		// Счётчики экономики уходят в сессию в конце хода: их видно в
+		// /usage и /context, и они переживают перезапуск.
+		a.recordEconomy()
 	}()
 
+	// Отменённый до старта ход не должен трогать историю и сеть: запрос к
+	// модели всё равно вернёт context.Canceled, но пользователь заплатил бы
+	// за него и увидел бы в сессии сообщение, на которое не было ответа.
+	if ctx.Err() != nil {
+		return nil
+	}
+
+	// Без сессии ход некуда писать: каждый следующий запрос собирался бы
+	// из пустой истории, а паника на AddMessage выглядела бы как
+	// «внутренняя ошибка агента» уже после обращения к провайдеру.
+	if a.d.Session == nil {
+		return errors.New("агент не может начать ход без сессии")
+	}
+
 	a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: userText})
+
+	// Счётчики экономии — за ход: в конце хода они уходят в сессию, и
+	// следующий ход должен начинать с нуля, иначе расход сессии
+	// посчитался бы несколько раз.
+	a.econ = core.EconomyStats{}
 
 	// Миссия объявляет себя в истории до первого запроса: модель должна
 	// понимать, что это не разовый запрос, а часть многочасового прогона.
@@ -760,6 +834,15 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		if warn := loops.Record(assistant.ToolCalls, results); warn != "" {
 			a.d.Session.AddMessage(core.Message{Role: core.RoleUser, Content: warn})
 		}
+		// Застой прогона считается от последнего продвижения, а не от
+		// старта: без этой отметки длинный прогон хоронил сам себя на
+		// StallLimit*3 итерации, даже если каждый шаг приносил новые
+		// вызовы. Продвижением считаем появление в итерации хотя бы
+		// одного вызова, которого не было в окне детектора петель:
+		// повтор одного и того же вызова прогрессом не является.
+		if loops.Fresh() {
+			a.mission.progress()
+		}
 		// Близко к лимиту: говорим заранее, а не когда он уже кончился.
 		//
 		// Раньше модель узнавала об исчерпании по одной фразе в self_status,
@@ -795,10 +878,10 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		}
 		// Чекпоинт: состояние на диск по расписанию задания. Здесь, а не
 		// в конце хода, потому что конец может не наступить никогда —
-		// прогон рассчитан на переживание перезапуска.
-		if !a.mission.checkpoint() {
-			// тихо: пропущенное сохранение — не повод тревожить модель
-		}
+		// прогон рассчитан на переживание перезапуска. Ошибка сохранения
+		// намеренно не поднимается в модель: страховка не должна
+		// превращаться в помеху работе.
+		a.mission.checkpoint()
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -862,7 +945,9 @@ func (a *Agent) abortToolCalls(assistant core.Message) {
 // autoHandoff — сохранить снимок состояния при обрыве хода по лимиту итераций.
 func (a *Agent) autoHandoff(maxIters int) {
 	a.autoHandoffReason(fmt.Sprintf("ход оборвался на лимите итераций (%d)", maxIters))
-} // autoHandoffReason — сохранить снимок состояния с заданной причиной.
+}
+
+// autoHandoffReason — сохранить снимок состояния с заданной причиной.
 // Делается машинно, а не по просьбе модели, потому что ровно в этот момент
 // модель уже не способна оценить, что важно: ход обрывается на середине
 // работы. Снимок кладётся и в историю (следующий ход читает его как
@@ -881,7 +966,7 @@ func (a *Agent) autoHandoffReason(why string) {
 	}
 	a.d.Session.AddMessage(core.Message{
 		Role:    core.RoleUser,
-		Content: "[Система] Ход оборвался на лимите итераций. Ниже — автоматический снимок состояния.\n\n" + txt,
+		Content: "[Система] Ход оборвался: " + why + ". Ниже — автоматический снимок состояния.\n\n" + txt,
 	})
 	if a.OnNote != nil {
 		a.OnNote("handoff", "сохранён снимок состояния: следующий ход продолжит с него, а не с нуля")
@@ -939,6 +1024,9 @@ func (a *Agent) finalize(ctx context.Context) error {
 
 // emptyRegistry — реестр без инструментов для финальных ходов.
 func emptyRegistry(base *tools.Registry) *tools.Registry {
+	if base == nil {
+		return tools.New(tools.Env{ReadFiles: map[string]bool{}})
+	}
 	return tools.New(tools.Env{WorkDir: base.WorkDir(), ReadFiles: map[string]bool{}})
 }
 
@@ -962,6 +1050,20 @@ func (a *Agent) execTools(ctx context.Context, calls []core.ToolCall) []toolResu
 		out[i] = toolResult{tc: tc}
 	}
 
+	// Одинаковые вызовы в одном ответе — один вызов. Модель иногда зовёт
+	// один и тот же инструмент с одними и теми же аргументами дважды: два
+	// вызова — это два результата в истории и два одинаковых куска
+	// контекста, а информации они дают ровно одну.
+	uniq, origin, dups := dedupeCalls(calls, a.canRepeat)
+	if len(dups) > 0 {
+		a.econ.SavedCalls += len(dups)
+		// Ответ на пропущенный вызов всё равно нужен: без tool-сообщения
+		// провайдер отвергает следующий запрос целиком.
+		for _, i := range dups {
+			out[i].text = "[повтор вызова " + calls[i].Name + " в этом же ответе — выполнен один раз]"
+		}
+	}
+
 	// Разделяем на последовательные и параллельные.
 	//
 	// spawn_agent параллелится всегда, независимо от флага ParallelTools:
@@ -972,8 +1074,8 @@ func (a *Agent) execTools(ctx context.Context, calls []core.ToolCall) []toolResu
 		tc  core.ToolCall
 	}
 	var sequential, parallel []slot
-	for i, tc := range calls {
-		s := slot{pos: i, tc: tc}
+	for i, tc := range uniq {
+		s := slot{pos: origin[i], tc: tc}
 		if a.canRunParallel(tc.Name) && (a.d.Parallel || tc.Name == "spawn_agent") {
 			parallel = append(parallel, s)
 		} else {
@@ -1041,6 +1143,9 @@ func (a *Agent) canRunParallel(name string) bool {
 		return true
 	}
 	// Инструменты расширений: параллелим только HTTP (быстрые и идемпотентные).
+	if a.d.Registry == nil {
+		return false
+	}
 	t := a.d.Registry.Get(name)
 	if t != nil && t.ExtName != "" && t.Category == "ext" {
 		return true
@@ -1052,20 +1157,23 @@ func (a *Agent) canRunParallel(name string) bool {
 func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) {
 	res.tc = tc
 	t0 := time.Now()
-	// Get — до defer: восстановитель обязан передать хосту настоящий
-	// инструмент, а не nil. Обратный вызов хоста разыменовывает его
-	// (категория для карточки UI), и паника внутри recover-обработчика
-	// в параллельной ветке убивала бы весь процесс.
-	tool := a.d.Registry.Get(tc.Name)
-
+	// Восстановитель ставится до Get: если реестр nil или Get паникует,
+	// паника не должна уходить из горутины параллельного вызова — там её
+	// никто не ловит, и процесс умирает вместе с несохранённой сессией.
+	// Сам инструмент кладём в переменную до defer, чтобы хост в
+	// OnToolDone получил настоящий инструмент, а не nil: его колбэк
+	// разыменовывает категорию для карточки UI.
+	var tool *tools.Tool
 	defer func() {
 		if r := recover(); r != nil {
 			res.text = fmt.Sprintf("Ошибка: инструмент %s завершился с ошибкой: %v", tc.Name, r)
-			if a.d.OnToolDone != nil {
-				a.d.OnToolDone(tc, tool, tools.Result{}, fmt.Errorf("panic: %v", r), time.Since(t0))
-			}
+			a.reportToolDone(tc, tool, tools.Result{}, fmt.Errorf("panic: %v", r), time.Since(t0))
 		}
 	}()
+
+	if a.d.Registry != nil {
+		tool = a.d.Registry.Get(tc.Name)
+	}
 
 	if tool == nil {
 		res.text = "Ошибка: неизвестный инструмент " + tc.Name
@@ -1078,6 +1186,24 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 
 	if a.d.OnToolStart != nil {
 		a.d.OnToolStart(tc, tool)
+	}
+
+	// Кеш: тот же вызов того же инструмента, если файл не менялся.
+	//
+	// Отдаём прошлый результат вместо нового: работа не повторяется, а
+	// в историю попадает тот же текст — подрезка истории потом уберёт
+	// второй экземпляр из запроса, и модель получит содержимое один раз.
+	key := cacheKey(tc.Name, tc.Args)
+	stamp := fileStamp(tc.Args)
+	if cacheableTool(tool) {
+		if text, ok := a.cache.get(key, stamp); ok {
+			a.econ.CacheHits++
+			res.text = text
+			res.images = nil
+			a.econ.AddCall(tc.Name, core.ApproxTokens(text))
+			a.reportToolDone(tc, tool, tools.Result{Text: text}, nil, time.Since(t0))
+			return
+		}
 	}
 
 	args := tools.ParseArgs(tc.Args)
@@ -1106,10 +1232,40 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 
 	res.text = text
 	res.images = out.Images
-	if a.d.OnToolDone != nil {
-		a.d.OnToolDone(tc, tool, out, err, elapsed)
+	// Учёт: сколько раз звали инструмент и сколько токенов занял его
+	// результат. По этим числам видно, какой инструмент съедает контекст.
+	a.econ.AddCall(tc.Name, core.ApproxTokens(text))
+	if cacheableTool(tool) && err == nil {
+		a.cache.put(key, text, stamp)
 	}
+	a.reportToolDone(tc, tool, out, err, elapsed)
 	return
+}
+
+// canRepeat — можно ли выполнить вызов один раз, если модель повторила
+// его в том же ответе.
+//
+// Повтор сворачивается только у инструментов, которые ничего не меняют:
+// повторное чтение того же файла даёт тот же ответ, а повторная запись
+// или команда — нет, и пропустить её молча нельзя.
+func (a *Agent) canRepeat(name string) bool {
+	if a.d.Registry == nil {
+		return false
+	}
+	return cacheableTool(a.d.Registry.Get(name))
+}
+
+// reportToolDone — сообщить хосту о завершении инструмента.
+//
+// Колбэк хоста защищён отдельно: паника в нём раньше попадала в recover
+// execOne, который вызывал тот же колбэк второй раз — уже во время
+// разворачивания паники, что в параллельной ветке убивало процесс.
+func (a *Agent) reportToolDone(tc core.ToolCall, tool *tools.Tool, out tools.Result, err error, elapsed time.Duration) {
+	if a.d.OnToolDone == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	a.d.OnToolDone(tc, tool, out, err, elapsed)
 }
 
 // clampResult — обрезать слишком большой результат, сохранив начало и конец.
@@ -1128,8 +1284,17 @@ func (a *Agent) clampResult(s string) string {
 
 // MaybeAutoCompact — сжать контекст, если он близок к порогу.
 func (a *Agent) MaybeAutoCompact() {
-	if a.d.AutoCompact <= 0 {
-		return
+	a.Compact(true)
+}
+
+// autoCompactDue — пора ли автоматически сжимать историю.
+//
+// Порог проверяется внутри Compact, а не только перед вызовом: между
+// проверкой и сжатием историю успевает изменить сам ход, и ручной вызов
+// Compact(true) не должен обходить условие, ради которого он существует.
+func (a *Agent) autoCompactDue(msgs []core.Message) bool {
+	if a.d.AutoCompact <= 0 || len(msgs) < 8 {
+		return false
 	}
 	// Считаем полный контекст: системный промпт и схемы инструментов тоже
 	// давят на окно, хоть и не меняются от хода к ходу.
@@ -1137,38 +1302,50 @@ func (a *Agent) MaybeAutoCompact() {
 	if a.AgentMode && a.d.Registry != nil {
 		defs = a.d.Registry.Defs()
 	}
-	est := core.FullContext(a.SystemPrompt(), defs, a.d.Session.Messages())
-	if est < a.d.AutoCompact || len(a.d.Session.Messages()) < 8 {
-		return
-	}
-	a.Compact(true)
+	return core.FullContext(a.SystemPrompt(), defs, msgs) >= a.d.AutoCompact
 }
 
 // Compact — сжать историю диалога в выжимку.
+//
+// auto отличает сжатие по порогу (в конце хода) от ручного /compact:
+// автоматическое сжимает только действительно большой контекст, ручное —
+// по прямой просьбе человека, даже если история ещё короткая.
 func (a *Agent) Compact(auto bool) bool {
+	if a.d.Session == nil {
+		return false
+	}
 	msgs := a.d.Session.Messages()
 	if len(msgs) < 2 {
+		return false
+	}
+	if auto && !a.autoCompactDue(msgs) {
 		return false
 	}
 	creq := core.ChatRequest{
 		Model:     a.d.Model,
 		MaxTokens: 4096,
 		Temp:      0.2,
-		System: "Ты — ассистент, сжимающий историю диалога. Составь краткую выжимку для продолжения работы: " +
-			"задача пользователя, ключевые факты, что сделано (файлы, команды, изменения), что осталось, важные выводы субагентов. " +
-			"Только выжимка, без вступлений.",
-		Messages: msgs,
+		System:    compactPrompt,
+		Messages:  msgs,
 	}
 	summary, err := a.callModel(context.Background(), creq, true)
 	if err != nil || strings.TrimSpace(summary.Content) == "" {
 		return false
+	}
+	// Состояние прогона сохраняется ДО замены истории: выжимка теряет
+	// детали, а снимок на диске должен описывать то состояние, которое
+	// было в момент сжатия, иначе продолжение после перезапуска начнётся
+	// с обеднённого контекста без фактов, которые уже были в истории.
+	if a.mission != nil {
+		if err := a.mission.checkpointNow("перед сжатием контекста"); err != nil && a.OnNote != nil {
+			a.OnNote("чекпоинт", "не удалось сохранить состояние перед сжатием: "+err.Error())
+		}
 	}
 	a.replaceMessages([]core.Message{{
 		Role: core.RoleUser,
 		Content: "[Система] Предыдущая часть диалога сжата в выжимку (сохрани её как контекст):\n\n" +
 			summary.Content,
 	}})
-	_ = auto
 	return true
 }
 

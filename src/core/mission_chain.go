@@ -50,6 +50,11 @@ func LoadMissionChain(workDir string) (*MissionChain, bool, error) {
 	if c.Index < 0 {
 		c.Index = 0
 	}
+	// Index больше числа шагов — след ручной правки файла. Без зажима
+	// сводка показывала бы «шаг 5 из 3», хотя работа давно закончена.
+	if c.Index > len(c.Items) {
+		c.Index = len(c.Items)
+	}
 	return &c, true, nil
 }
 

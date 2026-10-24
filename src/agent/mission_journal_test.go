@@ -119,9 +119,6 @@ func TestMissionResumeNoteOnlyOnce(t *testing.T) {
 	if e.resumeNote() == "" {
 		t.Fatal("первый вызов обязан дать приглашение")
 	}
-	if e.resumePending() {
-		t.Error("после вставки приглашения ждать его снова нельзя")
-	}
 	if got := e.resumeNote(); got != "" {
 		t.Errorf("повторное приглашение %q", got)
 	}
@@ -143,9 +140,6 @@ func TestMissionResumeNoteWithoutResume(t *testing.T) {
 	e := newMissionEngine(MissionDeps{Tracker: tr, Spent: func() int { return 0 }})
 	if got := e.resumeNote(); got != "" {
 		t.Errorf("приглашения без снимка быть не должно: %q", got)
-	}
-	if e.resumePending() {
-		t.Error("ждать приглашения, которого не будет, незачем")
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -164,23 +163,6 @@ func (rs Rules) Len() int { return len(rs.items) }
 // Items — все правила по порядку.
 func (rs Rules) Items() []Rule { return rs.items }
 
-// Parse — разобрать строки вида "bash(git *)": "allow" в правила.
-//
-// Такая запись нужна для компактного и читаемого конфига: список
-// объектов с tool/pattern/mode — это многословно, и человек перед
-// первым же deny обычно пишет его неправильно.
-func ParseRules(list []string) (Rules, error) {
-	var rs Rules
-	for i, line := range list {
-		r, err := parseRule(line)
-		if err != nil {
-			return rs, fmt.Errorf("правило %d (%q): %w", i+1, line, err)
-		}
-		rs.Add(r)
-	}
-	return rs, nil
-}
-
 // parseRule — одна строка "bash(git *): deny".
 func parseRule(line string) (Rule, error) {
 	s := strings.TrimSpace(line)
@@ -253,7 +235,10 @@ func (rs Rules) Match(tool, subject string) (Permission, Rule, bool) {
 // перекрывала бы запрет, написанный явно.
 func (rs Rules) DecideAny(tools []string, subject string) (Permission, Rule, bool) {
 	for _, t := range tools {
-		if d, r, ok := rs.Match(t, subject); ok {
+		// Именно matchNamed, а не Match: Match("*", ...) в первом проходе
+		// поймал бы и правило без имени инструмента, и тогда «git push*:
+		// ask» перебило бы явный «bash(git push*): deny».
+		if d, r, ok := rs.matchNamed(t, subject); ok {
 			return d, r, true
 		}
 	}
@@ -264,6 +249,32 @@ func (rs Rules) DecideAny(tools []string, subject string) (Permission, Rule, boo
 		return d, Rule{}, true
 	}
 	return PermAsk, Rule{}, false
+}
+
+// matchNamed — последнее совпавшее правило, у которого имя инструмента
+// задано явно. Правила без имени («*») пропускаются: DecideAny проверяет
+// их отдельным проходом только после имён.
+func (rs Rules) matchNamed(tool, subject string) (Permission, Rule, bool) {
+	var (
+		hit      Rule
+		decision = PermAsk
+		found    bool
+	)
+	for _, r := range rs.items {
+		if wildcardTool(r.Tool) {
+			continue
+		}
+		if r.Match(tool, subject) {
+			decision, hit, found = r.Mode, r, true
+		}
+	}
+	return decision, hit, found
+}
+
+// wildcardTool — правило не называет инструмент и ловит любое действие.
+func wildcardTool(tool string) bool {
+	t := strings.TrimSpace(tool)
+	return t == "" || t == "*" || t == "**"
 }
 
 // Decide — что делать с действием инструмента.
@@ -340,15 +351,20 @@ func matchPrefixRule(p, s string) bool {
 }
 
 // globMatch — поиск с * и ?. Жадный бэктрекинг, входы короткие.
+//
+// Сравнение идёт по рунам, а не по байтам: иначе «?» совпадал бы только
+// с однобайтовым символом и правило с кириллицей в пути молча не
+// срабатывало бы.
 func globMatch(pattern, s string) bool {
+	p, str := []rune(pattern), []rune(s)
 	pi, si := 0, 0
 	star, mark := -1, 0
-	for si < len(s) {
+	for si < len(str) {
 		switch {
-		case pi < len(pattern) && (pattern[pi] == '?' || pattern[pi] == s[si]):
+		case pi < len(p) && (p[pi] == '?' || p[pi] == str[si]):
 			pi++
 			si++
-		case pi < len(pattern) && pattern[pi] == '*':
+		case pi < len(p) && p[pi] == '*':
 			// «**» и «*» для нашей цели одинаковы: граница пути уже
 			// нормализована, а различать их в правилах разрешений
 			// незачем — это путает того, кто правит конфиг.
@@ -362,10 +378,10 @@ func globMatch(pattern, s string) bool {
 			return false
 		}
 	}
-	for pi < len(pattern) && pattern[pi] == '*' {
+	for pi < len(p) && p[pi] == '*' {
 		pi++
 	}
-	return pi == len(pattern)
+	return pi == len(p)
 }
 
 // normGlobPath — привести разделители пути к одному виду.
@@ -484,16 +500,6 @@ func GroupForTool(tool string) ([]string, bool) {
 	return nil, false
 }
 
-// SortedToolNames — имена инструментов по алфавиту (для вывода).
-func SortedToolNames(tools []string) []string {
-	out := append([]string(nil), tools...)
-	sort.Strings(out)
-	return out
-}
-
-// JoinTools — имена инструментов одной строкой, для подсказок.
-func JoinTools(tools []string) string { return strings.Join(tools, ", ") }
-
 // PatternForPath — привести путь к виду, который понимают правила.
 //
 // Правило пишется от проекта (edit(src/**)), а подтверждение получает
@@ -501,7 +507,11 @@ func JoinTools(tools []string) string { return strings.Join(tools, ", ") }
 // никогда не сработало бы: /home/u/proj/src/a.go не начинается с src/.
 func PatternForPath(workDir, path string) string {
 	if workDir != "" {
-		if rel, err := filepath.Rel(workDir, path); err == nil && !strings.HasPrefix(rel, "..") {
+		// «..foo» — имя внутри проекта, а не выход из него: проверяем
+		// ровно «..» и «..» с разделителем, иначе ребёнок с таким именем
+		// оставался бы абсолютным путём и правило его не ловило.
+		if rel, err := filepath.Rel(workDir, path); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return filepath.ToSlash(rel)
 		}
 	}

@@ -271,14 +271,6 @@ var missionPresets = map[MissionMode]Mission{
 	},
 }
 
-// MissionForMode — пресет режима без учёта пользовательских полей.
-func MissionForMode(mode MissionMode) Mission {
-	if m, ok := missionPresets[mode]; ok {
-		return m
-	}
-	return missionPresets[MissionNormal]
-}
-
 // Apply — наложить пресет режима, но не затереть явно заданные поля.
 //
 // Ключевое правило: режим задаёт умолчания, а человек — исключения.
@@ -368,46 +360,6 @@ func MissionPath(workDir string) string {
 	return filepath.Join(workDir, ".gcli", "mission.json")
 }
 
-// MissionTemplate — заготовка mission.json с комментариями.
-//
-// Пишется теми же JSONC-правилами, что и gcli.json: человек открывает
-// файл в первый раз и должен понять его без документации.
-const MissionTemplate = `{
-  // Задание на автономную работу gcli.
-  //
-  // Одно поле — mission.json — описывает, сколько агент может работать
-  // без новых промптов: по времени, по итерациям, по токенам, по деньгам.
-  // Пока файла нет, действует обычный ход: столько, сколько нужно модели.
-  //
-  // Поле "mode" задаёт пресет, остальные поля переопределяют его:
-  //   normal          — обычный ход, без потолка времени
-  //   long-time       — 4 часа, 200 итераций
-  //   extra-long-time — 12 часов, 1500 итераций
-  //   overnight       — 8 часов, состояние сохраняется часто
-
-  // Цель одной строкой: что именно считается выполненным.
-  // "objective": "починить падающие тесты в пакете core",
-
-  // Критерии приёмки. Агент не вправе объявить работу законченной, пока
-  // не проверит каждый пункт и не перечислит, что именно он проверил.
-  "acceptance": [
-    "go test ./... проходит без падений",
-    "vet не выдаёт новых предупреждений"
-  ],
-
-  // Бюджеты. Любой из них можно убрать — тогда ограничения не будет.
-  // "deadline": "4h",
-  // "token_budget": 500000,
-  // "cost_budget": 25,
-  // "max_iters": 200,
-  // "max_tool_calls": 5000,
-
-  // Как часто сохранять состояние на диск, в итерациях. Меньше — надёжнее
-  // переживает перезапуск, но чаще пишет на диск.
-  // "checkpoint_every": 10
-}
-`
-
 // LoadMission — прочитать mission.json из проекта.
 //
 // Отсутствие файла — не ошибка, а обычный ход: возвращается Mission с
@@ -434,110 +386,6 @@ func LoadMission(workDir string) (Mission, string, error) {
 		return Mission{}, name, fmt.Errorf("mission.json: %w", err)
 	}
 	return m.Apply(), name, nil
-}
-
-// SaveMission — записать mission.json с комментариями-шаблоном.
-func SaveMission(workDir string, m Mission) (string, error) {
-	name := MissionPath(workDir)
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
-		return "", err
-	}
-	if err := m.Normalize(); err != nil {
-		return "", err
-	}
-	if err := WriteAtomic(name, []byte(MissionDoc(m.Apply())), 0o644); err != nil {
-		return "", err
-	}
-	return name, nil
-}
-
-// MissionDoc — mission.json с комментариями и заданными значениями.
-//
-// Собирается целиком, а не склейкой «шаблон + тело». Склейка давала два
-// объекта подряд — такой файл gcli читал до конца жизни (комментарии
-// снимались, первый объект закрывался), а вот первая же правка человеком
-// ломалась на первой строке. Один файл — один объект: иначе mission.json
-// остаётся миной для того, кто будет его редактировать.
-func MissionDoc(m Mission) string {
-	var b strings.Builder
-	b.WriteString(`{
-  // Задание на автономную работу gcli.
-  //
-  // Пока файла нет, действует обычный ход: столько, сколько нужно модели.
-  // Этот файл отвечает на вопрос, на который обычный ход не умеет:
-  // «сколько агент может работать без новых промптов».
-  //
-  // Поле "mode" задаёт пресет, остальные поля его переопределяют:
-  //   normal          — обычный ход, без потолка времени
-  //   long-time       — 4 часа, 200 итераций
-  //   extra-long-time — 12 часов, 1500 итераций
-  //   overnight       — 8 часов, состояние сохраняется часто
-  //
-  // Критерии приёмки — единственное, что заменяет «модель сказала готово»
-  // на проверяемый факт. Пока список не пуст, агент не вправе объявить
-  // работу законченной, не проверив каждый пункт инструментами.
-  //
-  // Бюджеты жёсткие: на исходе работа оборвётся сама. Убирайте лишние поля,
-  // а не ставьте огромные числа: точный смысл имеет deadline.
-`)
-	// Поля собираются списком и склеиваются запятыми в конце: дописывать
-	// запятую по ходу означает забыть про запятую в последнем поле, и файл
-	// перестаёт быть JSON ровно в том случае, когда в нём больше одного
-	// необязательного поля.
-	var fields []string
-	if m.Objective != "" {
-		fields = append(fields, fmt.Sprintf("  // Цель одной строкой: что именно считается выполненным.\n"+
-			"  \"objective\": %q", OneLine(m.Objective)))
-	}
-	fields = append(fields, fmt.Sprintf("  \"mode\": %q", string(m.Mode)))
-	if len(m.Acceptance) > 0 {
-		var ab strings.Builder
-		ab.WriteString("  // Критерии приёмки: каждый проверяется инструментом.\n  \"acceptance\": [\n")
-		for i, c := range m.Acceptance {
-			comma := ","
-			if i == len(m.Acceptance)-1 {
-				comma = ""
-			}
-			fmt.Fprintf(&ab, "    %q%s\n", OneLine(c), comma)
-		}
-		ab.WriteString("  ]")
-		fields = append(fields, ab.String())
-	}
-	if m.Deadline > 0 {
-		fields = append(fields, fmt.Sprintf("  // Бюджеты. Любой можно убрать — тогда ограничения не будет.\n"+
-			"  // Срок отсчитывается от старта прогона, а не от запуска gcli.\n"+
-			"  \"deadline\": %q", m.Deadline.String()))
-	}
-	// Остальные бюджеты дописываются только когда заданы: нулевой потолок
-	// в файле читается как «задан ноль», а человек хотел «не ограничено».
-	if m.MaxIters > 0 {
-		fields = append(fields, fmt.Sprintf("  \"max_iters\": %d", m.MaxIters))
-	}
-	if m.TokenBudget > 0 {
-		fields = append(fields, fmt.Sprintf("  \"token_budget\": %d", m.TokenBudget))
-	}
-	if m.CostBudget > 0 {
-		fields = append(fields, fmt.Sprintf("  \"cost_budget\": %s",
-			strconv.FormatFloat(m.CostBudget, 'f', -1, 64)))
-	}
-	if m.MaxToolCalls > 0 {
-		fields = append(fields, fmt.Sprintf("  \"max_tool_calls\": %d", m.MaxToolCalls))
-	}
-	if m.CheckpointEvery > 0 {
-		fields = append(fields, fmt.Sprintf("  // Как часто сохранять состояние, в итерациях.\n"+
-			"  \"checkpoint_every\": %d", m.CheckpointEvery))
-	}
-	if m.StallLimit != 0 {
-		fields = append(fields, fmt.Sprintf("  // Сколько итераций без продвижения считать застоем.\n"+
-			"  \"stall_limit\": %d", m.StallLimit))
-	}
-	if m.VerifyDone != nil {
-		fields = append(fields, fmt.Sprintf("  // Требовать проверки критериев перед остановкой.\n"+
-			"  \"verify_done\": %t", *m.VerifyDone))
-	}
-	b.WriteString(strings.Join(fields, ",\n"))
-	b.WriteString("\n}\n")
-	return b.String()
 }
 
 // ---------- Tracker: живое состояние прогона ----------
@@ -653,10 +501,20 @@ func (t *Tracker) WithModel(providerID, model string) *Tracker {
 }
 
 // Mission — задание, по которому идёт прогон.
-func (t *Tracker) Mission() Mission { return t.m }
+func (t *Tracker) Mission() Mission {
+	if t == nil {
+		return Mission{}
+	}
+	return t.m
+}
 
 // Started — когда начался прогон.
-func (t *Tracker) Started() time.Time { return t.start }
+func (t *Tracker) Started() time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return t.start
+}
 
 // Elapsed — сколько времени прошло.
 func (t *Tracker) Elapsed() time.Duration {
@@ -780,8 +638,6 @@ func (t *Tracker) Done() bool {
 	return t.stopped != ""
 }
 
-func (t *Tracker) done() bool { return t.stopped != "" }
-
 // VerifyAsked — сколько раз требовали проверку критериев.
 func (t *Tracker) VerifyAsked() int {
 	if t == nil {
@@ -903,6 +759,11 @@ func (t *Tracker) Resume(iters, toolCalls, tokens int) {
 	if tokens > t.tokens {
 		t.tokens = tokens
 	}
+	// Возобновлённый прогон уже прошёл iters итераций, и «последним
+	// продвижением» для него является именно эта точка. Без сброса
+	// lastProgress продолжение с итерации 50 при StallLimit=12 сразу
+	// считалось бы застоем и остановилось бы на первом же тике.
+	t.lastProgress = t.iters
 }
 
 // checkBudgets — потолки, каждый на своём месте. Вызывается только из
@@ -1176,7 +1037,7 @@ func (t *Tracker) SelfLine() string {
 		}
 		b.WriteString(s)
 	}
-	fmt.Fprintf(&b, "вызовы инструментов: %d", t.toolCalls)
+	parts(fmt.Sprintf("вызовы инструментов: %d", t.toolCalls))
 	if t.continued > 0 {
 		parts(fmt.Sprintf("просили продолжить %d %s", t.continued,
 			pluralRun(t.continued, "раз", "раза", "раз")))
@@ -1242,12 +1103,25 @@ func (t *Tracker) status() string {
 		}
 		fmt.Fprintf(&b, "итерации: %d из %d", t.iters, t.m.MaxIters)
 	}
+	if t.m.MaxToolCalls > 0 {
+		if b.Len() > 0 {
+			b.WriteString(" · ")
+		}
+		fmt.Fprintf(&b, "вызовы инструментов: %d из %d", t.toolCalls, t.m.MaxToolCalls)
+	}
 	if t.m.TokenBudget > 0 {
 		if b.Len() > 0 {
 			b.WriteString(" · ")
 		}
 		fmt.Fprintf(&b, "токены: %s из %s",
 			CompactNum(t.tokens), CompactNum(t.m.TokenBudget))
+	}
+	if t.m.CostBudget > 0 {
+		if b.Len() > 0 {
+			b.WriteString(" · ")
+		}
+		fmt.Fprintf(&b, "деньги: %s из %s",
+			FormatUSD(t.cost()), FormatUSD(t.m.CostBudget))
 	}
 	if b.Len() == 0 {
 		return "миссия: без потолков"

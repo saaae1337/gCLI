@@ -49,7 +49,13 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, string, error) {
 func readProjectConfigFile(name string) (*ProjectConfig, error) {
 	data, err := os.ReadFile(name)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		// Файл есть, но не читается (каталог вместо файла, нет прав) —
+		// это ошибка, а не «конфига нет»: молча пропустить её значит
+		// сделать вид, что правила проекта не существуют.
+		return nil, err
 	}
 	var cfg ProjectConfig
 	if HasJSONC(data) {
@@ -61,7 +67,7 @@ func readProjectConfigFile(name string) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
-// LayeredRules — собрать правила из всех слоёв конфигов.
+// LayeredRulesFrom — собрать правила из уже прочитанных конфигов.
 //
 // Слои от низшего приоритета к высшему:
 //
@@ -74,15 +80,6 @@ func readProjectConfigFile(name string) (*ProjectConfig, error) {
 // порядок отдал бы приоритет файлу из репозитория, который человек может
 // даже не открывать, — а это передача контроля над агентом тому, кто
 // прислал репозиторий.
-func LayeredRules(workDir string, global *Config) (Rules, error) {
-	pc, _, err := LoadProjectConfig(workDir)
-	if err != nil {
-		pc = nil
-	}
-	return LayeredRulesFrom(global, pc)
-}
-
-// LayeredRulesFrom — то же, но для уже прочитанных конфигов.
 //
 // Возвращает ошибку разбора правил отдельно от ошибки чтения конфига:
 // сломанный gcli.json и сломанная строка правила внутри исправного файла —

@@ -174,6 +174,9 @@ func (r *Repo) DeleteSession(id string) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("плохой id сессии: %q", id)
 	}
+	// LoadSession принимает и «id», и «id.json»; удаление обязано
+	// понимать те же имена, иначе сессия, найденная по файлу, не удаляется.
+	id = strings.TrimSuffix(id, ".json")
 	_ = os.RemoveAll(filepath.Join(r.Store.Checkpoints(), id))
 	return os.Remove(filepath.Join(r.Store.Sessions(), id+".json"))
 }
@@ -259,27 +262,32 @@ func (r *Repo) UndoCheckpoint(s *Session) (CheckpointMeta, bool, error) {
 	if s == nil {
 		return CheckpointMeta{}, false, nil
 	}
-	for len(s.Checkpoints) > 0 {
-		cp := s.Checkpoints[len(s.Checkpoints)-1]
+	if len(s.Checkpoints) == 0 {
+		return CheckpointMeta{}, false, nil
+	}
+	cp := s.Checkpoints[len(s.Checkpoints)-1]
+	if !cp.Existed {
+		if err := os.Remove(cp.Path); err != nil && !os.IsNotExist(err) {
+			// Не смогли удалить созданный файл — откат не состоялся.
+			// Молча идти к более старому чекпоинту нельзя: человек
+			// получил бы «отменено», а файл остался бы на месте.
+			// Чекпоинт остаётся в сессии: откат можно повторить.
+			return cp, false, err
+		}
 		s.Checkpoints = s.Checkpoints[:len(s.Checkpoints)-1]
-		if !cp.Existed {
-			if err := os.Remove(cp.Path); err == nil || os.IsNotExist(err) {
-				return cp, true, nil
-			}
-			continue
-		}
-		data, err := os.ReadFile(cp.Backup)
-		if err != nil {
-			_ = os.Remove(cp.Backup)
-			return cp, false, err
-		}
-		if err := os.MkdirAll(filepath.Dir(cp.Path), 0o755); err != nil {
-			return cp, false, err
-		}
-		if err := WriteAtomic(cp.Path, data, 0o644); err != nil {
-			return cp, false, err
-		}
 		return cp, true, nil
 	}
-	return CheckpointMeta{}, false, nil
+	data, err := os.ReadFile(cp.Backup)
+	if err != nil {
+		_ = os.Remove(cp.Backup)
+		return cp, false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(cp.Path), 0o755); err != nil {
+		return cp, false, err
+	}
+	if err := WriteAtomic(cp.Path, data, 0o644); err != nil {
+		return cp, false, err
+	}
+	s.Checkpoints = s.Checkpoints[:len(s.Checkpoints)-1]
+	return cp, true, nil
 }

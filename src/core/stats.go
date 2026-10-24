@@ -138,34 +138,20 @@ func FormatUSD(v float64) string {
 
 // ---------- Форматирование метрик ----------
 
-// Kfmt64 — компактное число для дробных величин (например токены/сек):
-// 0.0 → "0", 1200 → "1.2k", 1500000 → "1.5M".
-func Kfmt64(f float64) string {
-	switch {
-	case f < 0:
-		return "-" + Kfmt64(-f)
-	case f < 1000:
-		return fmt.Sprintf("%.0f", f)
-	case f < 10_000:
-		return fmt.Sprintf("%.1fk", f/1000)
-	case f < 1_000_000:
-		return fmt.Sprintf("%.0fk", f/1000)
-	case f < 10_000_000:
-		return fmt.Sprintf("%.1fM", f/1e6)
-	default:
-		return fmt.Sprintf("%.0fM", f/1e6)
-	}
-}
-
 // Pct — процент part от total, ограниченный диапазоном 0..100.
 func Pct(part, total int) int {
-	if total <= 0 {
+	if total <= 0 || part <= 0 {
 		return 0
+	}
+	// Крайние случаи считаются без умножения: part*100 на больших
+	// счётчиках переполняет int и даёт отрицательный процент.
+	if part >= total {
+		return 100
+	}
+	if part > math.MaxInt/100 {
+		return int(float64(part) * 100 / float64(total))
 	}
 	v := part * 100 / total
-	if v < 0 {
-		return 0
-	}
 	if v > 100 {
 		return 100
 	}

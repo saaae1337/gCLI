@@ -1,6 +1,7 @@
 package core
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -171,23 +172,16 @@ func TestPct(t *testing.T) {
 	}
 }
 
-func TestKfmt64(t *testing.T) {
-	cases := []struct {
-		in   float64
-		want string
-	}{
-		{0, "0"},
-		{999, "999"},
-		{1000, "1.0k"},
-		{1500, "1.5k"},
-		{15000, "15k"},
-		{150000, "150k"},
-		{1500000, "1.5M"},
-		{-5, "-5"},
+// TestPctLargeValuesDoNotOverflow — part*100 переполнял int, и процент
+// больших счётчиков (токены) превращался в отрицательный, то есть в 0.
+func TestPctLargeValuesDoNotOverflow(t *testing.T) {
+	if got := Pct(math.MaxInt/2, math.MaxInt); got != 50 {
+		t.Errorf("Pct(MaxInt/2, MaxInt) = %d, ожидалось 50", got)
 	}
-	for _, c := range cases {
-		if got := Kfmt64(c.in); got != c.want {
-			t.Errorf("Kfmt64(%v) = %q, ожидалось %q", c.in, got, c.want)
-		}
+	if got := Pct(math.MaxInt, math.MaxInt); got != 100 {
+		t.Errorf("Pct(MaxInt, MaxInt) = %d, ожидалось 100", got)
+	}
+	if got := Pct(math.MaxInt, math.MaxInt/2); got != 100 {
+		t.Errorf("Pct(MaxInt, MaxInt/2) = %d, ожидалось 100", got)
 	}
 }

@@ -214,6 +214,11 @@ func (c *resultCache) get(key string) (cacheEntry, bool) {
 	}
 	if time.Since(e.at) > cacheTTL {
 		c.miss++
+		// Просроченная запись не должна занимать место и участвовать в
+		// вытеснении: иначе после двадцати минут кеш «полон» мусором, а
+		// свежие отчёты выбивают друг друга.
+		delete(c.items, key)
+		c.removeOrder(key)
 		return cacheEntry{}, false
 	}
 	c.hits++
@@ -224,9 +229,12 @@ func (c *resultCache) get(key string) (cacheEntry, bool) {
 func (c *resultCache) put(key string, out Outcome, srcName, runID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.items[key]; !exists {
-		c.order = append(c.order, key)
+	// Перезапись — это новое попадание: запись обязана стать самой свежей,
+	// иначе её вытеснят как самую старую, хотя отчёт только что обновили.
+	if _, exists := c.items[key]; exists {
+		c.removeOrder(key)
 	}
+	c.order = append(c.order, key)
 	c.items[key] = cacheEntry{out: out, at: time.Now(), srcName: srcName, runID: runID}
 	for len(c.order) > cacheMax {
 		oldest := c.order[0]
@@ -235,18 +243,12 @@ func (c *resultCache) put(key string, out Outcome, srcName, runID string) {
 	}
 }
 
-// forget — убрать конкретный ключ (используется, если лидер упал до записи).
-func (c *resultCache) forget(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.items[key]; !ok {
-		return
-	}
-	delete(c.items, key)
+// removeOrder — убрать ключ из очереди вытеснения (вызывается под mu).
+func (c *resultCache) removeOrder(key string) {
 	for i, k := range c.order {
 		if k == key {
 			c.order = append(c.order[:i], c.order[i+1:]...)
-			break
+			return
 		}
 	}
 }

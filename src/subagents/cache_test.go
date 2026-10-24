@@ -159,6 +159,25 @@ func TestCacheHitRecordedInJournal(t *testing.T) {
 	}
 }
 
+// TestCacheReuseKeepsRetries — повтор из кеша не теряет число попыток:
+// журнал должен показывать, сколько работа стоила на самом деле.
+func TestCacheReuseKeepsRetries(t *testing.T) {
+	p := NewPool(func(context.Context, Spec) (Outcome, error) {
+		return Outcome{Full: "## Найдено\n- x.go:1\n\n## Вывод\n- готово", Retries: 2}, nil
+	}, PoolOptions{MaxParallel: 2, MaxDepth: 2, Enabled: true})
+	spec := cacheSpec("задача с повторами")
+	if _, err := p.Spawn(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := p.Spawn(context.Background(), spec); err != nil || out.Reuse != ReuseCache {
+		t.Fatalf("повтор из кеша: reuse=%q err=%v", out.Reuse, err)
+	}
+	runs := p.All()
+	if len(runs) != 2 || runs[0].Retries != 2 {
+		t.Fatalf("в журнале повтора Retries=%d, ожидалось 2", runs[0].Retries)
+	}
+}
+
 func TestDifferentTasksNotCached(t *testing.T) {
 	r := &cacheRunner{}
 	p := newCachePool(r)
@@ -321,17 +340,28 @@ func TestCacheExpiredEntryIsMiss(t *testing.T) {
 	if _, ok := c.get(key); ok {
 		t.Error("просроченная запись выдана как свежая")
 	}
+	// Просроченная запись должна быть удалена, а не остаться мусором,
+	// занимающим место до вытеснения.
+	if _, _, size := c.stats(); size != 0 {
+		t.Errorf("после промаха в кеше %d записей, ожидалось 0", size)
+	}
 }
 
-func TestForgetRemovesKey(t *testing.T) {
+// TestCachePutRefreshesRecency — перезапись ключа делает его самым свежим:
+// иначе только что обновлённый отчёт вытеснялся бы как самый старый.
+func TestCachePutRefreshesRecency(t *testing.T) {
 	c := newResultCache()
-	c.put("k", Outcome{Full: "x"}, "n", "id")
-	c.forget("k")
-	if _, ok := c.get("k"); ok {
-		t.Error("забытая запись всё ещё в кеше")
+	for i := 0; i < cacheMax; i++ {
+		c.put(string(rune('a'+i)), Outcome{Full: "x"}, "n", "id")
 	}
-	if _, _, size := c.stats(); size != 0 {
-		t.Errorf("после forget в кеше %d записей", size)
+	c.put("a", Outcome{Full: "обновлён"}, "n", "id")
+	c.put("z", Outcome{Full: "новый"}, "n", "id")
+
+	if _, ok := c.get("a"); !ok {
+		t.Error("обновлённая запись вытеснена как самая старая")
+	}
+	if _, ok := c.get("b"); ok {
+		t.Error("вытеснена не самая старая запись")
 	}
 }
 

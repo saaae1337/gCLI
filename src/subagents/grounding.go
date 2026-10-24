@@ -78,26 +78,6 @@ type Evidence struct {
 	URL  string // адрес страницы (EvWeb)
 }
 
-// Where — человекочитаемое описание доказательства.
-func (e Evidence) Where() string {
-	switch e.Kind {
-	case EvFile:
-		if e.To > 0 && e.To >= e.From {
-			return fmt.Sprintf("%s:%d-%d", e.Path, e.From, e.To)
-		}
-		return e.Path
-	case EvGrep:
-		return fmt.Sprintf("grep %s → %s (%d совпадений)", e.Pat, e.Path, e.Hits)
-	case EvList, EvWrite:
-		return e.Path
-	case EvExec:
-		return e.Cmd
-	case EvWeb:
-		return e.URL
-	}
-	return ""
-}
-
 // lineRange — включительный диапазон прочитанных строк.
 type lineRange struct{ from, to int }
 
@@ -115,11 +95,15 @@ func (f *fileRec) covers(line int) bool {
 	if f == nil || line <= 0 {
 		return false
 	}
-	if f.full {
-		return true
-	}
 	if f.hits[line] {
 		return true
+	}
+	// Файл прочитан целиком, значит известна и его длина. Ссылка за последнюю
+	// строку — такая же выдумка, как ссылка в непрочитанный кусок: строки с
+	// таким номером в файле нет. total == 0 означает, что длина неизвестна
+	// (хвост чтения не распознан) — тогда не придираемся.
+	if f.full {
+		return f.total <= 0 || line <= f.total
 	}
 	// Диапазоны отсортированы и слиты, поэтому достаточно одного прохода.
 	lo, hi := 0, len(f.ranges)-1
@@ -273,8 +257,11 @@ func (g *Grounding) rec(path string) *fileRec {
 // reReadShown — хвост read_file с числом показанных строк.
 var reReadShown = regexp.MustCompile(`\[показано строк: (\d+) начиная с (\d+)`)
 
-// reReadEOF — хвост read_file для файла, прочитанного целиком.
-var reReadEOF = regexp.MustCompile(`\[файл закончился на строке (\d+)`)
+// reReadEOF — хвост read_file, дошедшего до конца файла. Кроме последней
+// строки он сообщает, сколько строк показано: чтение с offset=120 до EOF
+// закрывает не весь файл, а только хвост, и подтверждать им строки 1-119
+// нельзя.
+var reReadEOF = regexp.MustCompile(`\[файл закончился на строке (\d+)(?:, показано строк: (\d+))?`)
 
 // reGrepHit — строка вывода grep: «путь:строка: текст».
 //
@@ -329,13 +316,44 @@ func (g *Grounding) fileEvidence(a map[string]any, resText string, ok bool) []Ev
 
 	// Диапазон из хвоста результата — источник истины: аргументы могли быть
 	// обрезаны инструментом, а хвост всегда описывает, что реально показано.
-	shown, from, eof := 0, 0, 0
+	shown, from, eof, eofShown := 0, 0, 0, 0
 	if m := reReadShown.FindStringSubmatch(resText); m != nil {
 		shown, _ = strconv.Atoi(m[1])
 		from, _ = strconv.Atoi(m[2])
 	}
 	if m := reReadEOF.FindStringSubmatch(resText); m != nil {
 		eof, _ = strconv.Atoi(m[1])
+		if m[2] != "" {
+			eofShown, _ = strconv.Atoi(m[2])
+		}
+	}
+
+	// multi_read отдаёт хвост для каждого файла, а файлы бывают разной длины.
+	// Если хвостов столько же, сколько путей, сопоставляем их по порядку:
+	// иначе первый EOF приписывался всем файлам, и короткий файл «подтверждал»
+	// строки, которых в нём нет.
+	type readTail struct{ eof, shown, from int }
+	var eofTails []readTail
+	for _, m := range reReadEOF.FindAllStringSubmatch(resText, -1) {
+		n, _ := strconv.Atoi(m[1])
+		sh := 0
+		if m[2] != "" {
+			sh, _ = strconv.Atoi(m[2])
+		}
+		start := 0
+		if sh > 0 {
+			start = n - sh + 1
+			if start < 1 {
+				start = 1
+			}
+		}
+		eofTails = append(eofTails, readTail{eof: n, shown: sh, from: start})
+	}
+	var tails []readTail
+	for _, m := range reReadShown.FindAllStringSubmatch(resText, -1) {
+		n, _ := strconv.Atoi(m[1])
+		f, _ := strconv.Atoi(m[2])
+		tails = append(tails, readTail{shown: n, from: f})
 	}
 
 	// offset/limit из аргументов — запасной путь, если хвост не распознан.
@@ -343,10 +361,30 @@ func (g *Grounding) fileEvidence(a map[string]any, resText string, ok bool) []Ev
 		from = atoiDefault(a["offset"], 1)
 	}
 
-	for _, p := range paths {
+	for i, p := range paths {
 		switch {
+		case len(eofTails) == len(paths) && eofTails[i].eof > 0:
+			t := eofTails[i]
+			if t.from > 1 {
+				add(p, t.from, t.eof, false)
+			} else {
+				add(p, 1, t.eof, true)
+			}
+		case len(tails) == len(paths) && tails[i].shown > 0:
+			add(p, tails[i].from, tails[i].from+tails[i].shown-1, false)
 		case eof > 0:
-			add(p, 1, eof, true)
+			start := 1
+			if eofShown > 0 {
+				start = eof - eofShown + 1
+				if start < 1 {
+					start = 1
+				}
+			}
+			if start > 1 {
+				add(p, start, eof, false)
+			} else {
+				add(p, 1, eof, true)
+			}
 		case shown > 0:
 			add(p, from, from+shown-1, false)
 		default:
@@ -568,7 +606,22 @@ func (g *Grounding) Audit(report string) *GroundingReport {
 	g.mu.Lock()
 	files := make(map[string]*fileRec, len(g.files))
 	for k, v := range g.files {
-		files[k] = v
+		if v == nil {
+			files[k] = nil
+			continue
+		}
+		// Глубокая копия: Audit работает уже без mu, а Observe продолжает
+		// менять ranges/hits/total из горутины агентного цикла. Поверхностная
+		// копия map'а оставляла общие *fileRec и давала data race.
+		cp := &fileRec{full: v.full, total: v.total}
+		cp.ranges = append([]lineRange(nil), v.ranges...)
+		if len(v.hits) > 0 {
+			cp.hits = make(map[int]bool, len(v.hits))
+			for line := range v.hits {
+				cp.hits[line] = true
+			}
+		}
+		files[k] = cp
 	}
 	items := append([]Evidence(nil), g.items...)
 	g.mu.Unlock()
@@ -578,9 +631,13 @@ func (g *Grounding) Audit(report string) *GroundingReport {
 	for p := range files {
 		paths = append(paths, p)
 		// Суммарный объём прочитанного: грубая мера глубины исследования.
+		// Для прочитанного целиком файла ranges — это тот же самый диапазон
+		// 1..total, поэтому суммировать их вместе с total значит считать
+		// каждую строку дважды.
 		if r := files[p]; r != nil {
 			if r.full {
 				out.Total += maxInt(r.total, 1)
+				continue
 			}
 			for _, rg := range r.ranges {
 				out.Total += rg.to - rg.from + 1
@@ -611,6 +668,14 @@ func (g *Grounding) Audit(report string) *GroundingReport {
 		if err != nil || line <= 0 {
 			continue
 		}
+		// «a.go:10-20» — утверждение обо всём диапазоне. Проверять только
+		// начало мало: субагент мог прочитать строку 10 и выдумать хвост до 20.
+		last := line
+		if m[3] != "" {
+			if end, err := strconv.Atoi(m[3]); err == nil && end > last {
+				last = end
+			}
+		}
 		where := path + ":" + m[2]
 		if m[3] != "" {
 			where += "-" + m[3]
@@ -622,7 +687,7 @@ func (g *Grounding) Audit(report string) *GroundingReport {
 
 		cl := Claim{Where: where, Path: path, Line: line}
 		if rec := lookup(files, path); rec != nil {
-			if rec.covers(line) {
+			if rec.covers(line) && rec.covers(last) {
 				cl.Supported = true
 			} else {
 				cl.Why = string(RiskLine) + " (читались " + describe(rec) + ")"
@@ -798,31 +863,6 @@ func (g *Grounding) Report(rep *GroundingReport) string {
 		b.WriteString("- Вывод: не доверяй этим утверждениям без проверки.\n")
 	}
 	return b.String()
-}
-
-// Files — файлы, которые субагент реально открывал.
-func (g *Grounding) Files() []string {
-	if g == nil {
-		return nil
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	out := make([]string, 0, len(g.files))
-	for f := range g.files {
-		out = append(out, f)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// LineCovered — была ли строка в зоне чтения (для точечных проверок).
-func (g *Grounding) LineCovered(path string, line int) bool {
-	if g == nil {
-		return false
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return lookup(g.files, path).covers(line)
 }
 
 // ---------- Сопоставление путей ----------

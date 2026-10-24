@@ -1,7 +1,11 @@
 package core
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -126,9 +130,82 @@ func TestWriteAtomicAndRead(t *testing.T) {
 	if err := WriteAtomic(path, []byte("данные"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	data, err := readFileHelper(path)
+	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "данные" {
 		t.Fatalf("прочитано %q, ошибка %v", data, err)
+	}
+}
+
+// TestWriteAtomicConcurrentKeepsWholeFile — фиксированное имя path+".tmp"
+// означало, что два параллельных писателя затирают друг друга и на диск
+// попадает смесь двух файлов.
+func TestWriteAtomicConcurrentKeepsWholeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	const writers = 12
+	payloads := make([]string, writers)
+	for i := range payloads {
+		payloads[i] = fmt.Sprintf("%02d:%s", i, strings.Repeat("x", 4096))
+	}
+	var wg sync.WaitGroup
+	for i := range payloads {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := WriteAtomic(path, []byte(payloads[i]), 0o600); err != nil {
+				t.Errorf("WriteAtomic: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range payloads {
+		if string(data) == p {
+			return
+		}
+	}
+	t.Fatalf("на диске не целый файл одного из писателей: %d байт", len(data))
+}
+
+// TestRelToWDKeepsDotDotChild — «..foo» это имя файла внутри проекта,
+// а не выход из него.
+func TestRelToWDKeepsDotDotChild(t *testing.T) {
+	work := t.TempDir()
+	inside := filepath.Join(work, "..foo")
+	if got := RelToWD(work, inside); got != "..foo" {
+		t.Errorf("RelToWD для ребёнка ..foo = %q, хотели ..foo", got)
+	}
+	outside := filepath.Join(filepath.Dir(work), "снаружи")
+	if got := RelToWD(work, outside); got != outside {
+		t.Errorf("путь вне проекта должен остаться прежним, получили %q", got)
+	}
+}
+
+// TestRandIDNonPositive — отрицательная длина не должна ронять процесс.
+func TestRandIDNonPositive(t *testing.T) {
+	if got := RandID(0); got != "" {
+		t.Errorf("RandID(0) = %q, хотели пустую строку", got)
+	}
+	if got := RandID(-3); got != "" {
+		t.Errorf("RandID(-3) = %q, хотели пустую строку", got)
+	}
+	if got := RandID(7); len(got) != 7 {
+		t.Errorf("RandID(7) длиной %d, хотели 7", len(got))
+	}
+}
+
+// TestSlugMaxLenCountsRunes — лимит задан в символах: для кириллицы
+// проверка по байтам обрезала slug вдвое раньше срока.
+func TestSlugMaxLenCountsRunes(t *testing.T) {
+	if got := Slug("абвгд", 3); got != "абв" {
+		t.Errorf("Slug(абвгд, 3) = %q, хотели абв", got)
+	}
+	if got := Slug("абв", 0); got != "item" {
+		t.Errorf("Slug с нулевым лимитом = %q, хотели item", got)
 	}
 }
 

@@ -55,6 +55,66 @@ read_only: false
 	}
 }
 
+// TestParseCustomAgentIgnoresTemplateComments — комментарии-подсказки из
+// AgentTemplate не должны становиться инструментами и именем модели.
+func TestParseCustomAgentIgnoresTemplateComments(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "api-migrator.md")
+	content := strings.Replace(AgentTemplate, "%s", "api-migrator", 1)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := ParseCustomAgent(p, "проект")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.Name != "api-migrator" {
+		t.Errorf("имя: %q", ca.Name)
+	}
+	if len(ca.Tools) != 0 {
+		t.Errorf("подсказка «# через запятую…» попала в инструменты: %v", ca.Tools)
+	}
+	if ca.Model != "" {
+		t.Errorf("подсказка из шаблона попала в модель: %q", ca.Model)
+	}
+}
+
+// TestParseCustomAgentInlineCommentsAndBOM — значения front matter
+// отсекаются от inline-комментариев, а BOM не мешает разбору.
+func TestParseCustomAgentInlineCommentsAndBOM(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.md")
+	content := "\ufeff---\n" +
+		"name: \"x\" # имя\n" +
+		"description: 'делает # странное'\n" +
+		"tools: read_file, grep # список\n" +
+		"model: glm # модель\n" +
+		"read_only: true # да\n" +
+		"---\n\nтело"
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := ParseCustomAgent(p, "проект")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.Name != "x" || ca.Desc != "делает # странное" {
+		t.Errorf("имя/описание: %q / %q", ca.Name, ca.Desc)
+	}
+	if len(ca.Tools) != 2 || ca.Tools[0] != "read_file" || ca.Tools[1] != "grep" {
+		t.Errorf("инструменты: %v", ca.Tools)
+	}
+	if ca.Model != "glm" {
+		t.Errorf("модель: %q", ca.Model)
+	}
+	if !ca.ReadOnly {
+		t.Error("read_only: true с комментарием не распознан")
+	}
+	if strings.TrimSpace(ca.Prompt) != "тело" {
+		t.Errorf("тело промпта: %q", ca.Prompt)
+	}
+}
+
 // TestCustomAgentProjectOverridesGlobal — проектный агент перекрывает глобального.
 func TestCustomAgentProjectOverridesGlobal(t *testing.T) {
 	home := t.TempDir()

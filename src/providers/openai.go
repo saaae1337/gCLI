@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"gcli/core"
@@ -58,13 +59,16 @@ type oaToolFunc struct {
 }
 
 type oaRequest struct {
-	Model       string      `json:"model"`
-	Messages    []oaMessage `json:"messages"`
-	Tools       []oaTool    `json:"tools,omitempty"`
-	Stream      bool        `json:"stream"`
-	StreamOpts  *oaStream   `json:"stream_options,omitempty"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature float64     `json:"temperature,omitempty"`
+	Model      string      `json:"model"`
+	Messages   []oaMessage `json:"messages"`
+	Tools      []oaTool    `json:"tools,omitempty"`
+	Stream     bool        `json:"stream"`
+	StreamOpts *oaStream   `json:"stream_options,omitempty"`
+	MaxTokens  int         `json:"max_tokens,omitempty"`
+	// MaxCompletionTokens — имя того же лимита для o-серии/gpt-5:
+	// OpenAI отвергает max_tokens у этих моделей.
+	MaxCompletionTokens int     `json:"max_completion_tokens,omitempty"`
+	Temperature         float64 `json:"temperature,omitempty"`
 
 	// Размышления: у каждого endpoint-а свой параметр.
 	Thinking        *oaThinking  `json:"thinking,omitempty"`
@@ -88,6 +92,7 @@ type oaReasoning struct {
 type oaDelta struct {
 	Role             string       `json:"role"`
 	Content          string       `json:"content"`
+	Refusal          string       `json:"refusal"`
 	ReasoningContent string       `json:"reasoning_content"`
 	Reasoning        string       `json:"reasoning"`
 	Thinking         string       `json:"thinking"`
@@ -159,9 +164,15 @@ func buildOAMessages(creq core.ChatRequest, keepReasoning bool) []oaMessage {
 		case core.RoleAssistant:
 			om := oaMessage{Role: "assistant", Content: m.Content}
 			for _, tc := range m.ToolCalls {
+				args := tc.Args
+				if strings.TrimSpace(args) == "" {
+					// Пустые аргументы — невалидный JSON в истории вызова;
+					// строгие OpenAI-совместимые API отвечают на него 400.
+					args = "{}"
+				}
 				om.ToolCalls = append(om.ToolCalls, oaToolCall{
 					ID: tc.ID, Type: "function",
-					Function: oaFunc{Name: tc.Name, Arguments: tc.Args},
+					Function: oaFunc{Name: tc.Name, Arguments: args},
 				})
 			}
 			// Пустое assistant-сообщение (ни текста, ни вызовов — например,
@@ -181,15 +192,25 @@ func buildOAMessages(creq core.ChatRequest, keepReasoning bool) []oaMessage {
 
 // StreamOpenAI — стриминг через OpenAI-совместимый протокол.
 func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, think string, out chan<- core.Delta) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p == nil {
+		return fmt.Errorf("провайдер не задан")
+	}
 	body := oaRequest{
-		Model:     creq.Model,
-		Messages:  buildOAMessages(creq, think != "off"),
-		Stream:    true,
-		MaxTokens: creq.MaxTokens,
+		Model:    creq.Model,
+		Messages: buildOAMessages(creq, think != "off"),
+		Stream:   true,
 	}
-	if len(creq.ToolDefs) > 0 {
-		body.StreamOpts = &oaStream{IncludeUsage: true}
+	if isOModel(creq.Model) {
+		body.MaxCompletionTokens = creq.MaxTokens
+	} else {
+		body.MaxTokens = creq.MaxTokens
 	}
+	// include_usage нужен и без инструментов: иначе расход обычного
+	// текстового хода не доезжает до /usage вовсе.
+	body.StreamOpts = &oaStream{IncludeUsage: true}
 	if !isOModel(creq.Model) {
 		body.Temperature = creq.Temp
 	}
@@ -197,7 +218,7 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 	for _, td := range creq.ToolDefs {
 		body.Tools = append(body.Tools, oaTool{
 			Type:     "function",
-			Function: oaToolFunc{Name: td.Name, Description: td.Description, Parameters: json.RawMessage(td.Schema)},
+			Function: oaToolFunc{Name: td.Name, Description: td.Description, Parameters: toolSchema(td.Schema)},
 		})
 	}
 
@@ -214,7 +235,7 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 	}
 
 	parseFails := 0
-	return c.doSSE(ctx, req, func(data string) error {
+	return c.streamWithKeys(ctx, p, req, func(data string) error {
 		var ch oaChunk
 		if err := json.Unmarshal([]byte(data), &ch); err != nil {
 			parseFails++
@@ -224,7 +245,21 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 			return nil
 		}
 		if ch.Error != nil && ch.Error.Message != "" {
-			return apiError(ch.Error.Message)
+			err := apiError(ch.Error.Message)
+			// Некоторые провайдеры отвечают кодом 200, а ошибку кладут
+			// в тело: «insufficient_quota», «余额不足». По ключу это
+			// выглядит как превышение лимита, и ключ надо менять.
+			if reason, ok := quotaReason(ch.Error.Message, ch.Error.Type); ok {
+				return &keyError{
+					err:    &retryErr{err},
+					pause:  KeyPauseLimit,
+					reason: reason,
+				}
+			}
+			if retryableStreamError(ch.Error.Code, ch.Error.Type) {
+				return &retryErr{err}
+			}
+			return err
 		}
 		if ch.Usage != nil {
 			out <- core.Delta{Usage: &core.Usage{
@@ -239,6 +274,12 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 			}
 			if d.Content != "" {
 				out <- core.Delta{Text: d.Content}
+			}
+			// Отказ модели — такой же видимый ответ, как и текст.
+			// Без этого ход выглядел пустым, и человек не понимал,
+			// почему модель промолчала.
+			if d.Refusal != "" {
+				out <- core.Delta{Text: d.Refusal}
 			}
 			for _, tc := range d.ToolCalls {
 				out <- core.Delta{
@@ -283,6 +324,59 @@ func apiError(msg string) error {
 // может быть любым, а проверять его каждый раз по подстроке хрупко.
 var ErrEmptyResponse = errors.New("пустой ответ модели")
 
+// retryableStreamError — ошибка пришла внутри SSE-потока, но по смыслу
+// это перегрузка/лимит: повтор до первого события уместен.
+func retryableStreamError(code any, typ string) bool {
+	switch v := code.(type) {
+	case float64:
+		return v == http.StatusTooManyRequests || v >= 500
+	case string:
+		if n, err := strconv.Atoi(v); err == nil {
+			return n == http.StatusTooManyRequests || n >= 500
+		}
+	}
+	t := strings.ToLower(typ)
+	return strings.Contains(t, "rate_limit") || strings.Contains(t, "overloaded") ||
+		strings.Contains(t, "server_error")
+}
+
+// quotaReason — ошибка про исчерпанный лимит или баланс.
+//
+// Провайдеры пишут об этом по-разному, и в теле ответа код ответа часто
+// 200: «insufficient_quota», «exceeded your current quota», «余额不足»
+// (баланс), «限流» (лимит). По любому из них ключ надо менять — иначе
+// сессия встанет намертво.
+func quotaReason(msg, typ string) (string, bool) {
+	m := strings.ToLower(msg + " " + typ)
+	switch {
+	case strings.Contains(m, "insufficient_quota"),
+		strings.Contains(m, "exceeded your current quota"),
+		strings.Contains(m, "quota exceeded"),
+		strings.Contains(m, "insufficient balance"),
+		strings.Contains(m, "insufficient funds"),
+		strings.Contains(m, "billing"):
+		return "квота исчерпана", true
+	case strings.Contains(m, "余额不足"), strings.Contains(m, "余额"):
+		return "нет средств на балансе", true
+	case strings.Contains(m, "限流"), strings.Contains(m, "rate limit"),
+		strings.Contains(m, "rate_limit"), strings.Contains(m, "too many requests"):
+		return "лимит запросов", true
+	}
+	return "", false
+}
+
+// toolSchema — JSON-схема параметров инструмента.
+//
+// Пустая схема превращается в объект: null в parameters/input_schema
+// строгие API отвергают, и инструмент становится невызываемым.
+func toolSchema(raw string) json.RawMessage {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = `{"type":"object"}`
+	}
+	return json.RawMessage(raw)
+}
+
 // applyThinkingOA — добавить параметры размышлений под конкретный endpoint.
 func applyThinkingOA(p *Provider, body *oaRequest, model, think string) {
 	lm := strings.ToLower(model)
@@ -326,17 +420,16 @@ func extractReasoning(reasoningContent, reasoning, thinking string) string {
 
 // newChatRequest — HTTP-запрос к чату с авторизацией провайдера.
 func newChatRequest(ctx context.Context, p *Provider, url string, payload []byte) (*http.Request, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if p.Kind == ProtoAnthropic {
-		req.Header.Set("x-api-key", p.Key)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else if p.Key != "" {
-		req.Header.Set("Authorization", "Bearer "+p.Key)
-	}
+	// Ключ берётся из пула: активным может быть не первый.
+	p.applyKey(req, p.CurrentKey())
 	req.Header.Set("Accept", "text/event-stream")
 	for k, v := range p.ExtraHeaders {
 		req.Header.Set(k, v)

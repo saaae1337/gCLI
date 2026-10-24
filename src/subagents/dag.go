@@ -87,7 +87,7 @@ func RefIndex(ref string, names []string) (int, bool) {
 		return 0, false
 	}
 	for i, n := range names {
-		if n != "" && strings.EqualFold(n, s) {
+		if n = strings.TrimSpace(n); n != "" && strings.EqualFold(n, s) {
 			return i, true
 		}
 	}
@@ -123,10 +123,13 @@ func BuildDAG(names []string, deps [][]string) (*DAG, error) {
 		return nil, fmt.Errorf("пустая пачка: нечего планировать")
 	}
 	seen := make(map[string]int, len(names))
+	clean := make([]string, len(names))
 	for i, n := range names {
-		if strings.TrimSpace(n) == "" {
+		n = strings.TrimSpace(n)
+		if n == "" {
 			return nil, fmt.Errorf("узел %d: пустое имя — зависимости не на что адресовать", i+1)
 		}
+		clean[i] = n
 		key := strings.ToLower(n)
 		if prev, dup := seen[key]; dup {
 			return nil, fmt.Errorf("имена «%s» повторяются (узлы %d и %d) — переименуй один из них",
@@ -135,17 +138,23 @@ func BuildDAG(names []string, deps [][]string) (*DAG, error) {
 		seen[key] = i
 	}
 
-	resolved := make([][]int, len(names))
-	for i := range names {
+	resolved := make([][]int, len(clean))
+	for i := range clean {
 		seenDep := map[int]bool{}
-		for _, ref := range deps[i] {
-			j, ok := RefIndex(ref, names)
+		// deps может быть короче names: отсутствующие элементы — это узлы без
+		// зависимостей, а не повод для паники.
+		var refs []string
+		if i < len(deps) {
+			refs = deps[i]
+		}
+		for _, ref := range refs {
+			j, ok := RefIndex(ref, clean)
 			if !ok {
 				return nil, fmt.Errorf("%s: зависимость «%s» не найдена; доступно: %s (или #1..#%d)",
-					names[i], strings.TrimSpace(ref), strings.Join(names, ", "), len(names))
+					clean[i], strings.TrimSpace(ref), strings.Join(clean, ", "), len(clean))
 			}
 			if j == i {
-				return nil, fmt.Errorf("%s: зависит от самого себя", names[i])
+				return nil, fmt.Errorf("%s: зависит от самого себя", clean[i])
 			}
 			if seenDep[j] {
 				continue // повтор зависимости — не новая связь
@@ -155,11 +164,11 @@ func BuildDAG(names []string, deps [][]string) (*DAG, error) {
 		}
 	}
 
-	waves, err := topoWaves(names, resolved)
+	waves, err := topoWaves(clean, resolved)
 	if err != nil {
 		return nil, err
 	}
-	return &DAG{Names: names, Deps: resolved, Waves: waves}, nil
+	return &DAG{Names: clean, Deps: resolved, Waves: waves}, nil
 }
 
 // topoWaves — алгоритм Кана: слой за слоем, каждый слой — независимые узлы.

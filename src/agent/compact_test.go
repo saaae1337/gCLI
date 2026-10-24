@@ -36,23 +36,6 @@ func compactAgent(t *testing.T, sess *plainSession, summary string) *Agent {
 	}, ".")
 }
 
-func quoteJSON(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b.WriteString(`\"`)
-		case '\n':
-			b.WriteString(`\n`)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
-}
-
 // TestCompactKeepsSummaryInFallback — сжатие существует ради того, чтобы
 // выжимка сохранилась. Запасной путь схлопывал её через core.OneLine в
 // одну строку: от многоабзацной выжимки оставалось первое предложение, и

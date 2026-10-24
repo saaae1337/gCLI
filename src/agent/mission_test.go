@@ -42,6 +42,16 @@ func TestStartMissionAcceptsBudgetOnly(t *testing.T) {
 	}
 }
 
+func TestStartMissionAcceptsIterationLimit(t *testing.T) {
+	// Отдельный потолок итераций — самостоятельный бюджет прогона.
+	// Без него mission.json с одним max_iters молча не применялся.
+	m := core.Mission{MaxIters: 50}
+	tr := core.NewTracker(m.Apply(), 0, 0)
+	if e := startMission(m, MissionDeps{Tracker: tr}); e == nil {
+		t.Error("потолок итераций без режима должен включать прогон")
+	}
+}
+
 func TestMissionTickStopsOnTokenBudget(t *testing.T) {
 	e, _ := newTestEngine(t, core.Mission{TokenBudget: 1000}, 500)
 	if got := e.tick(1); got != "" {

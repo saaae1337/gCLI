@@ -194,19 +194,6 @@ func TestDurUnmarshalFromNumber(t *testing.T) {
 
 // ---------- Tracker: бюджеты ----------
 
-// tickUntil — прогнать n итераций с заданным ростом токенов.
-func tickUntil(t *testing.T, tr *Tracker, n, tokens int) string {
-	t.Helper()
-	reason := ""
-	for i := 0; i < n; i++ {
-		reason = tr.Tick(i+1, 0, tokens*(i+1)/max(n, 1))
-		if reason != "" {
-			break
-		}
-	}
-	return reason
-}
-
 func TestTrackerDeadlineStopsRun(t *testing.T) {
 	now := time.Now()
 	clock := func() time.Time { return now }
@@ -328,6 +315,73 @@ func TestTrackerNilIsSafe(t *testing.T) {
 	tr.CountCheckpoint()
 	_ = tr.Status()
 	_ = tr.Left()
+	if m := tr.Mission(); m.Mode != "" || m.Objective != "" {
+		t.Errorf("nil-трекер не должен возвращать задание: %+v", m)
+	}
+	if !tr.Started().IsZero() {
+		t.Errorf("nil-трекер не должен возвращать время старта: %s", tr.Started())
+	}
+}
+
+// TestTrackerResumeDoesNotLookStalled — регрессия: продолжение с большой
+// итерации оставляло lastProgress в нуле, и прогон со StallLimit=12 сразу
+// считался застоем: агент останавливался на первом же тике.
+func TestTrackerResumeDoesNotLookStalled(t *testing.T) {
+	now := time.Now()
+	tr := NewTrackerAt(Mission{Mode: MissionNormal, StallLimit: 3}, 0, 0,
+		func() time.Time { return now })
+	tr.Resume(50, 20, 5000)
+	if tr.Stalled() {
+		t.Error("сразу после продолжения застоя быть не должно")
+	}
+	if tr.StallHard() {
+		t.Error("сразу после продолжения жёсткого застоя быть не должно")
+	}
+	tr.Tick(51, 1, 6000)
+	if tr.Stalled() {
+		t.Error("один тик после продолжения не должен считаться застоем")
+	}
+	// А вот настоящий застой после продолжения по-прежнему ловится.
+	tr.Tick(54, 1, 6000)
+	if !tr.Stalled() {
+		t.Error("через StallLimit итераций без прогресса застой обязан быть")
+	}
+}
+
+// TestTrackerSelfLineSeparatesParts — регрессия: статус и строка про
+// инструменты склеивались в «потолковвызовы инструментов».
+func TestTrackerSelfLineSeparatesParts(t *testing.T) {
+	tr := NewTrackerAt(Mission{Mode: MissionNormal}, 0, 0, time.Now)
+	line := tr.SelfLine()
+	if !strings.Contains(line, " · вызовы инструментов: 0") {
+		t.Errorf("части строки не разделены: %q", line)
+	}
+	if strings.Contains(line, "потолковвызовы") {
+		t.Errorf("статус склеился со счётчиком: %q", line)
+	}
+}
+
+// TestTrackerStatusMentionsCostAndToolCalls — строка состояния обязана
+// показывать все заданные потолки, а не только время/итерации/токены.
+func TestTrackerStatusMentionsCostAndToolCalls(t *testing.T) {
+	now := time.Now()
+	tr := NewTrackerAt(Mission{
+		Mode:         MissionNormal,
+		CostBudget:   25,
+		MaxToolCalls: 10,
+	}, 0, 0, func() time.Time { return now })
+	tr.WithModel("zai", "glm-4.6")
+	tr.Tick(1, 2, 1000)
+	s := tr.Status()
+	for _, want := range []string{
+		"вызовы инструментов: 2 из 10",
+		"деньги:",
+		"из $25.00",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("в строке состояния нет %q: %q", want, s)
+		}
+	}
 }
 
 func TestTrackerCostStopsRun(t *testing.T) {
@@ -480,45 +534,44 @@ func TestTrackerCheckpointDue(t *testing.T) {
 
 // ---------- Файл миссии ----------
 
-func TestSaveAndLoadMission(t *testing.T) {
+// TestLoadMissionReadsFile — mission.json читается как есть: явные поля
+// человека не затираются пресетом режима, а срок понимается как «2h».
+func TestLoadMissionReadsFile(t *testing.T) {
 	work := t.TempDir()
-	m := Mission{
-		Objective: "починить тесты",
-		Mode:      MissionLongTime,
-		Deadline:  Dur(2 * time.Hour),
-		Acceptance: []string{
-			"go test ./... зелёные",
-			"vet молчит",
-		},
-		TokenBudget: 250_000,
+	if err := os.MkdirAll(filepath.Dir(MissionPath(work)), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	name, err := SaveMission(work, m)
-	if err != nil {
+	body := `{
+  "objective": "починить тесты",
+  "mode": "long-time",
+  "deadline": "2h",
+  "acceptance": ["go test ./... зелёные", "vet молчит"],
+  "token_budget": 250000
+}`
+	if err := os.WriteFile(MissionPath(work), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, from, err := LoadMission(work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if from != name {
-		t.Errorf("файл %s, а прочитан %s", name, from)
+	if from != MissionPath(work) {
+		t.Errorf("файл %s, а прочитан %s", MissionPath(work), from)
 	}
-	if got.Objective != m.Objective {
-		t.Errorf("цель %q, хотели %q", got.Objective, m.Objective)
+	if got.Objective != "починить тесты" {
+		t.Errorf("цель %q, хотели %q", got.Objective, "починить тесты")
 	}
-	if got.Deadline != m.Deadline {
-		t.Errorf("срок %s, хотели %s", got.Deadline, m.Deadline)
+	if got.Mode != MissionLongTime {
+		t.Errorf("режим %q, хотели %q", got.Mode, MissionLongTime)
 	}
-	if len(got.Acceptance) != 2 || got.Acceptance[0] != m.Acceptance[0] {
+	if got.Deadline != Dur(2*time.Hour) {
+		t.Errorf("срок %s, хотели 2h", got.Deadline)
+	}
+	if len(got.Acceptance) != 2 || got.Acceptance[0] != "go test ./... зелёные" {
 		t.Errorf("критерии потерялись: %v", got.Acceptance)
 	}
-	if got.TokenBudget != m.TokenBudget {
-		t.Errorf("бюджет %d, хотели %d", got.TokenBudget, m.TokenBudget)
-	}
-	// Файл обязан быть читаемым: срок строкой, а не наносекундами.
-	body, _ := os.ReadFile(name)
-	if !strings.Contains(string(body), "2h0m0s") {
-		t.Errorf("в файле срок не читаем:\n%s", body)
+	if got.TokenBudget != 250_000 {
+		t.Errorf("бюджет %d, хотели %d", got.TokenBudget, 250_000)
 	}
 }
 
@@ -563,16 +616,6 @@ func TestLoadMissionRejectsBadMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "long-time") {
 		t.Errorf("в ошибке нет списка режимов: %v", err)
-	}
-}
-
-func TestMissionTemplateHasComments(t *testing.T) {
-	// Пустой файл бесполезен: человек должен понять синтаксис,
-	// не читая документацию.
-	for _, want := range []string{"mode", "acceptance", "deadline", "long-time"} {
-		if !strings.Contains(MissionTemplate, want) {
-			t.Errorf("в заготовке mission.json нет %q", want)
-		}
 	}
 }
 

@@ -93,6 +93,27 @@ func TestAutoHandoffExplainsWhyTurnEnded(t *testing.T) {
 	}
 }
 
+// TestAutoHandoffReasonUsesActualCause — снимок обязан называть настоящую
+// причину обрыва. Раньше текст всегда говорил про лимит итераций, даже
+// когда прогон остановился по сроку или бюджету, и следующий ход продолжал
+// с неверным представлением о случившемся.
+func TestAutoHandoffReasonUsesActualCause(t *testing.T) {
+	dir := t.TempDir()
+	a, sess, _ := newHandoffAgent(t, dir)
+	a.autoHandoffReason("вышел срок прогона")
+
+	if len(sess.Messages()) == 0 {
+		t.Fatal("снимок не добавлен в историю")
+	}
+	last := sess.Messages()[len(sess.Messages())-1].Content
+	if !strings.Contains(last, "вышел срок прогона") {
+		t.Errorf("в снимке нет настоящей причины:\n%s", last)
+	}
+	if strings.Contains(last, "лимите итераций") {
+		t.Errorf("в снимке осталась старая причина «лимит итераций»:\n%s", last)
+	}
+}
+
 // TestAutoHandoffNoted — пользователь должен видеть, что снимок сохранён:
 // иначе он не поймёт, почему следующий ход продолжает с середины.
 func TestAutoHandoffNoted(t *testing.T) {

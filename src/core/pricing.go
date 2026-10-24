@@ -11,11 +11,6 @@ import "strings"
 // Значения приблизительные и регулярно меняются у провайдеров —
 // это ориентир, а не счёт от провайдера.
 
-// modelPrice — цена одной конкретной модели.
-type modelPrice struct {
-	price Price
-}
-
 // priceTable — цены по моделям, сгруппированные по вендору.
 // Ключи в нижнем регистре, имя модели сравнивается по вхождению.
 var priceTable = map[string]map[string]Price{
@@ -104,6 +99,12 @@ func lookupPrice(providerID, model string) (Price, bool) {
 // ключей в таблице нет, и это латентно — но стоит добавить один, и
 // дефект стал бы видимым в день, когда никто его не ждал.
 func pickPrice(byModel map[string]Price, model string) (Price, bool) {
+	// Пустая строка содержится в любом ключе: без этой проверки
+	// strings.Contains("", key) находил бы первую попавшуюся цену и
+	// выдавал выдуманную стоимость за настоящую.
+	if model == "" {
+		return Price{}, false
+	}
 	best, bestKey := Price{}, ""
 	for key, p := range byModel {
 		if !strings.Contains(model, key) {

@@ -26,7 +26,7 @@ type SubagentDeps struct {
 	// отличить «субагент выдумал файл» от «файл есть, но он его не открывал».
 	WorkDir string
 	Memory  func() string
-	Skills  func() string
+	Skills  func(query string) string
 	// MaxIters — лимит итераций агентного цикла субагента.
 	MaxIters int
 	// SwitchModel — временно переключить модель на время работы субагента.
@@ -41,6 +41,9 @@ type subagentSession struct {
 	usage core.Usage
 	todos []tools.TodoItem
 }
+
+// defaultSubagentTurns — лимит итераций субагента, когда хост его не задал.
+const defaultSubagentTurns = 12
 
 func (s *subagentSession) Messages() []core.Message         { return s.msgs }
 func (s *subagentSession) AddMessage(m core.Message)        { s.msgs = append(s.msgs, m) }
@@ -60,7 +63,7 @@ func (s *subagentSession) Usage() core.Usage                { return s.usage }
 // отчёт собирается детерминированно из истории — но это уже аварийный
 // вариант, и его текст честно помечается как неполный.
 func (a *Agent) CollectReport(ctx context.Context) string {
-	if !a.AgentMode {
+	if a == nil || !a.AgentMode || a.d.Session == nil {
 		return ""
 	}
 	const demand = "[Система] Инструменты недоступны. Сдай ИТОГОВЫЙ ОТЧЁТ по исходной задаче: " +
@@ -101,20 +104,15 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 	if model == "" {
 		model = d.Model
 	}
-	restore := func() {}
 	if spec.Model != "" && d.SwitchModel != nil {
 		r, err := d.SwitchModel(spec.Model)
 		if err != nil {
 			return subagents.Outcome{Full: "Не удалось переключить модель: " + err.Error()}
 		}
 		if r != nil {
-			restore = r
-			defer restore()
+			defer r()
 		}
 		model = spec.Model
-	}
-	if model == "" {
-		model = d.Model
 	}
 
 	allow, deny := subagents.ToolsFor(spec.Type)
@@ -134,11 +132,20 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 	}
 
 	maxTurns := d.MaxIters
-	if spec.MaxTurns > 0 && spec.MaxTurns < maxTurns {
+	if maxTurns <= 0 {
+		// Общего лимита нет — спецификация задаёт свой, а не дефолт:
+		// иначе явный MaxTurns=20 молча урезался бы до 12.
 		maxTurns = spec.MaxTurns
 	}
 	if maxTurns <= 0 {
-		maxTurns = 12
+		maxTurns = defaultSubagentTurns
+	}
+	// MaxTurns задачи уточняет общий лимит вниз, но не теряется, когда
+	// общий лимит не задан: раньше при d.MaxIters <= 0 сравнение
+	// spec.MaxTurns < maxTurns не срабатывало, и спецификация всегда
+	// получала дефолтные 12 итераций вместо своих.
+	if spec.MaxTurns > 0 && spec.MaxTurns < maxTurns {
+		maxTurns = spec.MaxTurns
 	}
 
 	ag := New(Deps{
@@ -203,18 +210,25 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		ground.Observe(tc.Name, tc.Args, res.Text, err == nil && res.Error == "")
 	}
 
+	// Итог хода: счётчики экономии субагента уходят главному агенту, и те
+	// складываются в общий счёт сессии.
+	finish := func(o subagents.Outcome) subagents.Outcome {
+		o.Economy = ag.econ
+		return o
+	}
+
 	if err := ag.Run(ctx, task); err != nil {
 		// Обрыв связи — не повод отдавать главному агенту пустоту.
 		// Сеть может лечь уже после того, как субагент собрал всё нужное
 		// в своей истории, поэтому даём ему один финальный ход без
 		// инструментов: требуем отчёт из того, что уже есть.
 		if ctx.Err() != nil {
-			return subagents.Outcome{
+			return finish(subagents.Outcome{
 				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
 				Turns: ag.Turns,
 				Tools: int(toolCalls.Load()),
 				Usage: sess.usage,
-			}
+			})
 		}
 		// Не context.Background(): если сессию прерывает Ctrl+C или по
 		// истечении общего таймаута, «собрать отчёт» не должно было
@@ -224,20 +238,20 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		defer rcancel()
 		report := ag.CollectReport(rctx)
 		if strings.TrimSpace(report) == "" {
-			return subagents.Outcome{
+			return finish(subagents.Outcome{
 				Full:  fmt.Sprintf("Субагент прерван: %v\n\nЧто успел сделать:\n%s", err, summarize(sess.msgs, 40)),
 				Turns: ag.Turns,
 				Tools: int(toolCalls.Load()),
 				Usage: sess.usage,
-			}
+			})
 		}
-		return subagents.Outcome{
+		return finish(subagents.Outcome{
 			Full:    report,
 			Summary: subagents.Summarize(report),
 			Turns:   ag.Turns,
 			Tools:   int(toolCalls.Load()),
 			Usage:   sess.usage,
-		}
+		})
 	}
 
 	full := lastAssistantText(sess.msgs)
@@ -270,13 +284,13 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		// ровно то, ради чего проверка и делается.
 		body := "Субагент не смог сформулировать отчёт: закончил работу без результата." +
 			"\n\nЧто было в его сообщениях:\n" + summarize(sess.msgs, 20)
-		return subagents.Outcome{
+		return finish(subagents.Outcome{
 			Full:  body + ground.Report(audit0),
 			Turns: ag.Turns,
 			Tools: int(toolCalls.Load()),
 			Usage: sess.usage,
 			Audit: audit0,
-		}
+		})
 	}
 
 	// Проверка отчёта по журналу доказательств.
@@ -296,7 +310,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		full = fixed
 		audit = ground.Audit(full)
 	}
-	return subagents.Outcome{
+	return finish(subagents.Outcome{
 		Full:    full + ground.Report(audit),
 		Summary: subagents.Summarize(full),
 		Turns:   ag.Turns,
@@ -306,7 +320,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 		// «формально гладкий, но выдуманный» отчёт от честного и повторил бы
 		// запуск вслепую. Нужны и вердикт, и список мест для подсказки.
 		Audit: audit,
-	}
+	})
 }
 
 // repairBudget — сколько итераций даётся на адресную добивку отчёта.
@@ -330,7 +344,7 @@ const repairBudget = 2
 // иначе «открой и проверь» превратится в «убери всё, чего не помнишь», и
 // модель выбросит вместе с выдумками настоящие находки.
 func (a *Agent) RepairReport(ctx context.Context, full string, audit *subagents.GroundingReport) string {
-	if audit == nil || audit.Trustworthy {
+	if a == nil || a.d.Session == nil || audit == nil || audit.Trustworthy {
 		return ""
 	}
 	problems := audit.Problems()

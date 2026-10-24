@@ -4,6 +4,8 @@ package core
 // параллельный доступ к трекеру прогона.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -68,6 +70,40 @@ func TestTrackerStopRacesTick(t *testing.T) {
 			_ = tr.Iters()
 			tr.Stop(StopCancelled)
 		}
+	}
+}
+
+// TestDeleteSessionAcceptsJSONSuffix — LoadSession принимает и «id», и
+// «id.json»; удаление обязано понимать те же имена.
+func TestDeleteSessionAcceptsJSONSuffix(t *testing.T) {
+	r := testRepo(t)
+	s := r.NewSession("провайдер", "модель", t.TempDir())
+	if err := r.SaveSession(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DeleteSession(s.ID + ".json"); err != nil {
+		t.Fatalf("DeleteSession с суффиксом .json: %v", err)
+	}
+	if _, err := r.LoadSession(s.ID); err == nil {
+		t.Error("сессия должна быть удалена")
+	}
+}
+
+// TestUndoCheckpointReportsRemoveError — если созданный файл не удаляется,
+// откат не состоялся, и молча искать более старый чекпоинт нельзя.
+func TestUndoCheckpointReportsRemoveError(t *testing.T) {
+	r := testRepo(t)
+	// Непустой каталог: os.Remove на нём падает и на Windows, и на Unix.
+	notFile := filepath.Join(t.TempDir(), "каталог")
+	if err := os.MkdirAll(notFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notFile, "внутри"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Checkpoints: []CheckpointMeta{{Path: notFile, Existed: false}}}
+	if _, ok, err := r.UndoCheckpoint(s); err == nil || ok {
+		t.Errorf("ошибка удаления должна дойти до вызывающего: ok=%v err=%v", ok, err)
 	}
 }
 

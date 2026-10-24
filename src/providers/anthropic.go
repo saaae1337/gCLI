@@ -28,6 +28,8 @@ type anBlock struct {
 	Signature string `json:"signature,omitempty"`
 	// Зрение: блок изображения (type=image).
 	Source *anImageSource `json:"source,omitempty"`
+	// CacheControl — метка кеша префикса (для системного промпта).
+	CacheControl *anCacheControl `json:"cache_control,omitempty"`
 }
 
 // anImageSource — base64-источник изображения для Anthropic.
@@ -41,11 +43,47 @@ type anTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
+	// CacheControl — метка кеша префикса. Ставится на последнем
+	// инструменте: так в кеш попадает весь блок схем целиком.
+	CacheControl *anCacheControl `json:"cache_control,omitempty"`
+}
+
+// anCacheControl — метка кеша префикса Anthropic.
+//
+// Кэшированный вход стоит в десять раз дешевле обычного, а неизменная
+// часть запроса (системный промпт и схемы инструментов) уходит в
+// каждый запрос без изменений. Один только блок схем — это десятки
+// тысяч токенов за сессию, и без кеша это самый дорогой постоянный
+// расход.
+type anCacheControl struct {
+	Type string `json:"type"`
+}
+
+// anSystem — системный промпт: строкой или блоком с меткой кеша.
+//
+// Формой выбирается вид JSON: без кеша промпт уходит обычной строкой
+// (так его ждут совместимые прокси), с кешем — массивом блоков, как
+// требует официальный API.
+type anSystem struct {
+	Text  string
+	Cache bool
+}
+
+// MarshalJSON — системный промпт в виде JSON.
+func (s anSystem) MarshalJSON() ([]byte, error) {
+	if !s.Cache {
+		return json.Marshal(s.Text)
+	}
+	return json.Marshal([]anBlock{{
+		Type:         "text",
+		Text:         s.Text,
+		CacheControl: &anCacheControl{Type: "ephemeral"},
+	}})
 }
 
 type anRequest struct {
 	Model       string      `json:"model"`
-	System      string      `json:"system,omitempty"`
+	System      anSystem    `json:"system,omitempty"`
 	Messages    []anMessage `json:"messages"`
 	Tools       []anTool    `json:"tools,omitempty"`
 	MaxTokens   int         `json:"max_tokens"`
@@ -59,6 +97,22 @@ type anThinking struct {
 	BudgetTokens int    `json:"budget_tokens"`
 }
 
+// anUsage — расход токенов Anthropic. Кэшированный вход приходит
+// отдельными полями, но в общий prompt-расход входит наравне с обычным.
+type anUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+func (u *anUsage) promptTokens() int {
+	if u == nil {
+		return 0
+	}
+	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
+}
+
 type anEvent struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
@@ -68,6 +122,7 @@ type anEvent struct {
 	} `json:"error"`
 	ContentBlock *struct {
 		Type  string `json:"type"`
+		Text  string `json:"text"`
 		ID    string `json:"id"`
 		Name  string `json:"name"`
 		Input any    `json:"input"`
@@ -81,15 +136,9 @@ type anEvent struct {
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	Message *struct {
-		Usage *struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
+		Usage *anUsage `json:"usage"`
 	} `json:"message"`
-	Usage *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	Usage *anUsage `json:"usage"`
 }
 
 // buildAnthropicMessages — конвертация сообщений в формат Anthropic.
@@ -219,12 +268,26 @@ func anthropicBase(raw string) string {
 
 // StreamAnthropic — стриминг через протокол Anthropic.
 func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, think string, out chan<- core.Delta) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p == nil {
+		return fmt.Errorf("провайдер не задан")
+	}
+	// Кеш префикса: неизменная часть запроса (системный промпт и схемы
+	// инструментов) оплачивается в десять раз дешевле.
+	cache := promptCacheOn(p)
 	body := anRequest{
 		Model:     creq.Model,
-		System:    creq.System,
+		System:    anSystem{Text: creq.System, Cache: cache},
 		Messages:  buildAnthropicMessages(creq.Messages, think == "on"),
 		MaxTokens: creq.MaxTokens,
 		Stream:    true,
+	}
+	// max_tokens у Anthropic обязателен: нулевое значение — это не
+	// «пусть сервер решит», а 400 на каждый запрос.
+	if body.MaxTokens <= 0 {
+		body.MaxTokens = 4096
 	}
 	if !isOModel(creq.Model) {
 		body.Temperature = creq.Temp
@@ -240,8 +303,13 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 	}
 	for _, td := range creq.ToolDefs {
 		body.Tools = append(body.Tools, anTool{
-			Name: td.Name, Description: td.Description, InputSchema: json.RawMessage(td.Schema),
+			Name: td.Name, Description: td.Description, InputSchema: toolSchema(td.Schema),
 		})
+	}
+	// Метка кеша — на последнем инструменте: в кеш попадает весь блок
+	// схем от начала до конца.
+	if cache && len(body.Tools) > 0 {
+		body.Tools[len(body.Tools)-1].CacheControl = &anCacheControl{Type: "ephemeral"}
 	}
 
 	payload, err := json.Marshal(body)
@@ -253,7 +321,7 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 		return err
 	}
 
-	return c.doSSE(ctx, req, func(data string) error {
+	return c.streamWithKeys(ctx, p, req, func(data string) error {
 		var e anEvent
 		if err := json.Unmarshal([]byte(data), &e); err != nil {
 			return nil
@@ -261,11 +329,18 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 		switch e.Type {
 		case "message_start":
 			if e.Message != nil && e.Message.Usage != nil {
-				out <- core.Delta{Usage: &core.Usage{PromptTokens: e.Message.Usage.InputTokens}}
+				out <- core.Delta{Usage: &core.Usage{PromptTokens: e.Message.Usage.promptTokens()}}
 			}
 		case "content_block_start":
-			if e.ContentBlock != nil && e.ContentBlock.Type == "tool_use" {
-				out <- core.Delta{IsTool: true, TCIndex: e.Index, TCID: e.ContentBlock.ID, TCName: e.ContentBlock.Name}
+			if e.ContentBlock != nil {
+				// Обычно стартовый текстовый блок пуст, но compatible-
+				// прокси иногда кладут начало ответа прямо в него.
+				if e.ContentBlock.Type == "text" && e.ContentBlock.Text != "" {
+					out <- core.Delta{Text: e.ContentBlock.Text}
+				}
+				if e.ContentBlock.Type == "tool_use" {
+					out <- core.Delta{IsTool: true, TCIndex: e.Index, TCID: e.ContentBlock.ID, TCName: e.ContentBlock.Name}
+				}
 			}
 		case "content_block_delta":
 			if e.Delta != nil {
@@ -293,15 +368,34 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 				out <- core.Delta{Finish: e.Delta.StopReason}
 			}
 			if e.Usage != nil {
-				out <- core.Delta{Usage: &core.Usage{CompletionTokens: e.Usage.OutputTokens}}
+				out <- core.Delta{Usage: &core.Usage{
+					PromptTokens:     e.Usage.promptTokens(),
+					CompletionTokens: e.Usage.OutputTokens,
+				}}
 			}
 		case "error":
 			msg := "ошибка API"
 			if e.Error != nil && e.Error.Message != "" {
 				msg = e.Error.Message
 			}
-			return fmt.Errorf("Anthropic: %s", msg)
+			err := fmt.Errorf("anthropic: %s", msg)
+			if e.Error != nil && isRetryableAnthropicError(e.Error.Type) {
+				return &retryErr{err}
+			}
+			return err
 		}
 		return nil
 	})
+}
+
+// isRetryableAnthropicError — типы ошибок, которые Anthropic присылает
+// внутри потока и которые проходят сами: перегрузка, лимит, временный
+// сбой на стороне API. Ошибки запроса (invalid_request_error и т.п.)
+// повторять бессмысленно.
+func isRetryableAnthropicError(typ string) bool {
+	switch strings.ToLower(typ) {
+	case "overloaded_error", "rate_limit_error", "api_error", "timeout_error":
+		return true
+	}
+	return false
 }

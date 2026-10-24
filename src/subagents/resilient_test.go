@@ -193,7 +193,7 @@ func TestWrapStopsOnCancel(t *testing.T) {
 }
 
 func TestRetryHintMentionsPreviousFailure(t *testing.T) {
-	h := RetryHint(errors.New("STREAM_CLOSED"), ReportNarrative)
+	h := RetryHintAudit(errors.New("STREAM_CLOSED"), ReportNarrative, nil)
 	for _, want := range []string{"STREAM_CLOSED", "мыслью вслух", "Не начинай исследование заново"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("в RetryHint нет %q:\n%s", want, h)

@@ -51,6 +51,18 @@ func TestPricePickLongestWins(t *testing.T) {
 	}
 }
 
+// TestPricePickEmptyModel — пустое имя модели не должно находить первую
+// попавшуюся цену: strings.Contains("", key) истинно для любого ключа.
+func TestPricePickEmptyModel(t *testing.T) {
+	table := map[string]Price{"glm-4.6": {In: 1, Out: 1}}
+	if _, ok := pickPrice(table, ""); ok {
+		t.Error("для пустого имени модели цена найдена")
+	}
+	if _, ok := ModelPrice("zai", "  "); ok {
+		t.Error("для пустого имени модели ModelPrice вернул цену")
+	}
+}
+
 // TestPricePickNoMatch — нет совпадения, нет и цены: показывать
 // прочерк честнее выдуманного числа.
 func TestPricePickNoMatch(t *testing.T) {

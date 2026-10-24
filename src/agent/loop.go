@@ -122,6 +122,9 @@ type LoopDetector struct {
 	warned map[string]bool
 	// dropped — сколько вызовов вытеснено из окна.
 	dropped int
+	// fresh — был ли в последней учтённой итерации хотя бы один вызов,
+	// которого ещё не было в окне.
+	fresh bool
 }
 
 // NewLoopDetector — создать детектор.
@@ -142,6 +145,7 @@ func (d *LoopDetector) Record(calls []core.ToolCall, results []toolResult) strin
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	d.fresh = false
 	for _, tc := range calls {
 		// В order — каждая встреча, а не только первая: при двух
 		// одинаковых вызовах в одной итерации раньше карта count
@@ -150,6 +154,9 @@ func (d *LoopDetector) Record(calls []core.ToolCall, results []toolResult) strin
 		k := callKey(tc.Name, tc.Args)
 		d.order = append(d.order, k)
 		d.counts[k]++
+		if d.counts[k] == 1 {
+			d.fresh = true
+		}
 	}
 	// Окно: вытесняем вызовы, выпавшие за пределы памяти.
 	for len(d.order) > loopLookback {
@@ -243,6 +250,17 @@ func (d *LoopDetector) Stats() (warned, dropped int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return len(d.warned), d.dropped
+}
+
+// Fresh — принесла ли последняя итерация хотя бы один новый вызов.
+//
+// Новый вызов — тот, которого не было в окне повторов: именно он
+// отличает работу от топтания на месте. Пустая итерация (модель не звала
+// инструменты) прогрессом не считается.
+func (d *LoopDetector) Fresh() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.fresh
 }
 
 // Progress — доля вызовов, которых раньше не было (0..100).

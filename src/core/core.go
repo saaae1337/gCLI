@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -17,7 +16,7 @@ import (
 )
 
 // Version — версия приложения (обновляется при сборке через -ldflags).
-var Version = "6.2.3"
+var Version = "0.7.0.0"
 
 // ---------- Типы диалога ----------
 
@@ -40,9 +39,13 @@ type ToolCall struct {
 // Image — изображение, приложенное к сообщению (зрение агента).
 // Data — base64 без префикса data:, MIME — media_type (image/png и т.п.).
 // Path — путь к исходному файлу, если изображение загружено с диска.
+//
+// Data не сохраняется в файле сессии: картинка весит мегабайты, и десяток
+// снимков экрана раздувал сессию до десятков мегабайт. В запрос к модели
+// картинка возвращается из файла по Path (см. agent.fillImages).
 type Image struct {
 	MIME string `json:"mime"`
-	Data string `json:"data"`
+	Data string `json:"-"`
 	Path string `json:"path,omitempty"`
 }
 
@@ -166,6 +169,20 @@ type ProviderCfg struct {
 	Protocol string   `json:"protocol,omitempty"` // openai | anthropic
 	Models   []string `json:"models,omitempty"`
 	Custom   bool     `json:"custom,omitempty"`
+	// Keys — запасные ключи провайдера. Основной — в api_key, остальные
+	// здесь: когда основной упирается в лимит, запрос продолжается со
+	// следующего, и сессия не встаёт.
+	//
+	// Список хранится рядом с api_key в том же файле с правами 0600.
+	Keys []string `json:"keys,omitempty"`
+	// PromptCache — режим кеша префикса: auto | on | off.
+	//
+	// Кешируется неизменная часть запроса (системный промпт и схемы
+	// инструментов) — в кеше она стоит в десять раз дешевле. Пусто = auto:
+	// кеш включается у официального API Anthropic, а у совместимых
+	// прокси выключается, потому что незнакомое поле в теле запроса
+	// может стоить ошибки.
+	PromptCache string `json:"prompt_cache,omitempty"`
 }
 
 // Config — настройки ~/.gcli/config.json.
@@ -225,6 +242,11 @@ type Config struct {
 	// но на 70% и 90% маршрутизация начинает понижать модель.
 	SubBudget     int  `json:"sub_budget,omitempty"`
 	ParallelTools bool `json:"parallel_tools,omitempty"` // выполнять параллельные вызовы инструментов
+	// Cron — автономные итерации: после завершения хода, если пользователь
+	// молчит дольше интервала (15–20 мин), агент сам берет задачу
+	// «продолжить работу над проектом: найди баги, проблемы, уязвимости,
+	// улучшай». Выключено по умолчанию — автопилот тратит токены.
+	Cron bool `json:"cron,omitempty"`
 	// Sandbox — режим песочницы файловой системы: ограничить инструменты
 	// рабочим каталогом и закрыть каталоги с секретами.
 	//
@@ -376,6 +398,9 @@ type Session struct {
 	Usage     Usage     `json:"usage"`
 	Stats     Stats     `json:"stats"`
 	CWD       string    `json:"cwd"`
+	// Economy — счётчики экономии запросов и токенов за сессию.
+	// Заполняются агентом и показываются в /usage и /context.
+	Economy EconomyStats `json:"economy,omitempty"`
 
 	Checkpoints []CheckpointMeta `json:"checkpoints,omitempty"`
 	// SubagentRuns — журнал запусков субагентов за сессию.
@@ -410,6 +435,11 @@ func (s *Session) AddUsage(u Usage) { s.Usage.Add(u) }
 
 // RandID — случайная hex-строка длиной n символов.
 func RandID(n int) string {
+	if n <= 0 {
+		// Отрицательное n раньше приводило к make с отрицательной длиной
+		// или к срезу [:n] за границей строки — панике на ровном месте.
+		return ""
+	}
 	b := make([]byte, (n+1)/2)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)[:n]
@@ -430,42 +460,12 @@ func Truncate(s string, n int) string {
 	return string(r[:n-3]) + "..."
 }
 
-// TruncateOnel — обрезать до n рун без многоточия (для выравнивания).
-func TruncateOnel(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 1 {
-		return string(r[:n])
-	}
-	return string(r[:n-1]) + "…"
-}
-
 // OneLine — свернуть все переводы строк в пробелы.
 func OneLine(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
 	return strings.Join(strings.Fields(s), " ")
-}
-
-// Pad — дополнить строку пробелами до ширины w рун.
-func Pad(s string, w int) string {
-	n := utf8.RuneCountInString(s)
-	if n >= w {
-		return s
-	}
-	return s + strings.Repeat(" ", w-n)
-}
-
-// PadLeft — дополнить слева пробелами до ширины w рун.
-func PadLeft(s string, w int) string {
-	n := utf8.RuneCountInString(s)
-	if n >= w {
-		return s
-	}
-	return strings.Repeat(" ", w-n) + s
 }
 
 // Min, Max — вспомогательные.
@@ -678,21 +678,27 @@ func FullContext(system string, toolDefs []ToolDef, msgs []Message) int {
 
 // Slug — превратить произвольную строку в безопасный slug.
 func Slug(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return "item"
+	}
 	var b strings.Builder
 	lastDash := true
+	n := 0
 	for _, r := range strings.ToLower(s) {
+		if n >= maxLen {
+			break
+		}
 		switch {
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
 			b.WriteRune(r)
 			lastDash = false
+			n++
 		case r == ' ' || r == '_' || r == '-' || r == '.' || r == '/' || r == ':':
 			if !lastDash {
 				b.WriteByte('-')
 				lastDash = true
+				n++
 			}
-		}
-		if b.Len() >= maxLen {
-			break
 		}
 	}
 	out := strings.Trim(b.String(), "-")
@@ -701,9 +707,6 @@ func Slug(s string, maxLen int) string {
 	}
 	return out
 }
-
-// SortStrings — сортировка строк (часто нужна, чтобы не тянуть sort в каждый файл).
-func SortStrings(s []string) { sort.Strings(s) }
 
 // StrikeOut — зачёркнутый текст для выполненных задач.
 // Используется U+0336 (combining long stroke overlay), поэтому длина строки

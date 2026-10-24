@@ -151,15 +151,18 @@ type Outcome struct {
 	Reuse Reuse
 	// ReusedFrom — имя субагента-первоисточника.
 	ReusedFrom string
+	// Economy — счётчики экономии субагента: сколько запросов он сделал
+	// и сколько токенов сэкономил подрезкой истории. Главный агент
+	// складывает их в общий счёт сессии.
+	Economy core.EconomyStats
 }
 
 // Pool — пул субагентов: запуск, лимиты, журнал.
 type Pool struct {
-	mu      sync.Mutex
-	runs    map[string]*Run
-	order   []string
-	counter int
-	slots   slotCounter
+	mu    sync.Mutex
+	runs  map[string]*Run
+	order []string
+	slots slotCounter
 
 	// nameSeq — счётчик автоимён по типу. Живёт отдельно от runs, потому
 	// что между вычислением имени (autoName) и регистрацией запуска в runs
@@ -318,7 +321,6 @@ func (p *Pool) Spawn(ctx context.Context, spec Spec) (out Outcome, err error) {
 	run.cancel = cancel
 	p.runs[run.ID] = run
 	p.order = append(p.order, run.ID)
-	p.counter++
 	p.mu.Unlock()
 
 	// runner выполняется БЕЗ mu: он работает минуты, а mu нужен UI
@@ -390,13 +392,13 @@ func (p *Pool) reuse(spec Spec, out Outcome, kind Reuse, from string, at time.Ti
 		Usage:      out.Usage,
 		Summary:    out.Summary,
 		Full:       out.Full,
+		Retries:    out.Retries,
 		Reuse:      kind,
 		ReusedFrom: from,
 	}
 	p.mu.Lock()
 	p.runs[r.ID] = r
 	p.order = append(p.order, r.ID)
-	p.counter++
 	p.mu.Unlock()
 	return out, nil
 }

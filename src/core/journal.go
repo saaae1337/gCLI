@@ -25,6 +25,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -139,6 +140,13 @@ func ReadJournal(path string) (recs []JournalRecord, tailOK bool, err error) {
 	}
 	off := 0
 	for off < len(data) {
+		// Пустая строка — не запись, а пропуск: дописывающий процесс мог
+		// оставить её между записями. decodeRecord в этом случае вернул бы
+		// нулевую запись, и в журнале появилось бы «событие» без времени.
+		if data[off] == '\n' {
+			off++
+			continue
+		}
 		rec, next, ok := decodeRecord(data, off)
 		if !ok {
 			return recs, false, nil
@@ -229,6 +237,10 @@ func LastJournalRecord(path string) (rec JournalRecord, has bool, truncated bool
 // во время многочасового прогона дорого, а на Windows ещё и означает
 // rename-замену, которую антивирус держит на проверке.
 type Journal struct {
+	// mu — сериализует Append/Close/Wrote. Журнал пишут и агентный цикл,
+	// и обработчик выхода; без замка параллельные Append могли бы
+	// перезаписать j.f и j.err и потерять запись.
+	mu sync.Mutex
 	// path — куда пишем.
 	path string
 	// f — открытый файл, nil до первой записи (ленивое открытие).
@@ -250,7 +262,14 @@ type Journal struct {
 // Отвечает на вопрос «стоит ли дописывать что-то при выходе»: после
 // пустого сеанса запись «закрыто» была бы шумом, а её отсутствие не
 // мешает чтению — журнал просто заканчивается последним чекпоинтом.
-func (j *Journal) Wrote() bool { return j != nil && j.wrote }
+func (j *Journal) Wrote() bool {
+	if j == nil {
+		return false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.wrote
+}
 
 // JournalPath — файл журнала прогона.
 func JournalPath(workDir string) string {
@@ -272,7 +291,12 @@ func OpenJournal(workDir string) (*Journal, error) {
 
 // Close — закрыть журнал, сбросив на диск.
 func (j *Journal) Close() error {
-	if j == nil || j.f == nil {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.f == nil {
 		return nil
 	}
 	f := j.f
@@ -294,6 +318,8 @@ func (j *Journal) Append(rec JournalRecord) error {
 	if j == nil {
 		return nil
 	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	// «Resume» и «start» — это вход в прогон, а не ход работы внутри него.
 	// Считать их прогрессом нельзя: сеанс, который только подхватил
 	// прогон и вышел, не сделал ничего.
@@ -396,9 +422,11 @@ func MissionResumeFromJournal(path string, now time.Time, within time.Duration) 
 	if rec.Kind == JournalResume {
 		return MissionState{}, false, cut
 	}
-	if rec.Reason != "" {
+	if rec.Kind == JournalStop || rec.Reason != "" {
 		// Причина приходит из трекера, поэтому она есть у любой записи,
-		// сделанной после остановки, — включая финальный чекпоинт.
+		// сделанной после остановки, — включая финальный чекпоинт. Но и
+		// сама запись JournalStop означает необратимый конец: причина
+		// могла не сохраниться, а продолжать всё равно нечего.
 		return MissionState{}, false, cut
 	}
 	if !FreshMissionState(MissionState{Updated: rec.TS}, now, within) {

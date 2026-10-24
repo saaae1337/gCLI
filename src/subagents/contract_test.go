@@ -36,9 +36,6 @@ func TestCheckSectionsDetectsMissing(t *testing.T) {
 	if ch.OK() {
 		t.Error("OK() = true при отсутствующей секции")
 	}
-	if !strings.Contains(ch.Text(), "Вывод") {
-		t.Errorf("Text() без названия секции: %q", ch.Text())
-	}
 }
 
 func TestCheckSectionsAcceptsAnnotated(t *testing.T) {
@@ -46,6 +43,15 @@ func TestCheckSectionsAcceptsAnnotated(t *testing.T) {
 	full := "## Найдено (что именно)\n- pool.go:10\n## Вывод по задаче\n- всё ясно"
 	if ch := CheckSections(full, TypeExplorer); !ch.OK() {
 		t.Fatalf("уточнения в заголовках приняты за отсутствие секций: %+v", ch.Missing)
+	}
+}
+
+// TestCheckSectionsAcceptsSlashAlternatives — заголовок-альтернатива
+// «Добавлено/изменено» из промпта tester'а обязан закрывать секцию «Добавлено».
+func TestCheckSectionsAcceptsSlashAlternatives(t *testing.T) {
+	full := "## Запуск\n- go test ./... — ok\n## Добавлено/изменено\n- новый тест"
+	if ch := CheckSections(full, TypeTester); !ch.OK() {
+		t.Fatalf("секция через слэш не засчитана: %+v", ch.Missing)
 	}
 }
 

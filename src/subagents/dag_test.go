@@ -184,6 +184,36 @@ func TestBuildDAGNamesCycleNotOthers(t *testing.T) {
 	}
 }
 
+// TestBuildDAGShortDeps — deps короче names означает «у остальных нет
+// зависимостей», а не панику по индексу.
+func TestBuildDAGShortDeps(t *testing.T) {
+	d, err := BuildDAG([]string{"a", "b"}, [][]string{nil})
+	if err != nil {
+		t.Fatalf("короткий deps: %v", err)
+	}
+	if d.WaveCount() != 1 || len(d.DepsOf(1)) != 0 {
+		t.Fatalf("независимые узлы разложены неверно: %+v", d)
+	}
+}
+
+// TestBuildDAGTrimsNames — имена с пробелами по краям сравниваются и
+// возвращаются без них: иначе « plan » нельзя адресовать ссылкой «plan».
+func TestBuildDAGTrimsNames(t *testing.T) {
+	d, err := BuildDAG([]string{" plan ", "impl"}, [][]string{nil, {"plan"}})
+	if err != nil {
+		t.Fatalf("имя с пробелами не разрешилось: %v", err)
+	}
+	if d.Names[0] != "plan" {
+		t.Errorf("имя не нормализовано: %q", d.Names[0])
+	}
+	if len(d.DepsOf(1)) != 1 || d.DepsOf(1)[0] != 0 {
+		t.Errorf("зависимость impl = %v, ожидался [0]", d.DepsOf(1))
+	}
+	if _, err := BuildDAG([]string{"a", " a "}, [][]string{nil, nil}); err == nil {
+		t.Error("имена, различающиеся только пробелами, не признаны повтором")
+	}
+}
+
 // TestDAGNilSafe — нулевый DAG не должен паниковать в UI-коде.
 func TestDAGNilSafe(t *testing.T) {
 	var d *DAG

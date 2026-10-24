@@ -143,8 +143,8 @@ func ExtendDecision(base int, opt ExtendOptions) ExtendVerdict {
 			opt.Grants, maxExtends(opt.MaxExtends)))
 	}
 
-	if want > 0 && total+want > abs {
-		return deny(fmt.Sprintf("Достигнут абсолютный потолок: %d из %d итераций. "+
+	if total >= abs {
+		return deny(fmt.Sprintf("Абсолютный потолок исчерпан: %d из %d итераций. "+
 			"Больше нельзя ни при каких обоснованиях.", total, abs))
 	}
 
@@ -160,7 +160,14 @@ func ExtendDecision(base int, opt ExtendOptions) ExtendVerdict {
 			"или зафиксируй факт через task_note и сдай результат.", int(opt.Progress), extendProgressMin))
 	}
 
-	granted := core.Clamp(want, 1, abs-total)
+	// Остаток до абсолютного потолка может быть меньше запрошенного шага.
+	// Это не повод отказывать целиком: выдать столько, сколько осталось,
+	// честнее, чем терять последние итерации из-за формального «просили
+	// больше, чем есть».
+	granted := want
+	if rem := abs - total; granted > rem {
+		granted = rem
+	}
 	if granted < 1 {
 		return deny(fmt.Sprintf("Абсолютный потолок исчерпан: %d из %d итераций.", total, abs))
 	}

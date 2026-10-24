@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Store — пути всех данных gcli в ~/.gcli (или $GCLI_HOME).
@@ -46,22 +47,56 @@ func (s *Store) Ensure() {
 // WriteAtomic — записать файл атомарно (через временный + rename),
 // чтобы прерванный процесс не оставил половину JSON.
 func WriteAtomic(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	// Временный файл создаётся уникальным в том же каталоге: фиксированное
+	// имя path+".tmp" означало, что два параллельных писателя затирают
+	// данные друг друга и один из них переименовывает чужую половину.
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	tmp := f.Name()
+	// После успешного rename файла уже нет; Remove здесь — уборка на
+	// любом пути ошибки.
+	defer func() { _ = os.Remove(tmp) }()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
+	// Sync до Close: без него после выключения питания на диске мог бы
+	// остаться переименованный, но пустой файл.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return renameAtomic(tmp, path)
 }
 
-// readFileHelper — чтение файла (используется в тестах).
-func readFileHelper(path string) ([]byte, error) { return os.ReadFile(path) }
+// renameAtomic — rename с повторами.
+//
+// На Windows MoveFileEx может временно вернуть «Access is denied», если
+// целевой файл в этот самый момент заменяет другой писатель. Повторяем
+// коротко: это не постоянная ошибка прав, а окно гонки.
+func renameAtomic(tmp, path string) error {
+	var err error
+	for i := 0; i < 10; i++ {
+		if err = os.Rename(tmp, path); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return err
+}
 
 // AbsPath — абсолютный путь относительно рабочего каталога.
 //
@@ -85,7 +120,9 @@ func AbsPath(workDir, p string) string {
 // RelToWD — путь относительно рабочего каталога, если он внутри него.
 func RelToWD(workDir, p string) string {
 	rel, err := filepath.Rel(workDir, p)
-	if err == nil && !strings.HasPrefix(rel, "..") {
+	// «..» — ровно выход на уровень выше; «..foo» — обычное имя файла
+	// внутри каталога, и считать его внешним нельзя.
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return rel
 	}
 	return p
@@ -115,28 +152,4 @@ func SortedEntries(dir string) ([]os.DirEntry, error) {
 		return ents[i].Name() < ents[j].Name()
 	})
 	return ents, nil
-}
-
-// DirSize — суммарный размер каталога в байтах (для /status).
-func DirSize(dir string) int64 {
-	var total int64
-	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if info, e := d.Info(); e == nil {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total
-}
-
-// IsDirEmpty — пуст ли каталог.
-func IsDirEmpty(dir string) bool {
-	ents, err := os.ReadDir(dir)
-	return err != nil || len(ents) == 0
 }

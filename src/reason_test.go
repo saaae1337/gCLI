@@ -33,7 +33,7 @@ func TestReasonHiddenByDefault(t *testing.T) {
 	a.onReason("мысль один ")
 	a.onReason("мысль два")
 
-	if got := a.reasonText(); got != "мысль один мысль два" {
+	if got := reasonTextOf(a); got != "мысль один мысль два" {
 		t.Errorf("буфер размышлений = %q", got)
 	}
 	if out := buf.String(); strings.Contains(out, "мысль") {
@@ -182,10 +182,10 @@ func TestReasonHiddenAgainKeepsBuffering(t *testing.T) {
 	if strings.Contains(buf.String(), "второе") {
 		t.Errorf("после сворачивания размышления не должны печататься:\n%q", buf.String())
 	}
-	if !strings.Contains(a.reasonText(), "второе") {
+	if !strings.Contains(reasonTextOf(a), "второе") {
 		t.Error("размышления должны копиться дальше, даже когда свёрнуты")
 	}
-	if a.reasonShownAll() {
+	if reasonShownAllOf(a) {
 		t.Error("reasonShownAll врёт: скрытый кусок на экране не появлялся")
 	}
 }
@@ -232,7 +232,7 @@ func TestCloseThinkStreamEndsStream(t *testing.T) {
 
 	// Показанная мысль остаётся показанной: закрытие потока не стирает
 	// её с экрана, и отметка «показано» обязана это помнить.
-	if !a.reasonShownAll() {
+	if !reasonShownAllOf(a) {
 		t.Error("reasonShownAll врёт: мысль была показана до закрытия потока")
 	}
 }
@@ -245,7 +245,7 @@ func TestResetReasonKeepsUserChoice(t *testing.T) {
 	a.toggleReason() // пользователь включил показ
 	a.resetReason()
 
-	if got := a.reasonText(); got != "" {
+	if got := reasonTextOf(a); got != "" {
 		t.Errorf("в новом ходу буфер должен быть пуст, получено %q", got)
 	}
 	a.reasonMu.Lock()
@@ -438,4 +438,18 @@ func TestReasonPastFlagLifecycle(t *testing.T) {
 	if a.reasonPastShown() {
 		t.Error("после перерисовки приглашения флаг должен быть снят")
 	}
+}
+
+// reasonTextOf/reasonShownAllOf — доступ к состоянию размышлений для тестов.
+// В production-коде эти чтения никому не нужны, поэтому живут здесь.
+func reasonTextOf(a *app) string {
+	a.reasonMu.Lock()
+	defer a.reasonMu.Unlock()
+	return a.reasonBuf.String()
+}
+
+func reasonShownAllOf(a *app) bool {
+	a.reasonMu.Lock()
+	defer a.reasonMu.Unlock()
+	return a.reasonAny && a.reasonPrintedLen >= a.reasonBuf.Len()
 }

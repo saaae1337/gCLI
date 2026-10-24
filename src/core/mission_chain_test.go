@@ -9,12 +9,11 @@ import (
 func TestMissionChainLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	// Пусто: не ошибка, а «цепочки нет».
-	c, ok, err := LoadMissionChain(dir)
-	if err != nil || ok {
+	if _, ok, err := LoadMissionChain(dir); err != nil || ok {
 		t.Fatalf("без файла: ok=%v err=%v", ok, err)
 	}
 
-	c = &MissionChain{Items: []Mission{
+	c := &MissionChain{Items: []Mission{
 		{Objective: "шаг первый", Mode: MissionLongTime},
 		{Objective: "шаг второй", Mode: MissionOvernight},
 	}}
@@ -56,5 +55,25 @@ func TestMissionChainNegativeIndexClamped(t *testing.T) {
 	}
 	if loaded.Index != 0 {
 		t.Fatalf("отрицательный Index должен зажиматься в 0: %d", loaded.Index)
+	}
+}
+
+// TestMissionChainHighIndexClamped — Index больше числа шагов появляется
+// после ручной правки файла; сводка не должна говорить «шаг 5 из 3».
+func TestMissionChainHighIndexClamped(t *testing.T) {
+	dir := t.TempDir()
+	c := &MissionChain{Index: 5, Items: []Mission{{Objective: "x"}}}
+	if err := c.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := LoadMissionChain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Index != len(loaded.Items) {
+		t.Fatalf("Index должен зажиматься до %d: %d", len(loaded.Items), loaded.Index)
+	}
+	if got := loaded.Summary(); got != "шаг 1 из 1" {
+		t.Errorf("сводка = %q, хотели шаг 1 из 1", got)
 	}
 }

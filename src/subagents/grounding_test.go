@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -94,6 +95,87 @@ func TestObserveReadFull(t *testing.T) {
 	}
 }
 
+// TestObserveReadFullRejectsLinePastEOF — «прочитан целиком» не значит
+// «подтверждает любую строку»: ссылка за известный конец файла — выдумка.
+func TestObserveReadFullRejectsLinePastEOF(t *testing.T) {
+	g, dir := mkGrounding(t)
+	writeFileOnDisk(t, dir, "pool.go", 100)
+	g.Observe("read_file", `{"path":"pool.go"}`, readFull("pool.go", 100), true)
+
+	rep := g.Audit("Строка pool.go:42 есть, а pool.go:101 — нет.")
+	if rep.Supported != 1 || len(rep.Unsupported) != 1 || rep.Unsupported[0].Where != "pool.go:101" {
+		t.Fatalf("ссылка за концом файла не отклонена: supported=%d, unsupported=%+v",
+			rep.Supported, rep.Unsupported)
+	}
+}
+
+// TestObserveReadToEOFFromOffset — чтение с offset до конца файла не делает
+// прочитанными строки до offset. Хвост «файл закончился» сообщает и число
+// показанных строк, поэтому диапазон восстанавливается точно.
+func TestObserveReadToEOFFromOffset(t *testing.T) {
+	g, _ := mkGrounding(t)
+	g.Observe("read_file", `{"path":"a.go","offset":120,"limit":40}`,
+		"[файл закончился на строке 159, показано строк: 40]", true)
+
+	if rep := g.Audit("Код в a.go:120 и a.go:159."); !rep.Trustworthy || rep.Supported != 2 {
+		t.Fatalf("прочитанный хвост не подтверждён: %+v", rep.Unsupported)
+	}
+	rep := g.Audit("Код в a.go:10.")
+	if rep.Trustworthy || len(rep.Unsupported) != 1 {
+		t.Fatalf("строка до offset подтверждена без чтения: %+v", rep)
+	}
+}
+
+// TestAuditChecksRangeEnd — диапазон «a.go:10-20» подтверждается только если
+// прочитан и его конец, а не одно начало.
+func TestAuditChecksRangeEnd(t *testing.T) {
+	g, _ := mkGrounding(t)
+	g.Observe("read_file", `{"path":"a.go","offset":10,"limit":5}`, readPart(10, 5), true)
+
+	if rep := g.Audit("Код в a.go:10-14."); !rep.Trustworthy {
+		t.Fatalf("полностью прочитанный диапазон не подтверждён: %+v", rep.Unsupported)
+	}
+	rep := g.Audit("Код в a.go:10-20.")
+	if rep.Trustworthy || len(rep.Unsupported) != 1 {
+		t.Fatalf("конец диапазона за зоной чтения не проверен: %+v", rep)
+	}
+}
+
+// TestAuditTotalCountsFullReadOnce — объём прочитанного не удваивается:
+// у полного чтения диапазон 1..total и total — одно и то же.
+func TestAuditTotalCountsFullReadOnce(t *testing.T) {
+	g, _ := mkGrounding(t)
+	g.Observe("read_file", `{"path":"full.go"}`, readFull("full.go", 100), true)
+	if rep := g.Audit(""); rep.Total != 100 {
+		t.Errorf("Total = %d после полного чтения 100 строк, ожидалось 100", rep.Total)
+	}
+
+	part, _ := mkGrounding(t)
+	part.Observe("read_file", `{"path":"part.go","offset":10,"limit":5}`, readPart(10, 5), true)
+	if rep := part.Audit(""); rep.Total != 5 {
+		t.Errorf("Total = %d после чтения строк 10-14, ожидалось 5", rep.Total)
+	}
+}
+
+// TestAuditConcurrentObserve — Audit и Observe идут из разных горутин; вердикт
+// не должен читать живые range'ы журнала (проверяется под -race).
+func TestAuditConcurrentObserve(t *testing.T) {
+	g, dir := mkGrounding(t)
+	writeFileOnDisk(t, dir, "x.go", 1000)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			g.Observe("read_file", `{"path":"x.go","offset":1,"limit":10}`, readPart(1, 10), true)
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_ = g.Audit("x.go:5")
+	}
+	wg.Wait()
+}
+
 // TestObserveReadRange — частичное чтение подтверждает только прочитанные строки.
 //
 // Главный сценарий против галлюцинаций: субагент прочитал кусок файла, а в
@@ -146,18 +228,22 @@ func TestObserveMergedRanges(t *testing.T) {
 	g.Observe("read_file", `{"path":"big.go","offset":11,"limit":10}`, readPart(11, 10), true)
 	g.Observe("read_file", `{"path":"big.go","offset":30,"limit":11}`, readPart(30, 11), true)
 
-	if !g.LineCovered("big.go", 10) || !g.LineCovered("big.go", 20) {
-		t.Fatal("диапазон 1-20 должен слиться в один")
+	g.mu.Lock()
+	rec := g.files["big.go"]
+	if rec == nil || len(rec.ranges) != 2 {
+		g.mu.Unlock()
+		t.Fatalf("диапазоны не слиты: %+v", rec)
 	}
-	if g.LineCovered("big.go", 25) {
-		t.Fatal("строка 25 между чтениями не покрыта")
+	g.mu.Unlock()
+
+	rep := g.Audit("Код в big.go:10, big.go:20 и big.go:35.")
+	if !rep.Trustworthy || rep.Supported != 3 {
+		t.Fatalf("строки в зоне чтения не подтверждены: %+v", rep.Unsupported)
 	}
-	if !g.LineCovered("big.go", 35) {
-		t.Fatal("строка 35 в зоне 30-40 должна покрываться")
-	}
-	rep := g.Audit("Код в big.go:20 и big.go:35.")
-	if !rep.Trustworthy {
-		t.Fatalf("обе строки в зоне чтения: %+v", rep.Unsupported)
+	// Строка 25 лежит между чтениями 1-20 и 30-40 — её не видели.
+	rep = g.Audit("Код в big.go:25.")
+	if rep.Trustworthy || len(rep.Unsupported) != 1 || rep.Unsupported[0].Where != "big.go:25" {
+		t.Fatalf("строка 25 между чтениями подтверждена: %+v", rep)
 	}
 }
 
@@ -386,8 +472,8 @@ func TestMultiReadPaths(t *testing.T) {
 func TestFileEvidenceWhenNoPaths(t *testing.T) {
 	g, _ := mkGrounding(t)
 	g.Observe("read_file", `{}`, readFull("x.go", 10), true)
-	if len(g.Files()) != 0 {
-		t.Fatalf("мусорные файлы: %+v", g.Files())
+	if rep := g.Audit(""); rep.FilesRead != 0 {
+		t.Fatalf("мусорные файлы: %d", rep.FilesRead)
 	}
 }
 
@@ -397,9 +483,6 @@ func TestNilGroundingSafe(t *testing.T) {
 	g.Observe("read_file", `{"path":"x.go"}`, readFull("x.go", 10), true)
 	if rep := g.Audit("x.go:1"); !rep.Trustworthy {
 		t.Fatal("nil-журнал должен давать нейтральный вердикт")
-	}
-	if g.Files() != nil {
-		t.Fatal("nil-журнал не должен возвращать файлы")
 	}
 	if g.Report(nil) != "" {
 		t.Fatal("nil-отчёт не должен давать текст")

@@ -82,6 +82,24 @@ func TestDispatchDeterministic(t *testing.T) {
 	}
 }
 
+// TestDispatchOverlappingRulesCountOnce — «тест» внутри «тестов» и «план»
+// внутри «планирования» — один признак, а не два. Иначе вес роли удваивался,
+// и «поправь баг и добавь тесты» уходило в tester вместо coder.
+func TestDispatchOverlappingRulesCountOnce(t *testing.T) {
+	v := Dispatch("поправь баг и добавь тесты")
+	if v.Type != TypeCoder {
+		t.Fatalf("пересекающиеся правила перевесили coder: %s (Score=%d, %+v)", v.Type, v.Score, v.Signals)
+	}
+	plan := Dispatch("составь планирование")
+	if plan.Type != TypePlanner || plan.Score != 3 {
+		t.Errorf("«планирование» посчитано дважды: %s, Score=%d", plan.Type, plan.Score)
+	}
+	test := Dispatch("добавь юнит-тест")
+	if test.Type != TypeTester || test.Score != 3 {
+		t.Errorf("«юнит-тест» посчитан дважды: %s, Score=%d", test.Type, test.Score)
+	}
+}
+
 // TestResolveTypeRespectsExplicitChoice — явный выбор модели священен.
 // Автовыбор не имеет права «улучшать» то, что модель указала сама: иначе
 // подпись типа в отчёте перестаёт соответствовать задаче.
@@ -143,8 +161,11 @@ func TestResolveTypeUsesFallbackWithoutConfidence(t *testing.T) {
 	if len(v.Signals) == 0 {
 		t.Fatal("сигналы потеряны: диспетчер обязан показывать, что сработало")
 	}
-	if v.HasRoleMention() {
-		t.Error("HasRoleMention() = true при неуверенном вердикте")
+	if v.Score >= minDispatchScore {
+		t.Errorf("Score = %d при неуверенном вердикте", v.Score)
+	}
+	if v.Reason() != "" {
+		t.Errorf("неуверенный вердикт объясняет выбор роли: %q", v.Reason())
 	}
 }
 
@@ -187,7 +208,7 @@ func TestReasonMentionsRoleAndSignals(t *testing.T) {
 	if !strings.Contains(r, "автоматически") {
 		t.Errorf("Reason() не говорит, что выбор автоматический: %s", r)
 	}
-	if !v.HasRoleMention() {
-		t.Error("HasRoleMention() = false при уверенном вердикте")
+	if v.Score < minDispatchScore {
+		t.Errorf("Score = %d при уверенном вердикте", v.Score)
 	}
 }

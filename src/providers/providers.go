@@ -4,6 +4,7 @@
 package providers
 
 import (
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -31,6 +32,20 @@ type Provider struct {
 	NoKey        bool
 	Custom       bool
 	ContextLimit int // максимальный контекст модели в токенах (0 = неизвестно)
+	// PromptCache — режим кеша префикса: "" | auto | on | off.
+	//
+	// Кешируется неизменная часть запроса (системный промпт и схемы
+	// инструментов): она уходит в каждый запрос без изменений, а в кеше
+	// стоит в десять раз дешевле. По умолчанию кеш включается только у
+	// официального API Anthropic — совместимые прокси не обязаны понимать
+	// cache_control.
+	PromptCache string
+	// Pool — пул ключей провайдера. При лимите или отказе ключ уходит на
+	// паузу, а запрос продолжается со следующим: сессия не должна
+	// останавливаться из-за того, что у первого ключа кончился лимит.
+	Pool *KeyPool
+	// OnRotate — уведомление о смене ключа (для интерфейса).
+	OnRotate func(from, to int, reason string)
 }
 
 // EnvOr — переменная окружения или значение по умолчанию.
@@ -223,26 +238,89 @@ func Build(cfg core.Config) *Registry {
 		if pc.APIKey != "" {
 			p.Key = pc.APIKey
 		}
+		// Пул ключей: конфиг важнее окружения — человек задал его руками.
+		if len(pc.Keys) > 0 {
+			pool := NewKeyPool(pc.Keys)
+			// Основной ключ из конфига становится активным: после
+			// перезапуска гcli должен продолжить тем же ключом, которым
+			// закончил прошлый ход.
+			if pc.APIKey != "" {
+				pool.Use(pc.APIKey)
+			}
+			p.Pool = pool
+		}
 		if pc.Model != "" {
 			p.DefaultModel = pc.Model
 			p.Models = prependUnique(pc.Model, p.Models)
 		}
-		for _, m := range pc.Models {
-			p.Models = prependUnique(m, p.Models)
+		// Идём с конца, чтобы prependUnique сохранил порядок из конфига:
+		// первый элемент списка должен остаться первым (и стать моделью
+		// по умолчанию, если Model не задан явно).
+		for i := len(pc.Models) - 1; i >= 0; i-- {
+			p.Models = prependUnique(pc.Models[i], p.Models)
+		}
+		if pc.PromptCache != "" {
+			p.PromptCache = pc.PromptCache
 		}
 	}
 	for _, p := range r.All {
+		if p.DefaultModel == "" && len(p.Models) > 0 {
+			p.DefaultModel = p.Models[0]
+		}
 		if p.Key == "" {
 			p.Key = p.findKey()
+		}
+		// Пул ключей: из конфига (уже задан) или из окружения.
+		if p.Pool == nil {
+			keys := p.findKeys()
+			if len(keys) == 0 && p.Key != "" {
+				keys = []string{p.Key}
+			}
+			if len(keys) > 0 {
+				p.Pool = NewKeyPool(keys)
+			}
 		}
 	}
 	return r
 }
 
+// Rebuild — пересобрать реестр, сохранив состояние пулов ключей.
+//
+// Пересборка идёт при каждой правке конфига: без сохранения пулов
+// сдвинутый на паузу ключ снова стал бы активным, и агент упёрся бы в
+// тот же лимит во второй раз.
+func (r *Registry) Rebuild(cfg core.Config) *Registry {
+	old := map[string]*KeyPool{}
+	if r != nil {
+		for _, p := range r.All {
+			if p != nil && p.Pool != nil {
+				old[p.ID] = p.Pool
+			}
+		}
+	}
+	nr := Build(cfg)
+	for _, p := range nr.All {
+		pool, ok := old[p.ID]
+		if !ok {
+			continue
+		}
+		// Ключи берём из свежего пула (конфиг мог измениться), состояние
+		// пауз и отказов — из старого.
+		if p.Pool != nil {
+			pool.SetKeys(p.Pool.Keys())
+		}
+		p.Pool = pool
+	}
+	return nr
+}
+
 // Find — найти провайдера по id.
 func (r *Registry) Find(id string) *Provider {
+	if r == nil {
+		return nil
+	}
 	for _, p := range r.All {
-		if p.ID == id {
+		if p != nil && p.ID == id {
 			return p
 		}
 	}
@@ -250,24 +328,115 @@ func (r *Registry) Find(id string) *Provider {
 }
 
 func (p *Provider) findKey() string {
-	for _, e := range p.KeyEnvs {
-		if v := strings.TrimSpace(os.Getenv(e)); v != "" {
-			return v
+	keys := p.findKeys()
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+// findKeys — ключи из окружения.
+//
+// Список берётся из <ID>_API_KEYS (ключи через запятую или перевод
+// строки), одиночный — из обычных переменных провайдера. Список в
+// окружении удобен тем, что ключи не надо хранить в конфиге: их часто
+// подкладывают из секрет-хранилища при старте.
+func (p *Provider) findKeys() []string {
+	if p == nil {
+		return nil
+	}
+	if env := strings.ToUpper(strings.ReplaceAll(p.ID, "-", "_")) + "_API_KEYS"; env != "" {
+		if keys := splitKeys(os.Getenv(env)); len(keys) > 0 {
+			return keys
 		}
 	}
-	return ""
+	for _, e := range p.KeyEnvs {
+		if v := CleanKey(os.Getenv(e)); v != "" {
+			return []string{v}
+		}
+	}
+	return nil
+}
+
+// CurrentKey — ключ, который уйдёт в запрос.
+//
+// Берётся из пула: он знает, какой ключ активен, какой на паузе. Без
+// пула (старый конфиг с одним ключом) — обычный p.Key.
+func (p *Provider) CurrentKey() string {
+	if p == nil {
+		return ""
+	}
+	if p.Pool != nil {
+		if k := p.Pool.Current(); k != "" {
+			return k
+		}
+	}
+	return p.Key
+}
+
+// KeyCount — сколько ключей у провайдера.
+func (p *Provider) KeyCount() int {
+	if p == nil {
+		return 0
+	}
+	if p.Pool != nil && p.Pool.Len() > 0 {
+		return p.Pool.Len()
+	}
+	if p.Key != "" {
+		return 1
+	}
+	return 0
+}
+
+// KeyStatuses — состояние ключей пула (для интерфейса).
+func (p *Provider) KeyStatuses() []KeyStatus {
+	if p == nil || p.Pool == nil {
+		return nil
+	}
+	return p.Pool.Status()
+}
+
+// CurrentKeyIndex — номер активного ключа в пуле (0 = ключа нет).
+//
+// Номер нужен интерфейсу: человек должен видеть, каким ключом идёт
+// запрос сейчас, иначе расход по ключам не свести.
+func (p *Provider) CurrentKeyIndex() int {
+	if p == nil || p.Pool == nil {
+		return 0
+	}
+	cur := p.Pool.Current()
+	if cur == "" {
+		return 0
+	}
+	for i, k := range p.Pool.Keys() {
+		if k == cur {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // HasKey — есть ли ключ (или он не нужен).
-func (p *Provider) HasKey() bool { return p.NoKey || p.Key != "" }
+func (p *Provider) HasKey() bool {
+	if p == nil {
+		return false
+	}
+	if p.NoKey {
+		return true
+	}
+	return p.CurrentKey() != ""
+}
 
 // Ready — готов ли провайдер к работе (есть ключ и база).
-func (p *Provider) Ready() bool { return p.HasKey() && p.BaseURL != "" }
+func (p *Provider) Ready() bool { return p != nil && p.HasKey() && p.BaseURL != "" }
 
 // MaskKey — замаскировать ключ для показа.
+//
+// Короткие ключи маскируются целиком: при пороге в 8 символов ключ
+// длиной 9 знаков показывался полностью (5 + 4), что и есть утечка.
 func MaskKey(k string) string {
 	r := []rune(k)
-	if len(r) <= 8 {
+	if len(r) <= 12 {
 		return strings.Repeat("•", len(r))
 	}
 	return string(r[:5]) + "…" + string(r[len(r)-4:])
@@ -283,8 +452,11 @@ func CleanKey(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// Pick — выбрать провайдера: явный id → из конфига → первый с ключом → первый.
+// Pick — выбрать провайдера: явный id → из конфига → первый готовый → первый.
 func (r *Registry) Pick(prefID string) *Provider {
+	if r == nil {
+		return &Provider{ID: "none", Label: "нет провайдера", Kind: ProtoOpenAI}
+	}
 	if prefID != "" {
 		if p := r.Find(prefID); p != nil {
 			return p
@@ -306,8 +478,10 @@ func (r *Registry) Pick(prefID string) *Provider {
 			return p
 		}
 	}
-	if len(r.All) > 0 {
-		return r.All[0]
+	for _, p := range r.All {
+		if p != nil {
+			return p
+		}
 	}
 	return &Provider{ID: "none", Label: "нет провайдера", Kind: ProtoOpenAI}
 }
@@ -316,6 +490,9 @@ func (r *Registry) Pick(prefID string) *Provider {
 func ResolveModel(p *Provider, flagModel, cfgModel string) string {
 	if flagModel != "" {
 		return flagModel
+	}
+	if p == nil {
+		return cfgModel
 	}
 	if cfgModel != "" {
 		for _, m := range p.Models {
@@ -330,10 +507,38 @@ func ResolveModel(p *Provider, flagModel, cfgModel string) string {
 
 // CtxLimit — лимит контекста модели (с запасом на ответ).
 func (p *Provider) CtxLimit() int {
-	if p.ContextLimit <= 0 {
+	if p == nil || p.ContextLimit <= 0 {
 		return 128_000
 	}
 	return p.ContextLimit
+}
+
+// promptCacheOn — включать ли кеш префикса у Anthropic.
+//
+// По умолчанию («auto») — только официальный API: совместимые прокси
+// разбирают тело запроса по-разному, а незнакомое поле cache_control
+// может стоить 400 на каждом запросе. Явное «on» включает кеш везде,
+// «off» выключает.
+func promptCacheOn(p *Provider) bool {
+	if p == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(p.PromptCache)) {
+	case "on", "1", "true", "да", "вкл":
+		return true
+	case "off", "0", "false", "нет", "выкл":
+		return false
+	}
+	return anthropicOfficial(p.BaseURL)
+}
+
+// anthropicOfficial — настоящий ли это API Anthropic.
+func anthropicOfficial(base string) bool {
+	u, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), "api.anthropic.com")
 }
 
 // CtxSoftLimit — безопасный порог контекста для авто-сжатия (85% от лимита).

@@ -196,7 +196,7 @@ func TestJudgeBudgetThresholds(t *testing.T) {
 // это отсутствие бюджета, а не бесконечный бюджет.
 func TestJudgeBudgetWithoutLimit(t *testing.T) {
 	v := JudgeBudget(Budget{Spent: 10_000_000, Limit: 0})
-	if v.Tight || v.Critical || v.UsedPct != 0 {
+	if v.Tight || v.Critical || v.UsedPct != 0 || v.Left != 0 {
 		t.Errorf("без потолка решение принято: %+v", v)
 	}
 	if v.String() != "" {
@@ -221,7 +221,7 @@ func TestCostClassCoversEveryType(t *testing.T) {
 	}
 	for _, typ := range Types {
 		if got := CostClassOf(typ); got != want[typ] {
-			t.Errorf("%s: класс %d (%s), ожидался %s", typ, got, got.Label(), want[typ].Label())
+			t.Errorf("%s: класс %d, ожидался %d", typ, got, want[typ])
 		}
 	}
 }
@@ -260,6 +260,24 @@ func TestRouteCostShownInReason(t *testing.T) {
 	v := RouteModel(TypeExplorer, routeOpts())
 	if !strings.Contains(v.Why, "$") {
 		t.Errorf("в объяснении нет цены: %s", v.Why)
+	}
+}
+
+// TestTurnsBudgetNeverRaisesBase — урезание не может дать больше ходов, чем
+// было разрешено изначально: иначе «минимум 4» превращается в повышение.
+func TestTurnsBudgetNeverRaisesBase(t *testing.T) {
+	opts := routeOpts()
+	opts.Budget = Budget{Spent: 100, Limit: 100}
+	for _, base := range []int{1, 2, 3, 4, 5} {
+		if got := TurnsForBudget(base, opts); got > base {
+			t.Errorf("TurnsForBudget(%d) = %d — лимит повышен", base, got)
+		}
+	}
+	opts.Budget = Budget{Spent: 75, Limit: 100}
+	for _, base := range []int{2, 3} {
+		if got := TurnsForBudget(base, opts); got > base {
+			t.Errorf("TurnsForBudget(%d) = %d при tight-бюджете — лимит повышен", base, got)
+		}
 	}
 }
 
