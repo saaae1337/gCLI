@@ -117,7 +117,7 @@ func (a *app) cmdIters() {
 // трекера миссии. Смешивать их в одной выдаче значит снова
 // получить «смотрю не туда».
 func (a *app) printMissionIters() {
-	tr := a.missionTr
+	tr := a.currentMissionTr()
 	if tr == nil {
 		return
 	}

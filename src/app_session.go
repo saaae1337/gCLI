@@ -1,12 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"gcli/core"
 	"gcli/tools"
+	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -59,6 +61,18 @@ func (a *app) ReplaceMessages(msgs []core.Message) {
 func (a *app) AddUsage(u core.Usage) {
 	sessMu.Lock()
 	a.sess.Usage.Add(u)
+	sessMu.Unlock()
+	a.saveSession()
+}
+
+// RecordEconomy — принять счётчики экономии от агента.
+//
+// Вызывается в конце хода: агент знает, сколько токенов срезала подрезка
+// истории, сколько повторов взялось из кеша и сколько запросов ушло к
+// модели. Счётчики копятся в сессии и переживают перезапуск.
+func (a *app) RecordEconomy(e core.EconomyStats) {
+	sessMu.Lock()
+	a.sess.Economy.Merge(e)
 	sessMu.Unlock()
 	a.saveSession()
 }
@@ -137,13 +151,28 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 
 	switch req.Kind {
 	case tools.ConfirmWrite:
-		a.ui.PrintDiff(ui.Diff(req.Old, req.New), ui.DiffOpts{
-			Path:     core.RelToWD(a.workDir, req.Path),
-			MaxLines: 120,
-		})
 		if a.sess.Perms.FileWrite {
 			return true
 		}
+		if ch, ok := a.tuiConfirm(tui.Confirm{
+			Title:       "Изменить файл?",
+			Path:        a.relPath(req.Path),
+			Note:        req.Reason,
+			Old:         req.Old,
+			New:         req.New,
+			AllowAlways: true,
+		}); ok {
+			switch ch {
+			case tui.ChoiceYes:
+				return true
+			case tui.ChoiceAlways:
+				a.sess.Perms.FileWrite = true
+				a.saveSession()
+				return true
+			}
+			return false
+		}
+		a.showWritePreview(req)
 		a.ui.Prompt2("Разрешить изменение файла?", "[y]да [n]нет [a]всегда для файлов: ")
 		switch a.readAns(true, false) {
 		case confirmYes:
@@ -160,6 +189,28 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		allowed := (a.sess.Perms.BashAll && !danger) || (a.sess.Perms.BashExact[req.Detail] && !danger)
 		if allowed {
 			return true
+		}
+		if ch, ok := a.tuiConfirm(tui.Confirm{
+			Title:       "Выполнить команду?",
+			Detail:      req.Detail,
+			Note:        req.Reason,
+			Danger:      danger,
+			AllowAlways: !danger,
+			AllowAll:    !danger,
+		}); ok {
+			switch ch {
+			case tui.ChoiceYes:
+				return true
+			case tui.ChoiceAlways:
+				a.sess.Perms.BashExact[req.Detail] = true
+				a.saveSession()
+				return true
+			case tui.ChoiceAll:
+				a.sess.Perms.BashAll = true
+				a.saveSession()
+				return true
+			}
+			return false
 		}
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Yellow("$ ") + req.Detail)
@@ -190,6 +241,22 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		if a.sess.Perms.WebFetch {
 			return true
 		}
+		if ch, ok := a.tuiConfirm(tui.Confirm{
+			Title:       "Сетевой запрос?",
+			Detail:      core.Truncate(req.Detail, 120),
+			Note:        req.Reason,
+			AllowAlways: true,
+		}); ok {
+			switch ch {
+			case tui.ChoiceYes:
+				return true
+			case tui.ChoiceAlways:
+				a.sess.Perms.WebFetch = true
+				a.saveSession()
+				return true
+			}
+			return false
+		}
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Blue("⇩ ") + core.Truncate(req.Detail, 80))
 		a.ui.Prompt2("Разрешить сетевой запрос?", "[y]да [n]нет [a]всегда: ")
@@ -204,6 +271,36 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		return false
 	}
 	return true
+}
+
+// showWritePreview — показать, что именно собирается измениться.
+//
+// Новый файл показываем превью: показывать его диффом бессмысленно (все
+// строки новые), а полстраницы «+» в выводе только мешает увидеть
+// остальное. Правку показываем диффом, но коротким: человек смотрит, что
+// меняется, а не перечитывает файл.
+func (a *app) showWritePreview(req tools.ConfirmReq) {
+	rel := core.RelToWD(a.workDir, req.Path)
+	if req.Old != "" {
+		a.ui.PrintDiff(ui.Diff(req.Old, req.New), ui.DiffOpts{
+			Path:     rel,
+			MaxLines: 40,
+		})
+		return
+	}
+	lines := core.SplitLines(req.New)
+	a.ui.Println("  " + a.ui.Gray("новый файл: "+rel+
+		fmt.Sprintf(" · %d строк", len(lines))))
+	// Превью — первые строки файла: их достаточно, чтобы понять, что за
+	// файл собирается появиться.
+	limit := 12
+	for i, l := range lines {
+		if i >= limit {
+			a.ui.Println("    " + a.ui.Gray(fmt.Sprintf("… ещё %d строк", len(lines)-limit)))
+			break
+		}
+		a.ui.Println("    " + a.ui.Gray(core.Truncate(core.OneLine(l), 100)))
+	}
 }
 
 // announceDeny — показать, что действие запрещено правилом.
@@ -332,6 +429,11 @@ const (
 
 // readAns — прочитать ответ пользователя.
 func (a *app) readAns(allowAlways, allowAll bool) int {
+	if a.stdin == nil {
+		// Полноэкранный интерфейс не должен доходить сюда: подтверждения
+		// идут окнами (см. confirm). Отказ безопаснее паники.
+		return confirmNo
+	}
 	for {
 		if !a.stdin.Scan() {
 			return confirmNo
@@ -387,13 +489,20 @@ func (a *app) askUser(question string, options []string) (string, error) {
 			core.Truncate(core.OneLine(question), 70))
 		return "[автопилот: реши самостоятельно]", nil
 	}
+	// Полноэкранный интерфейс спрашивает окном: старые Prompt2/Scan
+	// писали бы мимо ленты, а stdin в этом режиме нет.
+	if ans, ok := a.tuiAskUser(question, options); ok {
+		return strings.TrimSpace(ans), nil
+	} else if t := a.tuiApp(); t != nil && t.Running() {
+		return "", nil
+	}
 	a.ui.Println("")
 	a.ui.Println("  " + a.ui.Cyan("? ") + question)
 	if len(options) > 0 {
 		a.ui.Println("  " + a.ui.Gray("варианты: "+strings.Join(options, " | ")))
 	}
 	a.ui.Prompt2("Ваш ответ", "> ")
-	if !a.stdin.Scan() {
+	if a.stdin == nil || !a.stdin.Scan() {
 		return "", nil
 	}
 	return strings.TrimSpace(a.stdin.Text()), nil
@@ -404,4 +513,20 @@ func (a *app) askUser(question string, options []string) (string, error) {
 // recordCheckpoint — сохранить копию файла перед изменением.
 func (a *app) recordCheckpoint(path, label string) {
 	a.repo.RecordCheckpoint(a.sess, path, label)
+}
+
+// validSessionID — id сессии: только безопасные для имени файла символы,
+// без разделителей и «..».
+func validSessionID(id string) bool {
+	if id == "" || len(id) > 64 || strings.Contains(id, "..") ||
+		strings.ContainsAny(id, `/\:`) || strings.HasPrefix(id, ".") {
+		return false
+	}
+	for _, r := range id {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

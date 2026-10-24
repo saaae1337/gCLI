@@ -45,9 +45,6 @@ type benchTask struct {
 	TimeoutMin int         `json:"timeout_min"`
 }
 
-// benchDir — каталог задач по умолчанию.
-func benchDir(workDir string) string { return filepath.Join(workDir, ".gcli", "bench") }
-
 // loadBenchTasks — прочитать задачи из каталога (по алфавиту имён файлов:
 // порядок прогона стабильный, сравнение прогонов между собой честное).
 func loadBenchTasks(dir string) ([]benchTask, error) {

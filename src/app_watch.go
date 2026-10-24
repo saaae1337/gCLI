@@ -76,6 +76,14 @@ func watchChanged(old, new watchState) bool {
 	return false
 }
 
+// watchNeedsCheck — запускать ли проверку в этом проходе.
+//
+// first — не «первый проход цикла вообще», а «проверить обязательно»:
+// после хода агента проверка нужна, даже если файлы не изменились.
+func watchNeedsCheck(first bool, prev, cur watchState) bool {
+	return first || watchChanged(prev, cur)
+}
+
 // watchRunCommand — запустить проверку: вывод, код выхода, флаг таймаута.
 func watchRunCommand(dir, command string, timeout time.Duration) (string, int, bool) {
 	// Оболочку берём общую с остальным проектом (tools.ShellCommand): на
@@ -139,7 +147,7 @@ func (a *app) runWatch(command string, maxFixes int) {
 	for {
 		time.Sleep(900 * time.Millisecond)
 		cur := watchFileMap(a.workDir)
-		if !first && !watchChanged(prev, cur) {
+		if !watchNeedsCheck(first, prev, cur) {
 			continue
 		}
 		prev = cur
@@ -173,8 +181,12 @@ func (a *app) runWatch(command string, maxFixes int) {
 			return
 		}
 		// После хода агент мог изменить файлы: переснимаем состояние,
-		// чтобы не проверять дважды.
+		// чтобы эти правки не считались новыми на следующем проходе.
+		// И всё равно проверяем ещё раз: починка без повторного запуска
+		// команды осталась бы неподтверждённой, а цикл ждал бы
+		// следующей правки файлов.
 		prev = watchFileMap(a.workDir)
+		first = true
 	}
 }
 

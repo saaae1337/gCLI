@@ -102,9 +102,6 @@ func TestOsHelpers(t *testing.T) {
 	if fileExists(filepath.Join(dir, "нет.txt")) {
 		t.Error("несуществующий файл не должен считаться найденным")
 	}
-	if got := benchDir(dir); !strings.HasSuffix(got, filepath.Join(".gcli", "bench")) {
-		t.Errorf("benchDir: %q", got)
-	}
 }
 
 // ---------- /mascot ----------

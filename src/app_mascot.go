@@ -9,23 +9,6 @@ import (
 
 // ---------- Команда /mascot ----------
 
-// mascotGreetings — случайные приветствия Искры при запуске и /mascot.
-var mascotGreetings = []string{
-	"мяу! искра на посту — чем займёмся?",
-	"выспалась, усы расчёсаны — готова помогать",
-	"хвост трубой — давай что-нибудь соберём",
-	"прыгнула на клавиатуру — жду задачу",
-	"муррр. говори, что делать",
-}
-
-// mascotAccepted — реплики при приёме задачи (начало хода).
-var mascotAccepted = []string{
-	"мяу! беру задачу",
-	"принято, шевелю усами",
-	"задача у меня, думает голова",
-	"так-так, лапки на клавиатуре",
-}
-
 // mascotPurr — реплики при успешном результате.
 var mascotPurr = []string{
 	"готово! мурррр",
@@ -102,14 +85,27 @@ func (a *app) cmdMascot(rest string) {
 		a.setMascot(false)
 		a.ui.Ok("маскот выключен — Искра ушла спать (вернуть: /mascot on)")
 	case "demo", "демо":
+		if t := a.tuiApp(); t != nil {
+			a.ui.Info("в полноэкранном режиме Искра живёт на заставке: /cls — вернуться к ней")
+			t.Toast("✦ мурр")
+			return
+		}
 		a.mascotDemo()
 	case "wave", "hand", "привет":
+		if t := a.tuiApp(); t != nil {
+			t.Toast("✦ Искра машет хвостом")
+			return
+		}
 		a.ui.MascotDance(ui.MascotWink, 1)
 		a.ui.MascotSayLine(ui.MascotPurr, "мурр... привет!")
 	case "say", "скажи":
 		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rest), sub))
 		if text == "" {
 			a.ui.Warn("формат: /mascot say <текст>")
+			return
+		}
+		if t := a.tuiApp(); t != nil {
+			t.Toast("✦ " + text)
 			return
 		}
 		a.ui.MascotSpeak(ui.MascotIdle, text)
@@ -152,6 +148,11 @@ func (a *app) setMascot(on bool) {
 	a.repo.Cfg.Mascot = &on
 	a.saveConfig()
 	a.applyMascot()
+	// Заставка TUI — единственное место, где кот виден в полноэкранном
+	// режиме; переключаем её сразу, не дожидаясь перезапуска.
+	if t := a.tuiApp(); t != nil {
+		t.SetMascot(on)
+	}
 }
 
 // mascotEnabled — итоговое решение «показывать ли маскота».

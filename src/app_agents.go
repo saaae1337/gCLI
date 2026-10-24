@@ -11,6 +11,7 @@ import (
 	"gcli/core"
 	"gcli/subagents"
 	"gcli/tools"
+	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -673,6 +674,13 @@ func (a *app) askTrustCode(w tools.ProjectCodeWarning) bool {
 	if w.Hash != "" {
 		a.ui.Println("    " + a.ui.Gray("отпечаток: "+core.Truncate(w.Hash, 16)))
 	}
+	if ch, ok := a.tuiConfirm(tui.Confirm{
+		Title:  fmt.Sprintf("Доверять и подключить (%s)?", kindWord),
+		Detail: w.Label(),
+		Note:   "код из проекта: " + w.Path,
+	}); ok {
+		return ch == tui.ChoiceYes || ch == tui.ChoiceAlways
+	}
 	if a.quiet {
 		// В машинном режиме (один запрос, CI) подтверждать чужой код нельзя:
 		// некому ответить, а «молча доверять» — ровно то, от чего мы защищаем.
@@ -724,11 +732,13 @@ func (a *app) cmdExport() {
 	fmt.Fprintf(&b, "- Сессия: `%s`\n- Создана: %s\n- Провайдер: %s (%s)\n- Модель: %s\n",
 		a.sess.ID, a.sess.Created.Format("02.01.2006 15:04"), a.prov.Label, a.prov.ID, a.model)
 
-	// Снимок под sessMu: usage и журнал субагентов пишутся из горутин.
+	// Снимок под sessMu: usage и журнал субагентов пишутся из горутин,
+	// а по живому слайсу Messages шёл бы append во время экспорта.
 	sessMu.Lock()
-	msgCount := len(a.sess.Messages)
+	msgs := append([]core.Message(nil), a.sess.Messages...)
 	usage := a.sess.Usage
 	sessMu.Unlock()
+	msgCount := len(msgs)
 
 	fmt.Fprintf(&b, "- Сообщений: %d · токены: ↑%s ↓%s\n\n---\n",
 		msgCount, core.Kfmt(usage.PromptTokens), core.Kfmt(usage.CompletionTokens))
@@ -744,7 +754,7 @@ func (a *app) cmdExport() {
 		}
 	}
 
-	for _, m := range a.sess.Messages {
+	for _, m := range msgs {
 		switch m.Role {
 		case core.RoleUser:
 			fmt.Fprintf(&b, "\n## Пользователь\n\n%s\n", m.Content)
@@ -773,7 +783,7 @@ func (a *app) cmdExport() {
 
 func (a *app) cmdCompact() {
 	a.ui.SpinnerStart("Сжимаю историю")
-	ag := a.newAgent(context.Background(), true)
+	ag := a.newAgent(true)
 	ag.WithAgentMode(false)
 	ok := ag.Compact(false)
 	a.ui.SpinnerStop()

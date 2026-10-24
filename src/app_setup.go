@@ -1,13 +1,12 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"strconv"
 	"strings"
 
 	"gcli/core"
 	"gcli/providers"
-	"gcli/tools"
 	"gcli/ui"
 )
 
@@ -18,12 +17,12 @@ func (a *app) runSetup() {
 	a.listProviders()
 
 	// 1. Провайдер.
-	a.ui.Prompt2("Провайдер (номер или id, Enter — "+a.prov.ID+")", "  ")
-	if !a.stdin.Scan() {
+	s, ok := a.askLine("Провайдер (номер или id, Enter — " + a.prov.ID + ")")
+	if !ok {
 		return
 	}
 	p := a.prov
-	if s := strings.TrimSpace(a.stdin.Text()); s != "" {
+	if s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(a.registry.All) {
 			p = a.registry.All[n-1]
 		} else if cand := a.registry.Find(strings.ToLower(s)); cand != nil {
@@ -46,14 +45,14 @@ func (a *app) runSetup() {
 		if p.Key != "" {
 			cur = " (сейчас " + providers.MaskKey(p.Key) + ")"
 		}
-		a.ui.Prompt2("API-ключ для "+p.ID+cur, "  ("+hint+") ")
-		if !a.stdin.Scan() {
+		k, ok := a.askSecret("API-ключ для " + p.ID + cur + " · " + hint)
+		if !ok {
 			return
 		}
-		if k := providers.CleanKey(a.stdin.Text()); k != "" {
+		if k = providers.CleanKey(k); k != "" {
 			a.repo.EnsureProviderCfg(p.ID).APIKey = k
 			a.saveConfig()
-			a.registry = providers.Build(a.repo.Cfg)
+			a.registry = a.registry.Rebuild(a.repo.Cfg)
 			if np := a.registry.Find(p.ID); np != nil {
 				p = np
 			}
@@ -62,7 +61,7 @@ func (a *app) runSetup() {
 
 	// 3. Модель — из живого списка.
 	a.ui.SpinnerStart("Получаю список моделей с " + p.ID)
-	models, err := providers.FetchModels(nil, a.client, p)
+	models, err := providers.FetchModels(context.Background(), a.client, p)
 	a.ui.SpinnerStop()
 
 	model := ""
@@ -84,11 +83,10 @@ func (a *app) runSetup() {
 			Title:  "Доступно моделей: " + strconv.Itoa(len(models)),
 			Footer: "Enter — модель по умолчанию, или введи имя вручную",
 		})
-		a.ui.Prompt2("Модель (номер или имя)", "  ")
-		if !a.stdin.Scan() {
+		s, ok := a.askLine("Модель (номер или имя)")
+		if !ok {
 			return
 		}
-		s := strings.TrimSpace(a.stdin.Text())
 		switch {
 		case s == "":
 			model = p.DefaultModel
@@ -103,11 +101,10 @@ func (a *app) runSetup() {
 		if err != nil {
 			a.ui.Warn("список моделей получить не удалось (" + core.Truncate(core.OneLine(err.Error()), 70) + ")")
 		}
-		a.ui.Prompt2("Модель вручную (Enter — "+p.DefaultModel+")", "  ")
-		if !a.stdin.Scan() {
+		s, ok := a.askLine("Модель вручную (Enter — " + p.DefaultModel + ")")
+		if !ok {
 			return
 		}
-		s := strings.TrimSpace(a.stdin.Text())
 		if s == "" {
 			model = p.DefaultModel
 		} else {
@@ -125,7 +122,7 @@ func (a *app) runSetup() {
 	a.repo.Cfg.Provider = p.ID
 	a.repo.Cfg.Model = model
 	a.saveConfig()
-	a.registry = providers.Build(a.repo.Cfg)
+	a.registry = a.registry.Rebuild(a.repo.Cfg)
 	if np := a.registry.Find(p.ID); np != nil {
 		a.prov = np
 	}
@@ -141,17 +138,3 @@ func (a *app) runSetup() {
 	a.ui.Println("  " + a.ui.Gray("Ставь задачу — агент выполнит её, используя файлы, команды и веб."))
 	a.ui.Println("")
 }
-
-// confirmExtWarn — предупреждение о расширениях при старте (вызывается из main).
-func (a *app) extWarnings() []string {
-	warns := a.tools.RegisterExtTools()
-	if len(warns) > 0 && !a.quiet {
-		for _, w := range warns {
-			a.ui.Warn(w)
-		}
-	}
-	return warns
-}
-
-var _ = fmt.Sprintf
-var _ = tools.ValidSkillName

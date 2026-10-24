@@ -215,7 +215,7 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 		WorkDir:   a.workDir,
 		Think:     providers.ThinkState(a.repo.Cfg),
 		Memory:    a.memory.Collect,
-		Skills:    func() string { return a.tools.SkillsPromptBlock() },
+		Skills:    func(query string) string { return a.tools.SkillsPromptBlockFor(query) },
 		MaxIters:  core.Clamp(a.repo.Cfg.SubMaxTurns, 1, 60),
 		OnEvent: func(kind, detail string) {
 			if kind == "tool" && !a.quiet {
@@ -225,6 +225,9 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 	}
 	out := agent.RunSubagent(ctx, d, spec)
 	a.AddUsage(out.Usage)
+	// Счётчики экономии субагента — в общий счёт сессии: его запросы и
+	// токены тоже тратятся, и человек должен видть их в /usage.
+	a.RecordEconomy(out.Economy)
 	return out, nil
 }
 

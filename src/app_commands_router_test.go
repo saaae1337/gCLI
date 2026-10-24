@@ -83,6 +83,20 @@ func TestHandleCommandQuit(t *testing.T) {
 	}
 }
 
+// TestHandleCommandEmptyLineIsSafe — роутер не паникует на пустой строке.
+//
+// REPL отсекает пустой ввод до вызова, но handleCommand — публичная точка
+// для тестов и будущих клиентов; fields[0] без проверки длины ронял бы
+// процесс вместо спокойного продолжения.
+func TestHandleCommandEmptyLineIsSafe(t *testing.T) {
+	a, _ := cmdApp(t)
+	for _, line := range []string{"", "   ", "\t"} {
+		if !a.handleCommand(line) {
+			t.Errorf("%q не должен завершать сеанс", line)
+		}
+	}
+}
+
 // TestHandleCommandKnownRoutes — каждая команда доходит до своей обработки, а
 // не падает в «неизвестная».
 //

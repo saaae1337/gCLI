@@ -137,7 +137,15 @@ func (a *app) chainRun() {
 			a.ui.Err("цепочка не сохранилась: " + err.Error())
 			return
 		}
-		a.missionJournalStop("chain_step_done")
+		// Шаг окончен — журнал не должен предлагать продолжить именно его.
+		// Причина берётся у трекера (её уже мог записать обработчик
+		// остановки), а не выдуманная строка: иначе отчёт печатал бы
+		// машинный chain_step_done вместо человеческой причины.
+		reason := core.StopDone
+		if tr := a.currentMissionTr(); tr != nil && tr.Stopped() != "" {
+			reason = tr.Stopped()
+		}
+		a.missionJournalStop(reason)
 	}
 	a.ui.Ok("цепочка завершена: все шаги отработали")
 	// Цепочка исполнена — файл больше не нужен, чтобы после перезапуска

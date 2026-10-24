@@ -407,9 +407,6 @@ func TestSelfReportReflectsState(t *testing.T) {
 		t.Fatal("снимок без прогона должен упоминать прогон, а не молчать")
 	}
 	a.closeMissionJournal()
-	if SelfTokens("привет, мир") == 0 {
-		t.Fatal("SelfTokens вернул 0")
-	}
 }
 
 func TestNotesCopyIsIndependent(t *testing.T) {

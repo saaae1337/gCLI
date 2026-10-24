@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gcli/core"
 	"gcli/providers"
@@ -18,6 +20,9 @@ import (
 // handleCommand — обработать slash-команду. false = выход.
 func (a *app) handleCommand(line string) bool {
 	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return true
+	}
 	cmd := strings.ToLower(fields[0])
 	rest := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
 	arg := ""
@@ -77,6 +82,8 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdPerms(rest)
 	case "/sandbox":
 		a.cmdSandbox(rest)
+	case "/cron":
+		a.cmdCron(rest)
 	case "/usage":
 		a.cmdUsage()
 	case "/stats":
@@ -146,9 +153,11 @@ func (a *app) cmdHelp() {
 			{"/ab <модель> <промпт>", "один вопрос двум моделям: сравнить ответ, время, цену"},
 			{"/autopilot on|off|all", "автопилот: одобрять безопасные действия самому"},
 			{"/sandbox on|off", "песочница файлов: пути вне рабочего каталога запрещены"},
+			{"/cron on|off|status", "автономные итерации: сам ищет и чинит баги, уязвимости, проблемы"},
 			{"/yolo", "без подтверждений (кроме опасных команд)"},
 			{"/tools", "список инструментов агента"},
 			{"/mission", "автономный прогон: start, stop, status, save, report"},
+			{"/cron on|off|status", "автономные итерации: поиск и исправление багов, уязвимости, проблемы при тишине 15–20 мин"},
 			{"/iters", "лимит итераций и продления хода; при прогоне — его расход"},
 			{"/todos", "план текущей задачи"},
 			{"/compact", "сжать историю диалога"},
@@ -304,27 +313,11 @@ func (a *app) cmdProvider(rest string) {
 		pc.Protocol = proto
 		pc.Custom = true
 		a.saveConfig()
-		a.registry = providers.Build(a.repo.Cfg)
+		a.registry = a.registry.Rebuild(a.repo.Cfg)
 		a.ui.Ok(fmt.Sprintf("провайдер «%s» → %s (%s)", id, base, proto))
 		a.ui.Hint("далее: /provider key " + id + " <ключ> · /provider " + id)
-	case "key", "ключ":
-		if len(parts) < 3 {
-			a.ui.Err("формат: /provider key <id> <ключ>")
-			return
-		}
-		id := strings.ToLower(parts[1])
-		key := providers.CleanKey(strings.Join(parts[2:], " "))
-		if key == "" {
-			a.ui.Err("ключ пустой после нормализации")
-			return
-		}
-		a.repo.EnsureProviderCfg(id).APIKey = key
-		a.saveConfig()
-		a.registry = providers.Build(a.repo.Cfg)
-		if p := a.registry.Find(id); p != nil && a.prov.ID == id {
-			a.prov = p
-		}
-		a.ui.Ok(fmt.Sprintf("ключ для «%s» сохранён: %s", id, providers.MaskKey(key)))
+	case "key", "ключ", "keys", "ключи":
+		a.cmdProviderKey(parts)
 	case "model", "модель":
 		if len(parts) < 3 {
 			a.ui.Err("формат: /provider model <id> <имя модели>")
@@ -333,7 +326,7 @@ func (a *app) cmdProvider(rest string) {
 		id := strings.ToLower(parts[1])
 		a.repo.EnsureProviderCfg(id).Model = parts[2]
 		a.saveConfig()
-		a.registry = providers.Build(a.repo.Cfg)
+		a.registry = a.registry.Rebuild(a.repo.Cfg)
 		a.ui.Ok(fmt.Sprintf("модель «%s» для «%s» сохранена", parts[2], id))
 	case "rm", "remove", "удалить":
 		if len(parts) < 2 {
@@ -348,7 +341,7 @@ func (a *app) cmdProvider(rest string) {
 		}
 		delete(a.repo.Cfg.Providers, id)
 		a.saveConfig()
-		a.registry = providers.Build(a.repo.Cfg)
+		a.registry = a.registry.Rebuild(a.repo.Cfg)
 		if a.prov.ID == id {
 			a.prov = a.registry.Pick("")
 			a.model = providers.ResolveModel(a.prov, "", a.repo.Cfg.Model)
@@ -363,6 +356,266 @@ func (a *app) cmdProvider(rest string) {
 	}
 }
 
+// cmdProviderKey — работа с ключами провайдера.
+//
+// Ключей у провайдера может быть много: основной и запасные. Когда
+// основной упирается в лимит, запрос продолжается со следующего, и
+// сессия не встаёт.
+//
+//	/provider key add <id> <ключ> [ключ…]   добавить ключи
+//	/provider key rm <id> <N>                убрать ключ номер N
+//	/provider key use <id> <N>               сделать ключ N основным
+//	/provider key reset <id>                 снять паузы с ключей
+//	/provider keys <id>                      показать пул
+func (a *app) cmdProviderKey(parts []string) {
+	// /provider keys <id> — показать пул.
+	if len(parts) >= 2 && isKeysList(parts[0]) {
+		a.showProviderKeys(parts[1])
+		return
+	}
+	// Форма «/provider key <id> <ключ>» (старая) остаётся рабочей.
+	if len(parts) >= 3 && !isKeySub(parts[1]) {
+		a.addProviderKeys(parts[1], parts[2:])
+		return
+	}
+	if len(parts) < 3 {
+		a.ui.Err("формат: /provider key add <id> <ключ> · /provider keys <id>")
+		return
+	}
+	sub := strings.ToLower(parts[1])
+	id := strings.ToLower(parts[2])
+	switch sub {
+	case "add", "добавить":
+		a.addProviderKeys(id, parts[3:])
+	case "rm", "remove", "del", "удалить":
+		if len(parts) < 4 {
+			a.ui.Err("формат: /provider key rm <id> <номер>")
+			return
+		}
+		a.removeProviderKey(id, parts[3:])
+	case "use", "включить", "primary":
+		if len(parts) < 4 {
+			a.ui.Err("формат: /provider key use <id> <номер>")
+			return
+		}
+		a.useProviderKey(id, parts[3:])
+	case "reset", "сброс":
+		a.resetProviderKeys(id)
+	default:
+		a.ui.Err("подкоманда: add · rm · use · reset · /provider keys <id>")
+	}
+}
+
+// isKeysList — команда показа пула ключей.
+func isKeysList(s string) bool {
+	switch strings.ToLower(s) {
+	case "keys", "ключи", "list", "список":
+		return true
+	}
+	return false
+}
+
+// isKeySub — подкоманда управления ключами (а не id провайдера).
+func isKeySub(s string) bool {
+	switch strings.ToLower(s) {
+	case "add", "rm", "remove", "del", "use", "reset", "добавить", "удалить", "включить", "сброс":
+		return true
+	}
+	return false
+}
+
+// addProviderKeys — добавить ключи в пул провайдера.
+func (a *app) addProviderKeys(id string, raw []string) {
+	keys := providers.SplitKeys(strings.Join(raw, " "))
+	if len(keys) == 0 {
+		a.ui.Err("ключ пустой после нормализации")
+		return
+	}
+	pc := a.repo.EnsureProviderCfg(id)
+	added := 0
+	for _, k := range keys {
+		if containsKey(pc.Keys, k) {
+			continue
+		}
+		pc.Keys = append(pc.Keys, k)
+		added++
+	}
+	if added == 0 {
+		a.ui.Warn("такие ключи уже есть в пуле")
+		return
+	}
+	// Основной ключ — первый в пуле: старые конфиги читают api_key.
+	if pc.APIKey == "" {
+		pc.APIKey = pc.Keys[0]
+	}
+	a.saveConfig()
+	a.registry = a.registry.Rebuild(a.repo.Cfg)
+	a.syncProvider()
+	// Основной ключ в конфиге — тот, что активен в пуле: иначе после
+	// перезапуска пул начнёт с другого.
+	if p := a.registry.Find(id); p != nil && p.Pool != nil {
+		if cur := p.Pool.Current(); cur != "" && cur != pc.APIKey {
+			pc.APIKey = cur
+			a.saveConfig()
+		}
+	}
+	a.ui.Ok(fmt.Sprintf("ключей у «%s» добавлено: %d (всего %d)", id, added, len(pc.Keys)))
+	a.ui.Hint("при лимите gcli переключится на следующий ключ сам")
+}
+
+// removeProviderKey — убрать ключ номер N из пула.
+func (a *app) removeProviderKey(id string, args []string) {
+	if len(args) < 1 {
+		a.ui.Err("формат: /provider key rm <id> <номер>")
+		return
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(args[0]))
+	if err != nil || n < 1 {
+		a.ui.Err("номер ключа: целое число от 1")
+		return
+	}
+	pc := a.repo.EnsureProviderCfg(id)
+	if n > len(pc.Keys) {
+		a.ui.Err(fmt.Sprintf("у «%s» всего %d ключей", id, len(pc.Keys)))
+		return
+	}
+	removed := pc.Keys[n-1]
+	pc.Keys = append(pc.Keys[:n-1], pc.Keys[n:]...)
+	if pc.APIKey == removed {
+		pc.APIKey = ""
+		if len(pc.Keys) > 0 {
+			pc.APIKey = pc.Keys[0]
+		}
+	}
+	a.saveConfig()
+	a.registry = a.registry.Rebuild(a.repo.Cfg)
+	a.syncProvider()
+	a.ui.Ok(fmt.Sprintf("ключ #%d у «%s» убран: %s", n, id, providers.MaskKey(removed)))
+}
+
+// useProviderKey — сделать ключ номер N основным.
+func (a *app) useProviderKey(id string, args []string) {
+	if len(args) < 1 {
+		a.ui.Err("формат: /provider key use <id> <номер>")
+		return
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(args[0]))
+	if err != nil || n < 1 {
+		a.ui.Err("номер ключа: целое число от 1")
+		return
+	}
+	p := a.registry.Find(id)
+	if p == nil || p.Pool == nil {
+		a.ui.Err(fmt.Sprintf("у «%s» нет пула ключей", id))
+		return
+	}
+	statuses := p.KeyStatuses()
+	if n > len(statuses) {
+		a.ui.Err(fmt.Sprintf("у «%s» всего %d ключей", id, len(statuses)))
+		return
+	}
+	key := p.Pool.Keys()[n-1]
+	p.Pool.Use(key)
+	// Основной ключ провайдера в конфиге должен совпадать: иначе
+	// следующий запуск вернёт старый.
+	pc := a.repo.EnsureProviderCfg(id)
+	pc.APIKey = key
+	a.saveConfig()
+	a.syncProvider()
+	a.ui.Ok(fmt.Sprintf("ключ #%d у «%s» стал основным: %s", n, id, providers.MaskKey(key)))
+}
+
+// resetProviderKeys — снять паузы с ключей провайдера.
+func (a *app) resetProviderKeys(id string) {
+	p := a.registry.Find(id)
+	if p == nil || p.Pool == nil {
+		a.ui.Err(fmt.Sprintf("у «%s» нет пула ключей", id))
+		return
+	}
+	p.Pool.Reset()
+	a.ui.Ok(fmt.Sprintf("паузы ключей «%s» сняты", id))
+}
+
+// showProviderKeys — показать пул ключей провайдера.
+func (a *app) showProviderKeys(id string) {
+	p := a.registry.Find(id)
+	if p == nil {
+		a.ui.Err(fmt.Sprintf("провайдер «%s» не найден — /provider list", id))
+		return
+	}
+	statuses := p.KeyStatuses()
+	if len(statuses) == 0 {
+		a.ui.Warn("у провайдера «" + id + "» нет ключей")
+		return
+	}
+	rows := make([][2]string, 0, len(statuses))
+	for _, st := range statuses {
+		mark := " "
+		switch {
+		case st.Current:
+			mark = "→"
+		case st.Invalid:
+			mark = "×"
+		case st.Paused:
+			mark = "⏸"
+		}
+		state := ""
+		switch {
+		case st.Invalid:
+			state = a.ui.Red("отвергнут: " + st.Reason)
+		case st.Paused:
+			state = a.ui.Yellow("пауза до " + st.Until.Format("15:04:05") + " · " + st.Reason)
+		}
+		rows = append(rows, [2]string{
+			mark + " " + strconv.Itoa(st.Index) + ".",
+			a.ui.Accent(st.Masked) + "  " + state,
+		})
+	}
+	a.ui.KVPanel("Ключи · "+id, rows)
+	a.ui.Hint("добавить: /provider key add " + id + " <ключ> · основной: /provider key use " + id + " <N>")
+}
+
+// syncProvider — обновить текущего провайдера после пересборки реестра.
+func (a *app) syncProvider() {
+	if a.prov == nil {
+		return
+	}
+	if p := a.registry.Find(a.prov.ID); p != nil {
+		a.prov = p
+		a.bindKeyRotate(p)
+	}
+}
+
+// bindKeyRotate — подписаться на смену ключа у провайдера.
+func (a *app) bindKeyRotate(p *providers.Provider) {
+	if p == nil {
+		return
+	}
+	p.OnRotate = a.onKeyRotate
+}
+
+// onKeyRotate — сообщить, что ключ сменился.
+//
+// Молча переключаться нельзя: человек смотрит на счёт и видит расход по
+// одному ключу, а потом вдруг получает отказ по лимиту. Смена видна —
+// значит, поверить можно.
+func (a *app) onKeyRotate(from, to int, reason string) {
+	if a.quiet {
+		return
+	}
+	a.ui.Warn(fmt.Sprintf("ключ #%d %s — переключаюсь на #%d", from, reason, to))
+}
+
+// containsKey — есть ли ключ в списке.
+func containsKey(keys []string, k string) bool {
+	for _, x := range keys {
+		if x == k {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *app) listProviders() {
 	rows := make([][]string, 0, len(a.registry.All))
 	for i, p := range a.registry.All {
@@ -374,8 +627,15 @@ func (a *app) listProviders() {
 		switch {
 		case p.NoKey:
 			key = a.ui.Green("без ключа")
-		case p.Key != "":
-			key = a.ui.Green(providers.MaskKey(p.Key))
+		default:
+			if n := p.KeyCount(); n > 0 {
+				key = a.ui.Green(providers.MaskKey(p.CurrentKey()))
+				if n > 1 {
+					// Запасные ключи видны сразу: человек должен знать,
+					// что лимит одного ключа его не остановит.
+					key += a.ui.Gray(fmt.Sprintf("  +%d", n-1))
+				}
+			}
 		}
 		label := p.Label
 		if p.Custom {
@@ -395,12 +655,14 @@ func (a *app) listProviders() {
 		{Title: "ключ", Width: 20},
 	}, rows, ui.BlockOpts{Title: "Провайдеры"})
 	a.ui.Println("  " + a.ui.Gray("свой endpoint: /provider add <id> <url> [openai|anthropic] · ключ: /provider key <id> <ключ>"))
+	a.ui.Println("  " + a.ui.Gray("пул ключей: /provider keys <id> · добавить: /provider key add <id> <ключ> · при лимите gcli переключается сам"))
 	a.ui.Println("  " + a.ui.Gray("переключиться: /provider <id> · удалить свой: /provider rm <id>"))
 	a.ui.Println("")
 }
 
 func (a *app) switchProvider(p *providers.Provider) {
 	a.prov = p
+	a.bindKeyRotate(p)
 	a.repo.Cfg.Provider = p.ID
 	found := false
 	for _, m := range p.Models {
@@ -416,7 +678,19 @@ func (a *app) switchProvider(p *providers.Provider) {
 	a.sess.Model = a.model
 	a.saveConfig()
 	a.saveSession()
+	a.syncMetrics()
 	a.ui.Ok(fmt.Sprintf("провайдер: %s · модель: %s", p.Label, a.model))
+}
+
+// syncMetrics — обновить нижнюю панель и шапку TUI после смены модели.
+//
+// В полноэкранном режиме шапка показывает модель и провайдера из снимка
+// метрик: без этого /model менял бы ответы, а подпись оставалась старой.
+func (a *app) syncMetrics() {
+	if a.ui == nil {
+		return
+	}
+	a.ui.SetMetrics(a.metrics())
 }
 
 func (a *app) cmdModel(rest string) {
@@ -458,6 +732,7 @@ func (a *app) setModel(m string) {
 	a.sess.Model = m
 	a.saveConfig()
 	a.saveSession()
+	a.syncMetrics()
 	a.ui.Ok("модель: " + m)
 }
 
@@ -467,7 +742,7 @@ func (a *app) cmdModels(filter string) {
 		return
 	}
 	a.ui.SpinnerStart("Получаю список моделей с " + a.prov.ID)
-	models, err := providers.FetchModels(nil, a.client, a.prov)
+	models, err := providers.FetchModels(context.Background(), a.client, a.prov)
 	a.ui.SpinnerStop()
 	if err != nil {
 		a.ui.Err("список моделей недоступен: " + core.Truncate(core.OneLine(err.Error()), 110))
@@ -576,11 +851,10 @@ func (a *app) cmdResume(arg string) {
 		idx = n - 1
 	} else {
 		a.cmdSessions()
-		a.ui.Prompt2("Номер сессии (Enter — отмена)", "> ")
-		if !a.stdin.Scan() {
+		s, ok := a.askLine("Номер сессии (Enter — отмена)")
+		if !ok {
 			return
 		}
-		s := strings.TrimSpace(a.stdin.Text())
 		if s == "" {
 			return
 		}
@@ -609,13 +883,20 @@ func (a *app) cmdResume(arg string) {
 	}
 	a.saveConfig()
 	a.saveSession()
+	a.syncMetrics()
+	// Прежний диалог больше не относится к загруженной сессии.
+	a.ui.ClearScreen()
 	a.ui.Ok(fmt.Sprintf("сессия %s · сообщений: %d", a.sess.ID, len(a.sess.Messages)))
 }
 
 func (a *app) cmdClear() {
+	// Экран чистим до сообщения о новой сессии: иначе в ленте остался бы
+	// старый диалог, к которому эта сессия уже не относится.
+	a.ui.ClearScreen()
 	a.saveSession()
 	a.sess = a.repo.NewSession(a.prov.ID, a.model, a.workDir)
 	a.saveSession()
+	a.syncMetrics()
 	a.ui.Ok("новая сессия: " + a.sess.ID)
 }
 
@@ -625,7 +906,7 @@ func (a *app) cmdUsage() {
 	bar := a.ui.Bar(est, limit, 20)
 	a.ui.Println("")
 	a.ui.Println("  " + a.ui.Head("Токены (по данным API)"))
-	a.ui.KVPairs([][2]string{
+	a.ui.KVPanel("Расход", [][2]string{
 		{"вход", a.ui.Accent("↑ " + core.Kfmt(a.sess.Usage.PromptTokens))},
 		{"выход", a.ui.Accent("↓ " + core.Kfmt(a.sess.Usage.CompletionTokens))},
 		{"всего", a.ui.Bold(core.Kfmt(a.sess.Usage.Total()))},
@@ -633,10 +914,57 @@ func (a *app) cmdUsage() {
 		{"модель", a.model + " · лимит " + core.Kfmt(a.prov.CtxLimit())},
 		{"сообщений", fmt.Sprintf("%d · чекпоинтов: %d", len(a.sess.Messages), len(a.sess.Checkpoints))},
 	})
+	a.printEconomy()
 	if est >= limit {
 		a.ui.Warn("контекст заполнен — история сожмётся после следующего хода (/compact — сейчас)")
 	}
 	a.ui.Println("")
+}
+
+// printEconomy — блок экономии: сколько стоили запросы и что сэкономлено.
+//
+// Числа важны не сами по себе, а вместе: «12 запросов, 340 токенов в
+// среднем, 18 тысяч срезано подрезкой» — это уже картина расхода, по
+// которой видно, что именно стоит поправить.
+func (a *app) printEconomy() {
+	e := a.sess.Economy
+	if e.Requests == 0 && e.PrunedTokens == 0 && e.CacheHits == 0 {
+		return
+	}
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Head("Экономия"))
+	rows := [][2]string{
+		{"запросов к модели", core.Kfmt(e.Requests)},
+	}
+	if e.Requests > 0 && a.sess.Usage.Total() > 0 {
+		rows = append(rows, [2]string{
+			"в среднем на запрос",
+			core.Kfmt(a.sess.Usage.Total()/e.Requests) + " ток.",
+		})
+	}
+	if e.PrunedTokens > 0 {
+		rows = append(rows, [2]string{
+			"срезано подрезкой",
+			a.ui.Green("~"+core.Kfmt(e.PrunedTokens)+" ток.") +
+				fmt.Sprintf("  (%d сообщений)", e.PrunedCount),
+		})
+	}
+	if e.CacheHits > 0 {
+		rows = append(rows, [2]string{
+			"повторов из кеша", a.ui.Green(core.Kfmt(e.CacheHits)),
+		})
+	}
+	if e.SavedCalls > 0 {
+		rows = append(rows, [2]string{
+			"повторов вызовов", a.ui.Green(core.Kfmt(e.SavedCalls)),
+		})
+	}
+	if name, tok := e.TopTool(); name != "" {
+		rows = append(rows, [2]string{
+			"дороже всего в контексте", name + " · " + core.Kfmt(tok) + " ток.",
+		})
+	}
+	a.ui.KVPanel("Экономия", rows)
 }
 
 // showPermissionRules — вывести правила разрешений в порядке применения.
@@ -1015,6 +1343,88 @@ func (a *app) cmdSandbox(rest string) {
 		a.ui.Ok("песочница включена — пути вне рабочего каталога запрещены")
 	} else {
 		a.ui.Ok("песочница выключена")
+	}
+}
+
+// showCron — напечатать состояние автономных итераций (/cron без аргументов).
+func (a *app) showCron() {
+	a.cronMu.Lock()
+	enabled := a.cronEnabled
+	interval := a.cronInterval
+	lastActive := a.cronLastActive
+	a.cronMu.Unlock()
+
+	state := "выключены"
+	if enabled {
+		state = "включены"
+	}
+	a.ui.Ok("автономные итерации: " + state)
+	if enabled {
+		a.ui.Println("  интервал: " + interval.String() + " (15–20 мин, случайный сдвиг)")
+		d := time.Since(lastActive)
+		if d < 0 {
+			d = 0
+		}
+		a.ui.Println("  последняя активность: " + core.FormatDur(d) + " назад")
+		a.ui.Println("  следующая итерация: после " + core.FormatDur(interval-d) + " тишины")
+	}
+	a.ui.Println("  подробнее: /cron on | /cron off | /cron status")
+}
+
+// cmdCron — переключить автономные итерации: on | off | status.
+//
+// Итерации работают только в интерактивном режиме и не прерывают активный
+// ход. Когда пользователь молчит 15–20 минут после завершения хода, агент
+// сам берёт задачу «продолжай работу над проектом, ищи баги, проблемы и
+// уязвимости, улучшай проект дальше».
+func (a *app) cmdCron(rest string) {
+	arg := strings.ToLower(strings.TrimSpace(rest))
+	switch arg {
+	case "", "status", "показать":
+		a.showCron()
+		return
+	case "on", "вкл", "1", "true":
+		a.cronMu.Lock()
+		if a.cronEnabled {
+			a.cronMu.Unlock()
+			a.ui.Ok("автономные итерации уже включены")
+			return
+		}
+		a.cronEnabled = true
+		if a.cronDone == nil {
+			a.cronDone = make(chan struct{})
+			go a.cronLoop()
+		}
+		a.cronInterval = cronNextInterval()
+		a.cronLastActive = time.Now()
+		a.repo.Cfg.Cron = true
+		a.cronMu.Unlock()
+		a.saveConfig()
+		if t := a.tuiApp(); t != nil {
+			t.SetCronEnabled(true)
+		}
+		a.ui.Ok("автономные итерации включены — через 15–20 мин тишины агент сам найдёт и починит баги, проблемы, уязвимости")
+	case "off", "выкл", "0", "false":
+		a.cronMu.Lock()
+		if !a.cronEnabled {
+			a.cronMu.Unlock()
+			a.ui.Ok("автономные итерации уже выключены")
+			return
+		}
+		a.cronEnabled = false
+		if a.cronDone != nil {
+			close(a.cronDone)
+			a.cronDone = nil
+		}
+		a.repo.Cfg.Cron = false
+		a.cronMu.Unlock()
+		a.saveConfig()
+		if t := a.tuiApp(); t != nil {
+			t.SetCronEnabled(false)
+		}
+		a.ui.Ok("автономные итерации выключены")
+	default:
+		a.ui.Warn("не понял: " + rest + " — /cron on | off | status")
 	}
 }
 

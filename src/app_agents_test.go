@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -392,7 +393,7 @@ func TestCmdAgentsOnOffTogglesPoolAndTools(t *testing.T) {
 	if got := savedConfig(t, a); got.Subagents {
 		t.Error("subagents=false не записан")
 	}
-	if _, err := a.spawnAgent(nil, tools.SpawnArgs{Type: "explorer", Task: "что-то"}); err == nil {
+	if _, err := a.spawnAgent(context.Background(), tools.SpawnArgs{Type: "explorer", Task: "что-то"}); err == nil {
 		t.Error("выключенные субагенты должны отвечать ошибкой, а не работать")
 	}
 

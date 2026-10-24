@@ -245,6 +245,11 @@ func (a *app) startTracker() bool {
 			a.missionResumeState.ToolCalls, a.missionResumeState.Tokens)
 	}
 	a.openMissionJournal()
+	// Снимок одноразовый: журнал уже открыт (ему нужен был непустой
+	// missionResumeState, чтобы не писать второй start), а следующий
+	// трекер — шаг цепочки или новый /mission start — не должен
+	// наследовать счётчики чужого прогона.
+	a.missionResumeState = nil
 	return true
 }
 
@@ -398,19 +403,6 @@ func (a *app) noteMissionResumed() {
 	a.missionResumeJournalled = true
 }
 
-// missionJournalCheckpoint — записать в журнал чекпоинт.
-//
-// Идёт после снимка состояния, а не вместо него: чекпоинт без снимка
-// бесполезен после перезапуска, но снимок без журнала не переживает
-// падение на записи. Порядок «дешёвое первым» означает, что при ошибке
-// вторая половина не потеряет первую.
-func (a *app) missionJournalCheckpoint(summary string) {
-	if a.missionJournal == nil {
-		return
-	}
-	_ = a.missionJournal.Checkpoint(summary, a.currentMissionTr())
-}
-
 // ---------- Продолжение после обрыва ----------
 
 // resumeWindow — насколько свежим должен быть журнал, чтобы предложить
@@ -492,7 +484,12 @@ func (a *app) attachMission(ag *agent.Agent) {
 	deps := a.missionDeps()
 	resumed := a.missionResume != "" && !a.missionResumedOnce
 	a.missionResumedOnce = a.missionResumedOnce || resumed
-	a.noteMissionResumed()
+	if resumed {
+		// Только настоящий подхват: на новом прогоне resume-запись
+		// сделала бы последней записью журнала «продолжен», а
+		// MissionResumeFromJournal такой хвост считает непродолжаемым.
+		a.noteMissionResumed()
+	}
 	if !resumed {
 		// Строка уходит в историю один раз; держать её дальше незачем —
 		// иначе первый же следующий ход начался бы с неё.
@@ -668,6 +665,9 @@ func (a *app) missionStop() {
 	}
 	a.mu.Unlock()
 	_ = a.saveMissionState("прогон остановлен человеком: " + tr.Status())
+	// Остановка человека необратима: без записи в журнал следующий
+	// запуск предложил бы продолжить отменённый прогон.
+	a.missionJournalStop(core.StopCancelled)
 	a.ui.Info("прогон остановлен, состояние сохранено")
 }
 

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"gcli/core"
 	"gcli/ui"
 )
 
@@ -51,47 +50,6 @@ func TestReadAnsUpperAChoosesAll(t *testing.T) {
 	a3 := ansApp(t, "a")
 	if got := a3.readAns(true, true); got != confirmAlways {
 		t.Errorf("a = %d, хотели %d (confirmAlways)", got, confirmAlways)
-	}
-}
-
-// TestMissionPayloadStructured — GET /v1/mission отдаёт структуру, а не
-// строки: оболочка читает mission.active/objective/status.*.
-func TestMissionPayloadStructured(t *testing.T) {
-	a := &app{}
-	a.mission = core.Mission{
-		Objective: "починить тесты",
-		Mode:      core.MissionLongTime,
-	}.Apply()
-	a.setMissionTr(core.NewTracker(a.mission, 0, 0))
-
-	p := missionPayload(a)
-	m, ok := p["mission"].(map[string]any)
-	if !ok {
-		t.Fatalf("mission — не объект: %v", p)
-	}
-	if m["objective"] != "починить тесты" {
-		t.Errorf("objective = %v", m["objective"])
-	}
-	if m["mode"] != string(core.MissionLongTime) {
-		t.Errorf("mode = %v", m["mode"])
-	}
-	if active, ok := m["active"].(bool); !ok || !active {
-		t.Errorf("active = %v, хотели true (трекер жив)", m["active"])
-	}
-	st, ok := m["status"].(map[string]any)
-	if !ok {
-		t.Fatalf("status — не объект: %v", m["status"])
-	}
-	if st["state"] != "running" {
-		t.Errorf("state = %v, хотели running", st["state"])
-	}
-
-	// Остановленный прогон не выглядит активным.
-	a.currentMissionTr().Stop(core.StopCancelled)
-	p = missionPayload(a)
-	m = p["mission"].(map[string]any)
-	if m["active"] != false {
-		t.Errorf("после Stop active = %v, хотели false", m["active"])
 	}
 }
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"gcli/agent"
-	"gcli/core"
 	"gcli/tools"
 )
 
@@ -19,14 +18,15 @@ func (a *app) selfReport() tools.SelfReport {
 		MaxIters:  a.maxIters(),
 		Model:     a.model,
 		Provider:  a.prov.ID,
-		Since:     a.sess.Stats.SessionTime(),
 	}
 
 	// Расход и статистику снимаем под блокировкой: их пишут горутины
-	// субагентов параллельно с этим вызовом.
+	// субагентов параллельно с этим вызовом. SessionTime читает те же
+	// поля статистики, поэтому и он идёт под sessMu, а не до неё.
 	sessMu.Lock()
 	rep.Usage = a.sess.Usage
 	rep.Stats = a.sess.Stats
+	rep.Since = a.sess.Stats.SessionTime()
 	sessMu.Unlock()
 	// Историю — копией, тем же Messages(). Раньше здесь лежал живой слайс
 	// a.sess.Messages: self_status зовут изнутри хода, а AddMessage пишет
@@ -90,6 +90,3 @@ func (a *app) currentAgent() *agent.Agent {
 	defer a.mu.Unlock()
 	return a.lastAgent
 }
-
-// SelfTokens — примерный вес системного промпта в токенах (для /context).
-func SelfTokens(p string) int { return core.ApproxTokens(p) }

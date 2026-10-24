@@ -49,11 +49,10 @@ type mcpSrvError struct {
 
 // Коды ошибок JSON-RPC.
 const (
-	mcpSrvParse     = -32700
-	mcpSrvMethod    = -32601
-	mcpSrvParams    = -32602
-	mcpSrvInternal  = -32603
-	mcpSrvToolTimeo = 10 * time.Minute
+	mcpSrvParse    = -32700
+	mcpSrvMethod   = -32601
+	mcpSrvParams   = -32602
+	mcpSrvInternal = -32603
 )
 
 // mcpSrvTool — описание инструмента для tools/list.
@@ -250,7 +249,10 @@ func mcpSrvToolCall(name string, args json.RawMessage) (string, error) {
 		if err != nil {
 			recs, tailOK = nil, true
 		}
-		mission, _, _ := core.LoadMission(core.MissionPath(workdir))
+		// LoadMission ждёт каталог проекта, а не путь к файлу: путь к
+		// mission.json он собирает сам. С двойным MissionPath сервер искал
+		// «.gcli/mission.json/.gcli/mission.json» и всегда отвечал «прогона нет».
+		mission, _, _ := core.LoadMission(workdir)
 		st, hasState, _ := core.LoadMissionState(core.MissionStatePath(workdir))
 		return buildMissionReport(missionReportData{
 			Mission: mission, State: st, HasState: hasState, Records: recs, TailOK: tailOK,
@@ -299,7 +301,8 @@ func mcpSrvMissionStatus(workdir string) (string, error) {
 	if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
 		return "", fmt.Errorf("каталог недоступен: %s", workdir)
 	}
-	mission, _, err := core.LoadMission(core.MissionPath(workdir))
+	// LoadMission ждёт каталог проекта: путь к mission.json он собирает сам.
+	mission, _, err := core.LoadMission(workdir)
 	if err != nil || (mission.Objective == "" && mission.Mode == core.MissionNormal) {
 		return "прогона нет: .gcli/mission.json пуст или отсутствует", nil
 	}
@@ -314,50 +317,4 @@ func mcpSrvMissionStatus(workdir string) (string, error) {
 		b.WriteString("состояние: ещё не сохранялось\n")
 	}
 	return b.String(), nil
-}
-
-// mcpSrvServeSelf — запуск собственного бинарника как MCP-сервера
-// (для проверки: клиент в этом же процессе).
-func mcpSrvSelfCheck(exe string) error {
-	cmd := exec.Command(exe, "-mcp-serve")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	defer func() {
-		_ = stdin.Close()
-		_, _ = cmd.Process.Wait()
-	}()
-	// initialize → tools/list → выход.
-	for _, line := range []string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
-		`{"jsonrpc":"2.0","method":"exit"}`,
-	} {
-		if _, err := fmt.Fprintln(stdin, line); err != nil {
-			return err
-		}
-	}
-	r := bufio.NewScanner(stdout)
-	for r.Scan() {
-		var resp struct {
-			ID     json.RawMessage `json:"id"`
-			Result json.RawMessage `json:"result"`
-		}
-		if json.Unmarshal(r.Bytes(), &resp) != nil {
-			continue
-		}
-		if string(resp.ID) == "2" && !strings.Contains(string(resp.Result), "gcli_prompt") {
-			return fmt.Errorf("tools/list не содержит gcli_prompt")
-		}
-	}
-	return cmd.Wait()
 }

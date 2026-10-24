@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,10 +63,13 @@ func TestMCPTaskMissionStatusEmpty(t *testing.T) {
 	if !strings.Contains(out, "прогона нет") {
 		t.Fatalf("пустой каталог: %q", out)
 	}
-	// С миссией.
-	m := core.Mission{Objective: "починить тесты", Mode: core.MissionLongTime}
-	m.Apply()
-	if _, err := core.SaveMission(core.MissionPath(dir), m); err != nil {
+	// С миссией: файл задания лежит там, где его ищет сервер,
+	// — в .gcli/mission.json каталога проекта.
+	if err := os.MkdirAll(filepath.Dir(core.MissionPath(dir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"objective":"починить тесты","mode":"long-time"}`
+	if err := os.WriteFile(core.MissionPath(dir), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out2, err := mcpSrvToolCall("gcli_mission_status", mustJSON(map[string]any{"workdir": dir}))

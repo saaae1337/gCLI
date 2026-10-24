@@ -61,6 +61,22 @@ func TestWatchFileMapAndChange(t *testing.T) {
 	}
 }
 
+func TestWatchNeedsCheckAfterAgentTurn(t *testing.T) {
+	same := watchState{"/x": {10, 20}}
+	if watchNeedsCheck(false, same, same) {
+		t.Fatal("без изменений и без требования проверки проход должен пропускаться")
+	}
+	// После хода агента проверку запускают принудительно: иначе починка
+	// остаётся неподтверждённой до следующей правки файлов.
+	if !watchNeedsCheck(true, same, same) {
+		t.Fatal("после хода агента проверка обязательна даже без изменений файлов")
+	}
+	changed := watchState{"/x": {11, 21}}
+	if !watchNeedsCheck(false, same, changed) {
+		t.Fatal("изменение файлов должно запускать проверку")
+	}
+}
+
 // shellCmd — команда с нужным кодом возврата для оболочки, которой
 // реально пойдёт watch.
 //
@@ -93,11 +109,6 @@ func slowCmd() string {
 		return "ping -n 6 127.0.0.1"
 	}
 	return "sleep 5"
-}
-
-func shellOf() string {
-	shell, _ := tools.ShellCommand("")
-	return shell
 }
 
 func TestWatchRunCommand(t *testing.T) {

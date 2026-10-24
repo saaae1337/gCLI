@@ -69,6 +69,20 @@ func countKind(kinds []string, want string) int {
 	return n
 }
 
+// journalCheckpoint — записать чекпоинт в журнал напрямую.
+//
+// Хостовой обёртки больше нет: в работе чекпоинт пишет движок прогона,
+// а тесту нужен тот же факт на диске.
+func journalCheckpoint(t *testing.T, a *app, summary string) {
+	t.Helper()
+	if a.missionJournal == nil {
+		t.Fatal("журнал не открыт")
+	}
+	if err := a.missionJournal.Checkpoint(summary, a.currentMissionTr()); err != nil {
+		t.Fatalf("чекпоинт: %v", err)
+	}
+}
+
 // mentions — есть ли в списке заметок строка с подстрокой.
 func mentions(notes []string, sub string) bool {
 	for _, n := range notes {
@@ -94,7 +108,7 @@ func TestMissionCloseKeepsRunResumable(t *testing.T) {
 	if err := a.saveMissionState("сделано 12 итераций"); err != nil {
 		t.Fatalf("снимок состояния: %v", err)
 	}
-	a.missionJournalCheckpoint("сделано 12 итераций")
+	journalCheckpoint(t, a, "сделано 12 итераций")
 	a.closeMissionJournal()
 
 	kinds := journalKinds(t, a.workDir)
@@ -125,13 +139,12 @@ func TestMissionStopBlocksResume(t *testing.T) {
 	if err := a.saveMissionState("до остановки"); err != nil {
 		t.Fatalf("снимок состояния: %v", err)
 	}
-	a.missionJournalCheckpoint("до остановки")
-	// Остановка по исчерпанному бюджету — необратимая: её пишет и
-	// обработчик трекера, и выход из сеанса. Вторая запись молчала бы,
-	// а в append-only журнале два одинаковых «остановлен» читаются как
-	// две разные причины.
-	a.missionTr.Stop(core.StopTools)
-	a.missionJournalStop(core.StopTools)
+	journalCheckpoint(t, a, "до остановки")
+	// Остановка человеком — необратимая: её пишет missionStop, а выход
+	// из сеанса не должен добавлять вторую запись. В append-only журнале
+	// два «остановлен» читаются как две разные причины.
+	a.missionStop()
+	a.missionJournalStop(core.StopTools) // повтор обязан погаситься
 	a.closeMissionJournal()
 
 	kinds := journalKinds(t, a.workDir)
@@ -147,6 +160,68 @@ func TestMissionStopBlocksResume(t *testing.T) {
 }
 
 // ---------- Подхват после обрыва ----------
+
+// TestMissionFreshRunDoesNotWriteResume — новый прогон не подхватывает
+// ничего, значит и записи resume в журнале быть не должно. Иначе после
+// падения первого же хода последняя запись — «продолжен», и подхват
+// считается ненужным: работа начинается заново вопреки сохранённому start.
+func TestMissionFreshRunDoesNotWriteResume(t *testing.T) {
+	a, _ := missionApp(t)
+	if !a.startTracker() {
+		t.Fatal("задание long-time обязано завести трекер")
+	}
+	ag := agent.New(agent.Deps{Model: "test"}, a.workDir)
+	a.attachMission(ag)
+	if n := countKind(journalKinds(t, a.workDir), core.JournalResume); n != 0 {
+		t.Fatalf("новый прогон записал «продолжен» %d раз: журнал соврёт о подхвате", n)
+	}
+	// Так выглядит падение после первого хода: файл закрыт без close/stop.
+	_ = a.missionJournal.Close()
+	a.missionJournal = nil
+	if _, has, _ := core.MissionResumeFromJournal(core.JournalPath(a.workDir), time.Now(), resumeWindow); !has {
+		t.Fatal("после падения нового прогона продолжение обязано предлагаться")
+	}
+}
+
+// TestMissionResumeStateConsumedOnce — счётчики подхваченного прогона
+// переезжают ровно в один трекер. Иначе следующий шаг цепочки или новый
+// /mission start начинается с чужих итераций и бюджета.
+func TestMissionResumeStateConsumedOnce(t *testing.T) {
+	work := t.TempDir()
+	crashed, _ := missionApp(t)
+	crashed.workDir = work
+	if !crashed.startTracker() {
+		t.Fatal("задание long-time обязано завести трекер")
+	}
+	crashed.missionTr.Tick(7, 9, crashed.sessionSpent())
+	journalCheckpoint(t, crashed, "семь итераций")
+	_ = crashed.missionJournal.Close()
+	crashed.missionJournal = nil
+
+	fresh, _ := missionApp(t)
+	fresh.workDir = work
+	fresh.loadMissionResume()
+	if fresh.missionResumeState == nil {
+		t.Fatal("снимок прошлого прогона не подхватился")
+	}
+	if !fresh.startTracker() {
+		t.Fatal("продолжение должно завести трекер")
+	}
+	if fresh.missionResumeState != nil {
+		t.Fatal("снимок прошлого прогона обязан расходоваться один раз")
+	}
+	if got := fresh.missionTr.Iters(); got != 7 {
+		t.Fatalf("первый трекер получил %d итераций, ждали 7", got)
+	}
+	// Следующий шаг цепочки или новый /mission start — уже свой прогон.
+	if !fresh.startTracker() {
+		t.Fatal("новый прогон должен завести трекер")
+	}
+	if got := fresh.missionTr.Iters(); got != 0 {
+		t.Fatalf("новый трекер унаследовал %d итераций прошлого прогона", got)
+	}
+	fresh.closeMissionJournal()
+}
 
 func TestMissionResumeAfterCrash(t *testing.T) {
 	work := t.TempDir()
@@ -168,7 +243,7 @@ func TestMissionResumeAfterCrash(t *testing.T) {
 	if err := crashed.saveMissionState("сделано 40 итераций, тесты красные"); err != nil {
 		t.Fatalf("снимок состояния: %v", err)
 	}
-	crashed.missionJournalCheckpoint("сделано 40 итераций, тесты красные")
+	journalCheckpoint(t, crashed, "сделано 40 итераций, тесты красные")
 	// Падение процесса — это отсутствие Close, а не отказ закрыть файл.
 	// Настоящий краш закрывает дескрипторы сам (спинки ядра, обработчик
 	// ОС), поэтому в тесте файл закрывается руками: иначе на Windows он
@@ -263,7 +338,7 @@ func TestMissionResumeWarnsAboutTruncatedTail(t *testing.T) {
 	if err := a.saveMissionState("человеческая проверка"); err != nil {
 		t.Fatalf("снимок состояния: %v", err)
 	}
-	a.missionJournalCheckpoint("человеческая проверка")
+	journalCheckpoint(t, a, "человеческая проверка")
 	a.closeMissionJournal()
 
 	// Хвост обрезан на середине записи — так выглядит падение при записи.
