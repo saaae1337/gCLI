@@ -59,14 +59,25 @@ jobs:
   # Когда macos-15 устареет, варианта два: перейти на Go 1.26+ (там
   # починили) или оставить внешний линковщик.
   test:
-    name: go test (${{ matrix.os }})
     needs: lint
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-15]
+        # Нижняя граница совместимости — 1.22 (go.mod разрешает 1.21, но
+        # CI проверяет то, что реально ставят пользователи сборкой из
+        # исходников). Второй колонкой ubuntu на stable: релиз собирается
+        # свежим toolchain'ом, и его тесты обязаны идти в CI, а не
+        # вслепую.
+        go: ["1.22", "stable"]
+        exclude:
+          - os: windows-latest
+            go: "stable"
+          - os: macos-15
+            go: "stable"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    name: go test (${{ matrix.os }}, ${{ matrix.go }})
     defaults:
       run:
         working-directory: src
@@ -79,7 +90,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: ${{ matrix.go }}
           # Кэш выключен намеренно: setup-go ищет go.sum, которого в проекте
           # нет — зависимостей нет вообще. Без go.sum ключ не собрать,
           # setup-go пишет «Dependencies file is not found» и всё равно
@@ -224,9 +235,16 @@ jobs:
 
   # Официальный сканер уязвимостей Go: сверяет стандартную библиотеку
   # и модули (в этом репозитории модулей ноль, но stdlib живёт в
-  # бинарнике) с базой golang.org/x/vuln. Заноза в старом Go видна
-  # здесь, а не в отчёте пользователя. Версия закреплена: свежие релизы
-  # govulncheck требуют более новый toolchain, чем 1.22 в проекте.
+  # бинарнике) с базой golang.org/x/vuln.
+  #
+  # Toolchain — stable, и это не прихоть. Первый же прогон на go1.22.12
+  # нашёл девять действующих уязвимостей stdlib (net/http, crypto/tls,
+  # crypto/x509): 1.22 старше поддерживаемого окна безопасности Go, и
+  # список будет только расти. Сканер обязан смотреть на то, чем проект
+  # собирается сейчас, — иначе он сообщает о прошлом, а не о бинарнике.
+  # Тестовая матрица ниже тем временем держит 1.22 как нижнюю границу
+  # совместимости (go.mod: go 1.21) плюс stable на ubuntu — там же, где
+  # собирается релиз.
   vuln:
     name: govulncheck
     needs: lint
@@ -240,7 +258,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "stable"
           cache: false
 
       - name: govulncheck ./...
