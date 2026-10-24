@@ -545,7 +545,7 @@ func TestPrintStatsEmptyAndFilled(t *testing.T) {
 	}
 
 	day := time.Now()
-	a.printStats([]core.Session{{
+	a.printStats([]core.SessionInfo{{
 		Updated: day, Provider: "zai", Model: "glm-4.6",
 		Usage: core.Usage{PromptTokens: 12000, CompletionTokens: 3000},
 		Stats: core.Stats{Requests: 4, Errors: 1, Tools: 9},
@@ -563,7 +563,7 @@ func TestPrintStatsEmptyAndFilled(t *testing.T) {
 // а не выглядит бесплатной.
 func TestPrintStatsMarksUnknownPrice(t *testing.T) {
 	a, buf := cmdApp(t)
-	a.printStats([]core.Session{{
+	a.printStats([]core.SessionInfo{{
 		Updated: time.Now(), Provider: "мой-эндпоинт", Model: "своя-модель",
 		Usage: core.Usage{PromptTokens: 5000, CompletionTokens: 1000},
 	}}, 30)

@@ -59,14 +59,25 @@ jobs:
   # Когда macos-15 устареет, варианта два: перейти на Go 1.26+ (там
   # починили) или оставить внешний линковщик.
   test:
-    name: go test (${{ matrix.os }})
     needs: lint
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-15]
+        # Нижняя граница совместимости — 1.22 (go.mod разрешает 1.21, но
+        # CI проверяет то, что реально ставят пользователи сборкой из
+        # исходников). Второй колонкой ubuntu на stable: релиз собирается
+        # свежим toolchain'ом, и его тесты обязаны идти в CI, а не
+        # вслепую.
+        go: ["1.22", "stable"]
+        exclude:
+          - os: windows-latest
+            go: "stable"
+          - os: macos-15
+            go: "stable"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    name: go test (${{ matrix.os }}, ${{ matrix.go }})
     defaults:
       run:
         working-directory: src
@@ -79,7 +90,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: ${{ matrix.go }}
           # Кэш выключен намеренно: setup-go ищет go.sum, которого в проекте
           # нет — зависимостей нет вообще. Без go.sum ключ не собрать,
           # setup-go пишет «Dependencies file is not found» и всё равно
@@ -179,3 +190,82 @@ jobs:
           name: coverage
           path: src/coverage.out
           retention-days: 14
+
+  # Fuzz-цели раньше жили только у того, кто сам догадался их запустить,
+  # и гнили: падение находилось через месяцы, если вообще находилось.
+  # Дым по 12 секунд на цель ловит паники на свежих входах в каждом пуше.
+  # -run '^$' отключает обычные тесты: здесь гоняется только фаззи.
+  fuzz:
+    name: fuzz smoke
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: по 12 секунд на цель
+        run: |
+          set -e
+          # Пары «пакет цель»: -fuzz принимает ровно один шаблон за прогон,
+          # поэтому цели не смешивают в один вызов.
+          for t in \
+            "gcli/core FuzzStripJSONC" \
+            "gcli/core FuzzMissionNormalize" \
+            "gcli/core FuzzParseDur" \
+            "gcli/core FuzzOneLineAndTruncateNeverPanic" \
+            "gcli/wcwidth FuzzTruncate" \
+            "gcli/wcwidth FuzzStringWidth" \
+            "gcli/ui FuzzWidthInvariants" \
+          ; do
+            set -- $t
+            echo "::group::$1/$2"
+            # Пакет — импорт-путём (gcli/core), а не «./gcli/core»:
+            # точка ведёт отсчёт от каталога, а модуль называется gcli.
+            go test -run '^$' -fuzz "^$2\$" -fuzztime 12s "$1"
+            echo "::endgroup::"
+          done
+
+  # Официальный сканер уязвимостей Go: сверяет стандартную библиотеку
+  # и модули (в этом репозитории модулей ноль, но stdlib живёт в
+  # бинарнике) с базой golang.org/x/vuln.
+  #
+  # Toolchain — stable, и это не прихоть. Первый же прогон на go1.22.12
+  # нашёл девять действующих уязвимостей stdlib (net/http, crypto/tls,
+  # crypto/x509): 1.22 старше поддерживаемого окна безопасности Go, и
+  # список будет только расти. Сканер обязан смотреть на то, чем проект
+  # собирается сейчас, — иначе он сообщает о прошлом, а не о бинарнике.
+  # Тестовая матрица ниже тем временем держит 1.22 как нижнюю границу
+  # совместимости (go.mod: go 1.21) плюс stable на ubuntu — там же, где
+  # собирается релиз.
+  vuln:
+    name: govulncheck
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: govulncheck ./...
+        run: |
+          # @latest, а не закреплённая версия: govulncheck разбирает код
+          # через x/tools, и старая версия паникует на синтаксисе нового
+          # Go («unexpected expr: *ast.KeyValueExpr» на go1.27 от
+          # v1.1.4). Джоба уже на stable — значит и сканер свежий.
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

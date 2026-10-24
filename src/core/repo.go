@@ -169,6 +169,212 @@ func (r *Repo) ListSessions() []Session {
 	return out
 }
 
+// SessionInfo — шапка сессии без содержимого переписки.
+//
+// Спискам (таблица /sessions, дашборд /stats, прунинг) сообщения не нужны:
+// нужен id, тема, время, модель и счётчики. Полный Unmarshal каждой сессии
+// тянет всю переписку в память — на каталоге с крупными сессиями это
+// секунды разбора и десятки мегабайт мусора ради пяти полей.
+type SessionInfo struct {
+	ID        string
+	Title     string
+	Created   time.Time
+	Updated   time.Time
+	Provider  string
+	Model     string
+	AgentMode bool
+	Turns     int
+	// Messages — только число сообщений, содержимое не грузится.
+	// Для текста сообщений нужна полная загрузка: LoadSession.
+	Messages int
+	Usage    Usage
+	Stats    Stats
+	CWD      string
+}
+
+// ListSessionInfos — шапки сессий, свежие первыми. Потоковое чтение:
+// файл открывается декодером, знакомые ключи разбираются, «messages»
+// считается по числу элементов, всё остальное пропускается токен-ходом
+// без копирования байт в память.
+func (r *Repo) ListSessionInfos() []SessionInfo {
+	ents, err := os.ReadDir(r.Store.Sessions())
+	if err != nil {
+		return nil
+	}
+	out := make([]SessionInfo, 0, len(ents))
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		f, err := os.Open(filepath.Join(r.Store.Sessions(), e.Name()))
+		if err != nil {
+			continue
+		}
+		si, err := scanSessionHeader(json.NewDecoder(f))
+		f.Close()
+		if err != nil {
+			continue
+		}
+		if si.ID == "" {
+			si.ID = strings.TrimSuffix(e.Name(), ".json")
+		}
+		out = append(out, si)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
+	return out
+}
+
+// scanSessionHeader — разобрать шапку сессии из JSON-потока.
+//
+// Именно Decoder, а не Unmarshal: Unmarshal требует весь файл в памяти,
+// а смысл быстрого списка — не держать переписку. Ключи, отсутствующие
+// в SessionInfo, пропускаются без разбора, поэтому длинный хвост
+// «messages» стоит лишь подсчётом элементов.
+func scanSessionHeader(dec *json.Decoder) (SessionInfo, error) {
+	var si SessionInfo
+	tok, err := dec.Token()
+	if err != nil {
+		return si, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return si, fmt.Errorf("сессия: ждут объект, получено %v", tok)
+	}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return si, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return si, fmt.Errorf("сессия: ждут имя поля, получено %v", keyTok)
+		}
+		switch key {
+		case "id":
+			err = dec.Decode(&si.ID)
+		case "title":
+			err = dec.Decode(&si.Title)
+		case "created":
+			err = dec.Decode(&si.Created)
+		case "updated":
+			err = dec.Decode(&si.Updated)
+		case "provider":
+			err = dec.Decode(&si.Provider)
+		case "model":
+			err = dec.Decode(&si.Model)
+		case "agent_mode":
+			err = dec.Decode(&si.AgentMode)
+		case "turns":
+			err = dec.Decode(&si.Turns)
+		case "usage":
+			err = dec.Decode(&si.Usage)
+		case "stats":
+			err = dec.Decode(&si.Stats)
+		case "cwd":
+			err = dec.Decode(&si.CWD)
+		case "messages":
+			si.Messages, err = countMessages(dec)
+		default:
+			err = skipJSONValue(dec)
+		}
+		if err != nil {
+			return si, err
+		}
+	}
+	_, err = dec.Token() // закрывающая '}' объекта сессии
+	return si, err
+}
+
+// countMessages — число сообщений сессии. Хранение допускает оба вида:
+// «messages":null» (сессия без сообщений — SaveSession так пишет пустую)
+// и массив. Полный Unmarshal null терпел молча, поэтому и здесь null —
+// ноль, а не ошибка чтения: иначе пустые сессии пропадали из списка.
+func countMessages(dec *json.Decoder) (int, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return 0, err
+	}
+	if tok == nil {
+		return 0, nil
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return 0, fmt.Errorf("сессия: ждут массив или null в messages, получено %v", tok)
+	}
+	return countJSONElements(dec)
+}
+
+// countJSONArray — число элементов массива без разбора содержимого.
+// Элементы считаются по закрытию верхнеуровневого значения: для массива
+// объектов это каждая его закрывающая скобка, вернувшая глубину в ноль.
+func countJSONArray(dec *json.Decoder) (int, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return 0, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return 0, fmt.Errorf("сессия: ждут массив, получено %v", tok)
+	}
+	return countJSONElements(dec)
+}
+
+// countJSONElements — элементы уже открытого массива, '[' съеден.
+func countJSONElements(dec *json.Decoder) (int, error) {
+	n, depth := 0, 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return 0, err
+		}
+		d, ok := tok.(json.Delim)
+		if !ok {
+			if depth == 0 {
+				n++ // скалярный элемент
+			}
+			continue
+		}
+		switch d {
+		case '[', '{':
+			depth++
+		default:
+			depth--
+			if depth < 0 {
+				return n, nil // закрылся сам массив
+			}
+			if depth == 0 {
+				n++ // закрылся элемент-объект или элемент-массив
+			}
+		}
+	}
+}
+
+// skipJSONValue — пропустить любое JSON-значение, не копируя байты.
+// Token-ход по скобочной глубине: декодер сам читает поток посимвольно,
+// память под пропускаемое не выделяется вовсе — в отличие от трюка с
+// json.RawMessage, который буферизует всё значение целиком.
+func skipJSONValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if _, ok := tok.(json.Delim); !ok {
+		return nil // скаляр; тип скобки не важен — глубина 1 покрывает и '{', и '['
+	}
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if dd, ok := tok.(json.Delim); ok {
+			if dd == '{' || dd == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		}
+	}
+	return nil
+}
+
 // DeleteSession — удалить сессию и её чекпоинты.
 func (r *Repo) DeleteSession(id string) error {
 	if !ValidSessionID(id) {
@@ -209,7 +415,7 @@ func (r *Repo) PruneSessions(keep int) int {
 	if keep <= 0 {
 		return 0
 	}
-	all := r.ListSessions()
+	all := r.ListSessionInfos()
 	if len(all) <= keep {
 		return 0
 	}

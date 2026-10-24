@@ -807,7 +807,7 @@ func (a *app) cmdThink(arg string) {
 // ---------- Сессия ----------
 
 func (a *app) cmdSessions() {
-	ss := a.repo.ListSessions()
+	ss := a.repo.ListSessionInfos()
 	if len(ss) == 0 {
 		a.ui.Info("сохранённых сессий нет")
 		return
@@ -825,7 +825,7 @@ func (a *app) cmdSessions() {
 			strconv.Itoa(i + 1),
 			s.Updated.Format("02.01 15:04"),
 			core.Truncate(core.OneLine(s.Title), 46),
-			strconv.Itoa(len(s.Messages)),
+			strconv.Itoa(s.Messages),
 			cur,
 		})
 	}
@@ -841,7 +841,7 @@ func (a *app) cmdSessions() {
 }
 
 func (a *app) cmdResume(arg string) {
-	ss := a.repo.ListSessions()
+	ss := a.repo.ListSessionInfos()
 	if len(ss) == 0 {
 		a.ui.Info("сохранённых сессий нет")
 		return

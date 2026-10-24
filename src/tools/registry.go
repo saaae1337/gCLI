@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"gcli/core"
 )
@@ -91,6 +92,14 @@ type Tool struct {
 	MCPSrv  string
 	MCPCall string
 
+	// Timeout — индивидуальный потолок времени одного вызова инструмента.
+	// 0 = своего лимита нет: действует общий (GCLI_TOOL_TIMEOUT /
+	// SetToolTimeout), а если не задан и он — инструмент может работать
+	// столько, сколько живёт родительский контекст. Нужен инструментам,
+	// которые умеют виснуть на чужой стороне (MCP, сеть) и не имеют
+	// собственного дедлайна.
+	Timeout time.Duration
+
 	// rebind — пересобрать обработчик для другого реестра.
 	//
 	// Обработчики встроенных инструментов — это связанные методы
@@ -117,6 +126,13 @@ type Registry struct {
 	workDir   string
 	env       Env
 	skillsOff []string
+
+	// toolTimeout — общий потолок времени одного вызова инструмента.
+	// 0 = безлимит (поведение по умолчанию): у сети, bash и MCP свои
+	// дедлайны, а глобальный потолок — страховка от «завис и молчит»
+	// для всего остального. Задаётся GCLI_TOOL_TIMEOUT и SetToolTimeout;
+	// индивидуальный Tool.Timeout приоритетнее общего.
+	toolTimeout time.Duration
 
 	// muTools — защита tools/byName от гонки «агент читает — UI пишет».
 	//
@@ -331,8 +347,50 @@ func New(env Env) *Registry {
 		log:       &changeLog{},
 		asks:      &askLog{},
 	}
+	// GCLI_TOOL_TIMEOUT — общий потолок времени одного вызова инструмента
+	// (например «90s», «5m»). По умолчанию выключен: сетевые инструменты,
+	// bash и MCP умеют ограничивать себя сами, а долгий субагент — не
+	// повод его убивать. Молча игнорируем мусорное значение: потолок —
+	// страховка, а не причина отказываться стартовать.
+	if v := strings.TrimSpace(os.Getenv("GCLI_TOOL_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			r.toolTimeout = d
+		}
+	}
 	r.registerBuiltins()
 	return r
+}
+
+// SetToolTimeout — программно задать общий потолок времени одного вызова.
+// Приоритет ниже, чем у индивидуального Tool.Timeout.
+func (r *Registry) SetToolTimeout(d time.Duration) {
+	if d > 0 {
+		r.toolTimeout = d
+	}
+}
+
+// ToolTimeout — действующий общий потолок (0 = безлимит).
+func (r *Registry) ToolTimeout() time.Duration { return r.toolTimeout }
+
+// ToolCtx — контекст под один вызов инструмента.
+//
+// Потолок берётся из Tool.Timeout конкретного инструмента; если тот не
+// задан — общий toolTimeout; если и его нет, возвращается исходный
+// контекст и nil-кансел: инструмент живёт столько, сколько живёт ход
+// агента. Агентный цикл обязан вызвать кансел после завершения вызова,
+// иначе WithTimeout держит таймер до исходного дедлайна родителя.
+func (r *Registry) ToolCtx(ctx context.Context, t *Tool) (context.Context, context.CancelFunc) {
+	if t == nil {
+		return ctx, nil
+	}
+	d := t.Timeout
+	if d <= 0 {
+		d = r.toolTimeout
+	}
+	if d <= 0 {
+		return ctx, nil
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 // Base — реестр только со встроенными инструментами и скиллами,

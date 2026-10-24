@@ -1219,7 +1219,18 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 	}
 
 	args := tools.ParseArgs(tc.Args)
-	out, err := tool.Handler(ctx, args)
+	// Потолок времени вызова: индивидуальный Tool.Timeout инструмента,
+	// иначе общий из реестра (GCLI_TOOL_TIMEOUT). Не задан ни один —
+	// инструмент живёт в контексте хода, прежнее поведение.
+	tctx := ctx
+	cancel := func() {}
+	if a.d.Registry != nil {
+		if c, cf := a.d.Registry.ToolCtx(ctx, tool); cf != nil {
+			tctx, cancel = c, cf
+		}
+	}
+	defer cancel()
+	out, err := tool.Handler(tctx, args)
 	elapsed := time.Since(t0)
 
 	text := out.Text
@@ -1227,7 +1238,13 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 		text = warnPrefix + out.Error
 	}
 	if err != nil {
-		text = errPrefix + err.Error()
+		if tctx != ctx && errors.Is(err, context.DeadlineExceeded) {
+			// Сырое «context deadline exceeded» не говорит ни о чём:
+			// называем инструмент и причину — упёрся в лимит времени.
+			text = errPrefix + "инструмент " + tc.Name + " превысил лимит времени и был прерван"
+		} else {
+			text = errPrefix + err.Error()
+		}
 	}
 	if text == "" {
 		text = "(инструмент не вернул результат)"

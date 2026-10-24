@@ -53,7 +53,7 @@ type statsTotals struct {
 
 // statsAggregate — собрать и сгруппировать статистику по сессиям.
 // Чистая функция: легко тестируется, ничего не печатает.
-func statsAggregate(sessions []core.Session, since time.Time) (statsTotals, []statsDayRow, []statsModelRow) {
+func statsAggregate(sessions []core.SessionInfo, since time.Time) (statsTotals, []statsDayRow, []statsModelRow) {
 	var tot statsTotals
 	days := map[string]*statsDayRow{}
 	models := map[string]*statsModelRow{}
@@ -123,12 +123,12 @@ func (a *app) cmdStats(rest string) {
 			return
 		}
 	}
-	a.printStats(a.repo.ListSessions(), days)
+	a.printStats(a.repo.ListSessionInfos(), days)
 }
 
 // printStats — печать дашборда. Отдельная от cmdStats, чтобы работал
 // флаг -stats до входа в REPL.
-func (a *app) printStats(sessions []core.Session, days int) {
+func (a *app) printStats(sessions []core.SessionInfo, days int) {
 	since := time.Now().AddDate(0, 0, -days+1).Truncate(24 * time.Hour)
 	tot, dayRows, modelRows := statsAggregate(sessions, since)
 
