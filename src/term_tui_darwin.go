@@ -57,3 +57,11 @@ func stdinIsTerminal() bool {
 		uintptr(syscall.TIOCGETA), uintptr(unsafe.Pointer(&t)), 0, 0, 0)
 	return errno == 0
 }
+
+// rawTUIHint — подсказка к отказу raw-режима на macOS.
+func rawTUIHint() string {
+	if !stdinIsTerminal() {
+		return " · stdin не терминал (пайп?) — полноэкранному режиму нужен настоящий tty"
+	}
+	return ""
+}

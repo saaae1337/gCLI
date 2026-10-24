@@ -23,7 +23,17 @@ var (
 )
 
 const (
-	stdInputHandle            = ^uintptr(10) // (DWORD)-10
+	// stdInputHandle — (DWORD)-10, STD_INPUT_HANDLE.
+	//
+	// Раньше здесь стояло ^uintptr(10) с тем же комментарием «(DWORD)-10»,
+	// но ^10 — это -11 (STD_OUTPUT_HANDLE): битовая инверсия n даёт −n−1,
+	// а не −n. GetStdHandle возвращал хэндл STDOUT, GetConsoleMode на нём
+	// честно отдавал выходной режим, а SetConsoleMode отвергал входные
+	// флаги (0x0200 ENABLE_VIRTUAL_TERMINAL_INPUT — вход-only). Итог:
+	// raw-режим на Windows не включался никогда, и полноэкранный
+	// интерфейс откатывался в построчный с «не удалось включить
+	// raw-режим», а горячие клавиши построчного REPL молча не работали.
+	stdInputHandle            = ^uintptr(9) // (DWORD)-10
 	cEnableProcessedInput     = 0x0001
 	cEnableLineInput          = 0x0002
 	cEnableEchoInput          = 0x0004

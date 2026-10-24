@@ -300,6 +300,15 @@ func main() {
 
 	a.setupUI(*flagNoColor, *flagUnicode, *flagCompact, *flagJSON, *flagColor)
 	a.tuiWanted = a.tuiReady(isTerminal(), !*flagUnicode && unicodeOK, *flagJSON)
+	// mintty (Git Bash) не даёт нативной программе консольных хэндлов:
+	// stdin/stdout приходят пайпами, и полноэкранный интерфейс там
+	// недостижим в принципе. Перезапускаем себя под winpty — он входит
+	// в Git for Windows и решает это ровно так же, как у fzf.
+	if relaunched, note := winptyRelaunch(*flagJSON); relaunched {
+		return // наследник отработал, код выхода уже применён
+	} else if note != "" {
+		a.startupNotes = append(a.startupNotes, note)
+	}
 	a.quiet = *flagJSON
 	if *flagJSON {
 		// Тишина должна действовать на весь вывод, а не только на ветку -p:
