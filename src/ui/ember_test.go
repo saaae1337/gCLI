@@ -200,8 +200,11 @@ func TestEmberPrompt(t *testing.T) {
 // Появление строк работает в «УГЛЕ» — но требует цвета.
 func TestEmberRevealVsAnimate(t *testing.T) {
 	// Появление строк требует цвета (затуханию нечему гаситься без него).
+	// Grade задан явно: без него New() уходит в detectColorLevel(), который
+	// в окружении с NO_COLOR=1 или TERM=dumb (CI-песочницы) отдаёт colorNone
+	// — и тест завязан на переменные среды, а не на логику пакета.
 	buf := &strings.Builder{}
-	u := New(Options{Theme: "ember", Unicode: true, Color: true, Animations: true, Width: 60, Out: buf})
+	u := New(Options{Theme: "ember", Unicode: true, Color: true, Grade: Color16, Animations: true, Width: 60, Out: buf})
 	if !u.canReveal() {
 		t.Error("появление строк должно работать и в «УГЛЕ»")
 	}
