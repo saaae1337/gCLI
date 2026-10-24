@@ -46,6 +46,28 @@ func TestProgressShowsTargetError(t *testing.T) {
 	}
 }
 
+// Переводы строк в полях события приходят из чужих горутин (путь с \n,
+// многострочный текст ошибки) и не должны разрывать журнал на части.
+func TestProgressSanitizesNewlines(t *testing.T) {
+	u, buf := testUI()
+	u.Progress(ProgressUpdate{
+		Title: "multi\nread",
+		Label: "файл\nимя",
+		Done:  1,
+		Total: 2,
+		Ok:    false,
+		Err:   "ошибка\nвторая строка",
+	})
+
+	out := buf.String()
+	if n := strings.Count(out, "\n"); n != 1 {
+		t.Errorf("событие прогресса напечатано %d строками:\n%q", n, out)
+	}
+	if !strings.Contains(out, "multi") || !strings.Contains(out, "файл") {
+		t.Errorf("потеряно начало полей события:\n%q", out)
+	}
+}
+
 // TestProgressFinalIsSummaryNotCounter — финальное событие печатается
 // сводкой. Счётчик «7/7» после итоговой фразы выглядел бы как начало
 // новой операции, а следующая карточка инструмента только усилила бы

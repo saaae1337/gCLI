@@ -44,13 +44,69 @@ func TestRailKeepsResultAligned(t *testing.T) {
 	})
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 	for i, l := range lines {
-		if w := VisibleWidth(l); w > 70 {
+		if w := visibleWidth(l); w > 70 {
 			t.Errorf("строка %d шире терминала (%d > 70): %q", i, w, l)
 		}
 	}
 	// Вызов и результат связаны «зубцом» на том же поле.
 	if !strings.Contains(StripANSI(lines[1]), u.emberTickOf()) {
 		t.Errorf("в строке результата нет зубца: %q", lines[1])
+	}
+}
+
+// Имя инструмента и аргументы с CJK меряются в колонках: расчёт по
+// рунам оставлял аргументам лишнее место и строка уезжала за край.
+func TestRailCJKWidth(t *testing.T) {
+	u, buf := uiAt(ColorNone, 40)
+	name := strings.Repeat("日", 5)
+	u.ToolStart(ToolCall{
+		Name: name,
+		Args: strings.Repeat("本", 30),
+		Kind: "read",
+	})
+	u.ToolEnd(ToolCall{
+		Name:   name,
+		Kind:   "read",
+		Detail: strings.Repeat("結", 30),
+		Status: "fail",
+	})
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if w := cellWidth(line); w > 40 {
+			t.Errorf("строка рельса шире 40 колонок (%d): %q", w, line)
+		}
+	}
+}
+
+// NO_COLOR сильнее явного Color: true: вызывающий может включить цвет по
+// умолчанию, но среда уже попросила его не печатать.
+func TestNoColorDisablesForcedColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	buf := &strings.Builder{}
+	u := New(Options{Unicode: true, Color: true, Width: 40, Out: buf})
+
+	if got := u.Red("текст"); strings.ContainsRune(got, 0x1B) {
+		t.Errorf("NO_COLOR не отключил цвет: %q", got)
+	}
+	u.Ok("готово")
+	if strings.ContainsRune(buf.String(), 0x1B) {
+		t.Errorf("в выводе остались escape-коды: %q", buf.String())
+	}
+	if got := u.ColorLevel(); got != ColorNone {
+		t.Errorf("уровень цвета %v вместо none", got)
+	}
+}
+
+// TERM=dumb — терминал без управления: цвета и escape-коды в него писать
+// нельзя, даже если Windows-ветка по умолчанию считает иначе.
+func TestTermDumbDisablesColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("COLORTERM", "")
+	t.Setenv("TERM", "dumb")
+	t.Setenv("WT_SESSION", "")
+	t.Setenv("ConEmuANSI", "")
+	t.Setenv("TERM_PROGRAM", "")
+	if got := detectColorLevel(); got != colorNone {
+		t.Errorf("TERM=dumb дал уровень %v вместо none", got)
 	}
 }
 
@@ -95,7 +151,7 @@ func TestStatusGlyphs(t *testing.T) {
 		"skip":   "⊘",
 	}
 	for status, want := range cases {
-		got, color := u.statusGlyph(status)
+		got, color := u.emberStatusGlyph(status)
 		if got != want {
 			t.Errorf("статус %q: глиф %q, ожидался %q", status, got, want)
 		}

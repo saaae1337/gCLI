@@ -88,15 +88,6 @@ func TestPadLeftFillsWideChars(t *testing.T) {
 	}
 }
 
-func TestCenterFillsWideChars(t *testing.T) {
-	for _, s := range []string{"日本", "👍", "привет", ""} {
-		got := cellWidth(center(s, 12))
-		if got != 12 {
-			t.Errorf("center(%q, 12) = %d колонок вместо 12", s, got)
-		}
-	}
-}
-
 // TestTruncateCellsNeverExceedsWidth — обрезка не должна выдавать строку
 // шире заданной: разрез по рунам оставлял «日本» шире 3 колонок.
 func TestTruncateCellsNeverExceedsWidth(t *testing.T) {

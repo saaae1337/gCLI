@@ -26,9 +26,6 @@ var (
 	reItalic    = regexp.MustCompile(`(^|[^*\w])\*([^*\n]+)\*`)
 )
 
-// streamFence — состояние блока кода для RenderLine.
-type fenceKey struct{}
-
 // Stream — потоковый рендерер markdown для стриминга ответа модели.
 type Stream struct {
 	u     *UI
@@ -43,6 +40,9 @@ type streamState struct {
 
 // NewStream — создать потоковый рендерер.
 func (u *UI) NewStream() *Stream {
+	if sink := u.sink(); sink != nil {
+		sink.BeginStream()
+	}
 	return &Stream{u: u, state: &streamState{}}
 }
 
@@ -64,7 +64,9 @@ func (s *Stream) Write(chunk string) {
 		if i < 0 {
 			break
 		}
-		line := s.pend[:i]
+		// Ответ может прийти с CRLF: оставшийся «\r» вернул бы курсор
+		// в начало строки и испортил уже напечатанный текст.
+		line := strings.TrimSuffix(s.pend[:i], "\r")
 		s.pend = s.pend[i+1:]
 		s.u.Println(s.u.renderLine(line, s.state))
 	}
@@ -79,6 +81,9 @@ func (s *Stream) End() {
 	if s.state.fence {
 		s.u.Println(s.u.Gray(s.u.g.BL + s.u.g.H + s.u.g.H))
 		s.state.fence = false
+	}
+	if sink := s.u.sink(); sink != nil {
+		sink.EndStream()
 	}
 }
 
@@ -130,7 +135,7 @@ func (u *UI) renderLine(line string, st *streamState) string {
 			// Заголовок ответа — ровно как заголовок блока: тот же
 			// ромб и та же линия вправо. Иначе он уезжает в край
 			// терминала и выглядит как вывод чужой программы.
-			n := maxInt(4, minInt(runeLen(title), u.Width()-6))
+			n := maxInt(4, minInt(cellWidth(title), u.Width()-6))
 			return "  " + u.emberMark(u.pal.Accent) + " " + body + " " +
 				u.emberRule(n)
 		}
@@ -203,9 +208,10 @@ func (u *UI) inline(s string) string {
 			return m
 		}
 		url := p[2]
-		// Длинный URL укорачиваем.
-		if runeLen(url) > 34 {
-			url = u.c(u.pal.Muted, url[:31]) + u.c(u.pal.Link, "…")
+		// Длинный URL укорачиваем по колонкам: срез по байтам рвал
+		// многобайтовый UTF-8 посреди символа.
+		if cellWidth(url) > 34 {
+			url = u.c(u.pal.Muted, truncateCells(url, 31)) + u.c(u.pal.Link, "…")
 		} else {
 			url = u.c(u.pal.Link, url)
 		}
@@ -259,24 +265,10 @@ func (u *UI) inline(s string) string {
 }
 
 // StripANSI — убрать escape-последовательности (для экспорта и подсчёта ширины).
-func StripANSI(s string) string {
-	var b strings.Builder
-	inEsc := false
-	for _, r := range s {
-		if inEsc {
-			if r == 'm' {
-				inEsc = false
-			}
-			continue
-		}
-		if r == '\033' {
-			inEsc = true
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
+//
+// Разбор общий с width.go: прежняя версия знала только SGR с финальной «m»
+// и проглатывала весь текст после «ESC[K» или OSC-заголовка.
+func StripANSI(s string) string { return stripANSI(s) }
 
 // minInt — минимум из двух int.
 func minInt(a, b int) int {
@@ -285,9 +277,6 @@ func minInt(a, b int) int {
 	}
 	return b
 }
-
-// VisibleWidth — ширина строки в колонках терминала без ANSI-последовательностей.
-func VisibleWidth(s string) int { return visibleWidth(s) }
 
 // PadRight — дополнить строку пробелами до ширины w (с учётом ANSI).
 func PadRight(s string, w int) string { return padRight(s, w) }

@@ -8,6 +8,7 @@ import (
 
 	"gcli/core"
 	"gcli/providers"
+	"gcli/ui"
 )
 
 func osGOOS() string { return runtime.GOOS + "/" + runtime.GOARCH }
@@ -16,9 +17,10 @@ func osArch() string { return runtime.Version() }
 
 // banner — приветственный экран.
 //
-// Плоская вёрстка в духе Claude Code: три строки параметров сессии —
-// и всё. Кот в баннере не нужен: он сидит на своём единственном посту —
-// над строкой состояния, прямо под этим экраном. Второй кот рядом
+// Сверху — панель окна в духе Terminal.app: «лампочки», название, модель
+// и справа — сколько контекста занято. Под ней — детали сессии: каталог,
+// ключ, режимы. Кот в баннере не нужен: он сидит на своём единственном
+// посту — над строкой состояния, прямо под этим экраном. Второй кот рядом
 // выглядел бы как баг, а не как встреча.
 func (a *app) banner() {
 	// Правая колонка: не больше трёх строк — по числу строк кота.
@@ -40,20 +42,27 @@ func (a *app) banner() {
 	if a.repo.Cfg.PlanMode {
 		line3 += a.ui.Gray("  ·  ") + a.ui.Paint(a.ui.Pal().Warn, "план")
 	}
-	right := []string{
-		a.ui.Accent(a.ui.Glyphs().Star) + " " + a.ui.Bold("gcli") +
-			a.ui.Gray(" v"+version()) + a.ui.Gray("  ·  ИИ-агент в терминале"),
-		a.ui.Gray("модель ") + a.ui.Accent(a.model) + a.ui.Gray("  ·  каталог ") +
-			a.ui.Gray(core.RelToWD(a.workDir, a.workDir)),
+	// Панель окна: название, модель, провайдер и занятый контекст.
+	m := a.metrics()
+	details := []string{
+		a.ui.Gray("модель ") + a.ui.Accent(a.model) +
+			a.ui.Gray("  ·  ") + a.ui.Gray(m.Provider) +
+			a.ui.Gray("  ·  каталог ") + a.ui.Gray(core.RelToWD(a.workDir, a.workDir)),
 		a.ui.Gray("ключ ") + key + a.ui.Gray("  ·  ") + line3,
 	}
 	// Автопилот — предупреждаем сразу, чтобы режим не был сюрпризом.
 	if ap, risk := a.autopilotChip(); ap != "" {
-		right[2] += a.ui.Gray("  ·  ") + a.ui.Paint(a.ui.Pal().Warn, "автопилот ") + a.ui.Paint(risk, ap)
+		details[1] += a.ui.Gray("  ·  ") + a.ui.Paint(a.ui.Pal().Warn, "автопилот ") + a.ui.Paint(risk, ap)
 	}
 
+	a.ui.TitleBar(ui.TitleBarOpts{
+		Title:    "gcli v" + version(),
+		Subtitle: "ИИ-агент в терминале",
+		Right:    "ctx " + m.ContextText(),
+	})
+
 	a.ui.Println("")
-	for _, line := range right {
+	for _, line := range details {
 		a.ui.Println("  " + line)
 	}
 	a.PrintNoKeyHint()
@@ -94,7 +103,6 @@ func usage() {
 	fmt.Println("Основное:")
 	fmt.Println("  -p <запрос>       один запрос и выход (для скриптов и CI)")
 	fmt.Println("  -watch <команда>  слежение за файлами; проверка упала — агент чинит")
-	fmt.Println("  -serve <адрес>    HTTP-сервер: API /v1/status, /v1/message, /v1/events")
 	fmt.Println("  -mcp-serve        gcli как MCP-сервер по stdio (для других агентов)")
 	fmt.Println("  -stats            дашборд расходов по сессиям и выход")
 	fmt.Println("  -c                продолжить последнюю сессию")
@@ -116,6 +124,8 @@ func usage() {
 	fmt.Println("  -deadline <срок>  4h, 90m или число минут")
 	fmt.Println("  -budget <предел>  500k (токены), 25 (доллары), 500k,25 (оба)")
 	fmt.Println("  -objective <цель> цель одной строкой")
+	fmt.Println("  -cron on|off      автономные итерации: агент сам чинит баги, проблемы, уязвимости при тишине 15–20 мин")
+	fmt.Println("  -cron-interval <длительность>  интервал итераций (по умолчанию 15–20 мин)")
 	fmt.Println("  Задание живёт в .gcli/mission.json; флаги переопределяют его на этот запуск.")
 	fmt.Println("  То же самое из разговора: /mission start long-time 4h 1m «цель»")
 	fmt.Println()

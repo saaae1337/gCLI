@@ -291,26 +291,41 @@ func (u *UI) canMascot() bool {
 // MascotSpeak — маскот говорит: кадр состояния + реплика в «облачке»
 // из тире. Без рамок — в духе плоской вёрстки темы.
 func (u *UI) MascotSpeak(s MascotState, text string) {
+	if u.sink() != nil {
+		return
+	}
 	u.Println(u.MascotRender(s, 0))
 	if text != "" {
 		indent := strings.Repeat(" ", catWidth+3)
+		// В ASCII-режиме рамка облачка тоже должна быть ASCII:
+		// «╭»/«╰» в консоли без юникода превращаются в кракозябры.
+		head, tail := "╭ ", "╰──────────"
+		if !u.opts.Unicode {
+			head, tail = "+ ", "+----------"
+		}
 		for _, l := range wrap(text, u.Width()-catWidth-6) {
-			u.Println(indent + u.Gray("╭ "+l))
+			u.Println(indent + u.Gray(head+l))
 		}
 		// Хвост облачка указывает на маскота.
-		u.Println(indent + u.Gray("╰──────────"))
+		u.Println(indent + u.Gray(tail))
 	}
 }
 
 // MascotSayLine — короткая реплика маскота одной строкой (без облачка):
 // «  ( -.- )  думает».
 func (u *UI) MascotSayLine(s MascotState, text string) {
+	if u.sink() != nil {
+		return
+	}
 	u.Println("  " + u.mascotInline(s, 0) + "  " + text)
 }
 
 // MascotDance — проиграть анимацию состояния на месте (demo / приветствие):
 // кадры сменяют друг друга, в конце остаётся последний кадр.
 func (u *UI) MascotDance(s MascotState, cycles int) {
+	if u.sink() != nil {
+		return
+	}
 	frames := u.MascotFrames(s)
 	if len(frames) == 0 {
 		return
@@ -319,6 +334,9 @@ func (u *UI) MascotDance(s MascotState, cycles int) {
 		u.Println(u.MascotRender(s, 0))
 		return
 	}
+	// Кадры пишутся напрямую в поток: активная строка ожидания иначе
+	// перерисует танец своими кадрами.
+	u.SpinnerStop()
 	for range catLines(frames[0]) {
 		u.RawWrite("\n")
 	}
@@ -360,15 +378,16 @@ const (
 // «модель · состояние · режим». Порядок печати важен: кот занимает
 // ровно catHeight строк, и фоновая перерисовка знает, где он сидит.
 func (u *UI) MascotPerch() {
-	if !u.mascot || u.quiet {
+	if !u.Mascot() || u.quiet || u.sink() != nil {
 		return
 	}
 	u.Println(u.MascotRender(MascotIdle, 0))
+	// Кот напечатан: с этого момента считаем строки до приглашения.
+	u.mu.Lock()
+	u.mascotLines = 0
+	u.mascotAnchor = 0
+	u.mu.Unlock()
 }
-
-// mascotRedrawTop — сколько строк подниматься от строки ввода до макушки
-// кота: сам кот плюс строка состояния между котом и приглашением.
-const mascotRedrawTop = catHeight + 1
 
 // idleMood — что делает кот спустя d простоя: моргает, скучает или спит.
 // Чистая функция времени — чтобы её можно было проверить тестом.
@@ -390,7 +409,7 @@ func idleMood(d time.Duration) (MascotState, int) {
 	}
 }
 
-// mascotRedraw — перерисовать кота над строкой состояния.
+// mascotRedrawLines — записать готовые строки кадра с сохранением курсора.
 //
 // Вызывается только из idleLoop под мьютексом и только при поднятой
 // привязке (mascotAnchored): курсор стоит на строке приглашения, над ним
@@ -399,19 +418,10 @@ func idleMood(d time.Duration) (MascotState, int) {
 // пользователь уже набрал, не затрагиваются. Запись идёт напрямую в
 // u.out — RawWrite здесь нельзя, он сбросил бы привязку, которую мы
 // как раз проверяем.
-func (u *UI) mascotRedraw(s MascotState, frame int) {
-	if !u.mascot || u.quiet {
-		return
-	}
-	u.mascotRedrawLines(catLines(u.mascotFrameOf(s, frame)))
-}
-
-// mascotRedrawLines — записать готовые строки кадра с сохранением курсора.
-// Вызывается только под мьютексом при поднятой привязке.
 func (u *UI) mascotRedrawLines(lines []string) {
 	var b strings.Builder
 	b.WriteString("\0337")
-	b.WriteString("\033[" + itoa(mascotRedrawTop) + "A")
+	b.WriteString("\033[" + itoa(catHeight+u.mascotAnchor) + "A")
 	for j, line := range lines {
 		if j > 0 {
 			b.WriteString("\n")
@@ -430,12 +440,21 @@ func (u *UI) mascotRedrawLines(lines []string) {
 // отсчитывается заново от каждой усадки — кот не засыпает сразу после
 // команды только потому, что старый таймер не остановлен.
 func (u *UI) MascotIdleStart() {
-	if !u.canMascot() || !u.mascot {
+	if !u.canMascot() || u.sink() != nil {
 		return
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	// Проверяем под тем же мьютексом, что и SetMascot: иначе
+	// выключение маскота в этот момент оставило бы таймер работать.
+	if !u.mascot {
+		return
+	}
 	u.mascotAnchored = true
+	// Привязка: строк между котом и приглашением могло напечатать что угодно
+	// (панель метрик, подсказку). Кот поднимется ровно на столько строк,
+	// сколько их было, — иначе он окажется поверх ответа.
+	u.mascotAnchor = u.mascotLines
 	u.idleSince = time.Now()
 	if u.idleOn {
 		return
@@ -652,17 +671,6 @@ const (
 	shimmerTailK   = 0.45
 	shimmerSecondK = 0.30
 )
-
-// shimmerPeriod — период полного оборота фронта по слову в секундах.
-// Чистая функция длины слова: тест проверяет цикличность по ней, а не
-// дублируя формулу из shimmerWord.
-func shimmerPeriod(word string) float64 {
-	n := runeLen(word)
-	if n < 1 {
-		return 0
-	}
-	return float64(n) / shimmerSpeed
-}
 
 // gauss — гауссова кривая: 1 в нуле, быстро гаснет по краям.
 func gauss(x float64) float64 { return math.Exp(-x * x) }

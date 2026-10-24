@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
 	"runtime"
@@ -31,6 +32,7 @@ import (
 	"gcli/providers"
 	"gcli/subagents"
 	"gcli/tools"
+	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -53,15 +55,17 @@ type app struct {
 	workDir string
 	stdin   *stdinReader
 
+	// tui — полноэкранный интерфейс. nil в обычном построчном режиме
+	// (пайп, CI, -p, -json, -ascii, -plain).
+	tui *tui.App
+	// tuiWanted — интерфейс выбран при старте; создаётся после загрузки
+	// сессии и модели (имя модели нужно шапке).
+	tuiWanted bool
+
 	// lsp — хаб language servers: один на процесс, переживает пересборки
 	// реестра. Создаётся лениво по первому .go/.ts/… файлу; Shutdown — перед
 	// выходом, чтобы не оставлять процессы-сироты gopls.
 	lsp *tools.LSPHub
-
-	// serveBus — шина SSE-событий для -serve. nil вне серверного режима:
-	// publish на nil-приёмнике безопасен, поэтому в TUI-режиме ничего
-	// не стоит проверять.
-	serveBus *serveBus
 
 	// missionChain — текущая цепочка миссий (nil = ещё не загружалась;
 	// missionChainEnsure лениво читает .gcli/mission_chain.json).
@@ -136,6 +140,24 @@ type app struct {
 	// setupNotes — замечания при старте, показываются под баннером одной
 	// группой. Снимок startupNotes на момент последней сборки реестра.
 	setupNotes []string
+
+	// sessionStart — когда началась сессия. В панели метрик видно, сколько
+	// времени агент работает: «сессия 4м 12с».
+	sessionStart time.Time
+	// lastRate — токенов в секунду по последнему запросу, lastElapsed —
+	// его длительность. Обновляются в onUsage, читаются в панели метрик.
+	lastRate    float64
+	lastElapsed time.Duration
+
+	// cron — автономные итерации. Агент сам берёт задачу «продолжить
+	// работу над проектом: найди баги, проблемы, уязвимости, улучшай»,
+	// когда пользователь молчит дольше интервала (15–20 мин) после
+	// завершения хода. Выключено по умолчанию.
+	cronEnabled    bool
+	cronInterval   time.Duration // 15–20 мин, уточняется на каждом цикле
+	cronLastActive time.Time     // время последней активности (ход, ввод, команда)
+	cronDone       chan struct{} // закрыть — остановить фоновую горутину
+	cronMu         sync.Mutex    // защищает cron-поля выше
 
 	// startupNotes — то, что не относится к реестру и должно печататься под
 	// баннером: например, включённая песочница. Список реестра (setupNotes)
@@ -230,6 +252,7 @@ func main() {
 		flagColor        = flag.String("color", "", "уровень цвета: auto | 16 | 256 | truecolor | none")
 		flagNoColor      = flag.Bool("no-color", false, "без цвета")
 		flagUnicode      = flag.Bool("ascii", false, "только ASCII-псевдографика")
+		flagPlain        = flag.Bool("plain", false, "обычный построчный интерфейс (без полноэкранного TUI)")
 		flagCompact      = flag.Bool("compact", false, "компактный вывод")
 		flagSubagent     = flag.String("subagent", "", "разрешить субагентов: on | off")
 		flagMission      = flag.String("mission", "", "автономный прогон: long-time | extra-long-time | overnight (или путь к mission.json)")
@@ -238,13 +261,18 @@ func main() {
 		flagObjective    = flag.String("objective", "", "цель прогона одной строкой")
 		flagStats        = flag.Bool("stats", false, "дашборд расходов по сессиям и выход")
 		flagWatch        = flag.String("watch", "", "режим слежения: команда проверки; упала — агент чинит (gcli -watch \"go test ./...\")")
-		flagServe        = flag.String("serve", "", "HTTP-сервер: адрес (127.0.0.1:8642); API: /v1/status, /v1/message, /v1/events")
-		flagServeToken   = flag.String("serve-token", "", "токен доступа для -serve (по умолчанию случайный)")
-		flagUI           = flag.String("ui", "", "веб-интерфейс: адрес (127.0.0.1:8642); открывает оболочку в браузере")
 		flagMCPServe     = flag.Bool("mcp-serve", false, "работать MCP-сервером по stdio (для MCP-хостов: Claude Desktop и др.)")
 		flagBench        = flag.String("bench", "", "self-bench: каталог задач (по умолчанию .gcli/bench); прогон и счёт")
+		flagCron         = flag.String("cron", "", "автономные итерации: on | off (агент сам находит и чинит баги, проблемы, уязвимости, когда пользователь молчит)")
+		flagCronInterval = flag.Duration("cron-interval", 0, "интервал между автономными итерациями: 15m-20m (по умолчанию 15–20 мин со случайным сдвигом)")
 	)
 	flag.Parse()
+
+	// Режимы, в которых полноэкранный интерфейс противопоказан: машинный
+	// вывод, однократный запуск, мастер и печать статистики. Флаг -plain
+	// и GCLI_TUI=0 отключают его вручную.
+	tuiBlocked = *flagPrompt != "" || *flagSetup || *flagStats || *flagBench != "" ||
+		*flagWatch != "" || *flagMCPServe || *flagPlain
 
 	// Консоль готовим до первого же вывода, а не внутри setupUI: до неё
 	// уже печатаются -v и -help, где тоже есть «·». На Windows консоль
@@ -264,25 +292,55 @@ func main() {
 	}
 
 	a := &app{workDir: must(os.Getwd())}
+	// Начало сессии: в панели метрик видно, сколько времени идёт работа.
+	a.sessionStart = time.Now()
 	a.repo = core.Open()
 	a.store = a.repo.Store
 	a.store.Ensure()
 
 	a.setupUI(*flagNoColor, *flagUnicode, *flagCompact, *flagJSON, *flagColor)
+	a.tuiWanted = a.tuiReady(isTerminal(), !*flagUnicode && unicodeOK, *flagJSON)
 	a.quiet = *flagJSON
+	if *flagJSON {
+		// Тишина должна действовать на весь вывод, а не только на ветку -p:
+		// иначе команды и служебные сообщения в REPL печатались бы в JSON-режиме.
+		a.ui.SetQuiet(true)
+	}
 
 	a.registry = providers.Build(a.repo.Cfg)
 	a.client = providers.NewClient()
 	a.prov = a.registry.Pick(*flagProv)
+	// Смена ключа на лету должна быть видна: подписываем провайдера на
+	// уведомление о переключении.
+	a.bindKeyRotate(a.prov)
 	a.model = providers.ResolveModel(a.prov, *flagModel, a.repo.Cfg.Model)
 
-	// Флаги переопределяют конфиг.
-	if *flagSubagent != "" {
-		a.repo.Cfg.Subagents = *flagSubagent != "off"
+	// Флаги переопределяют конфиг. Опечатка не должна молча выключать
+	// защиту: для -snapshots «любое не on» раньше означало off, и
+	// «-snapshots of» тихо отключал страховку.
+	if s := strings.ToLower(strings.TrimSpace(*flagSubagent)); s != "" {
+		switch s {
+		case "on", "вкл", "1", "true", "да":
+			a.repo.Cfg.Subagents = true
+		case "off", "выкл", "0", "false", "нет":
+			a.repo.Cfg.Subagents = false
+		default:
+			a.startupNotes = append(a.startupNotes,
+				"Флаг -subagent: не понял "+strconv.Quote(*flagSubagent)+" — ждал on или off, оставляю как в конфиге")
+		}
 	}
-	if *flagSnapshots != "" {
-		on := *flagSnapshots == "on"
-		a.repo.Cfg.Snapshots = &on
+	if s := strings.ToLower(strings.TrimSpace(*flagSnapshots)); s != "" {
+		switch s {
+		case "on", "вкл", "1", "true", "да":
+			on := true
+			a.repo.Cfg.Snapshots = &on
+		case "off", "выкл", "0", "false", "нет":
+			on := false
+			a.repo.Cfg.Snapshots = &on
+		default:
+			a.startupNotes = append(a.startupNotes,
+				"Флаг -snapshots: не понял "+strconv.Quote(*flagSnapshots)+" — ждал on или off, оставляю как в конфиге")
+		}
 	}
 	// Песочница включается флагом или переменной окружения. Сначала
 	// собираем Env: без него buildTools не увидит песочницу.
@@ -303,8 +361,15 @@ func main() {
 	a.buildTools()
 	a.buildPool()
 	a.applyMascot()
+	// Дочерние процессы (MCP-серверы, language servers) и журнал миссии
+	// обязаны закрыться на любом выходе, а не только из REPL: gcli -p,
+	// -bench и аварийные ветки иначе оставляли бы сирот.
+	defer a.shutdown()
 
-	a.stdin = newStdin()
+	a.stdin = nil
+	if !a.tuiWanted {
+		a.stdin = newStdin()
+	}
 
 	// Сессия.
 	a.sess = a.loadInitialSession(*flagResume, *flagContinue)
@@ -333,8 +398,30 @@ func main() {
 		on := s == "on" || s == "вкл" || s == "1" || s == "true"
 		a.setAutopilotAll(on)
 	}
+	// Автономные итерации: конфиг → флаг (флаг сильнее).
+	if *flagCron != "" {
+		a.cronEnabled = *flagCron == "on" || *flagCron == "вкл" || *flagCron == "1" || *flagCron == "true"
+	} else {
+		a.cronEnabled = a.repo.Cfg.Cron
+	}
+	if a.cronEnabled {
+		a.cronDone = make(chan struct{})
+		if *flagCronInterval > 0 {
+			a.cronInterval = *flagCronInterval
+		} else {
+			a.cronInterval = cronNextInterval()
+		}
+		a.cronLastActive = time.Now()
+		go a.cronLoop()
+	}
 	a.sess.Provider = a.prov.ID
 	a.sess.Model = a.model
+	// Полноэкранный интерфейс создаётся здесь: шапке нужны модель,
+	// провайдер и номер сессии. Если он не поднялся, ввод остаётся за
+	// обычным stdinReader.
+	if !a.startTUI() && a.stdin == nil {
+		a.stdin = newStdin()
+	}
 	defer a.saveSession()
 
 	// Задание автономного прогона: файл проекта, поверх — флаги.
@@ -344,6 +431,7 @@ func main() {
 		if !a.quiet {
 			a.ui.Err(err.Error())
 		}
+		a.shutdown()
 		os.Exit(1)
 	}
 	// Продолжение после обрыва проверяется ДО старта нового трекера: оно
@@ -355,18 +443,8 @@ func main() {
 
 	a.installSignalHandler()
 
-	// Ctrl+O читаем ровно один раз на весь сеанс (см. watchKeys): и во
-	// время хода, и между ходами. Иначе мысли последнего ответа уехали
-	// бы вверх по экрану навсегда, а на границе ходов нажатие
-	// обрабатывалось бы двумя конкурирующими читателями.
-	keys := a.startWatcher(a.ctrlO)
-	defer keys.stopWatcher()
-
 	// Режим одного запроса (CI/скрипты).
 	if *flagPrompt != "" {
-		if *flagJSON {
-			a.ui.SetQuiet(true)
-		}
 		err := a.turn(*flagPrompt)
 		// Журнал закрывается в обоих случаях: и при ошибке, и при
 		// успешном возврате. Иначе прогон из -prompt оставлял бы журнал
@@ -377,17 +455,7 @@ func main() {
 			if !a.quiet {
 				a.ui.Err(err.Error())
 			}
-			os.Exit(1)
-		}
-		return
-	}
-
-	// UI: тот же сервер, что у -serve, плюс встроенная оболочка и
-	// браузер поверх. Десктоп-обёртка (desktop/) подключается сюда же.
-	if *flagUI != "" {
-		a.serveBus = newServeBus()
-		if err := a.runUI(*flagUI, *flagServeToken); err != nil {
-			fmt.Fprintln(os.Stderr, "gcli ui:", err)
+			a.shutdown()
 			os.Exit(1)
 		}
 		return
@@ -404,28 +472,15 @@ func main() {
 	// Bench: задачи из каталога, прогон агентом, счёт. Работает на
 	// собранном app: нужен workDir и репозиторий конфигов.
 	if *flagBench != "" {
-		bench := *flagBench
-		if bench == "" {
-			bench = ".gcli/bench"
-		}
 		a.store.Ensure()
-		if a.runBench(bench) {
+		if a.runBench(*flagBench) {
+			a.shutdown()
 			os.Exit(1) // провалы — ненулевой код выхода для CI
 		}
 		return
 	}
 
-	// Serve: HTTP+SSE к тому же движку.
-	if *flagServe != "" {
-		a.serveBus = newServeBus()
-		if err := a.runServe(*flagServe, *flagServeToken); err != nil {
-			fmt.Fprintln(os.Stderr, "gcli serve:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	if !a.quiet {
+	if !a.quiet && a.tuiApp() == nil {
 		a.banner()
 	}
 	if *flagSetup {
@@ -437,12 +492,25 @@ func main() {
 		a.printStats(a.repo.ListSessions(), 30)
 		return
 	}
+	// Полноэкранный цикл: ввод, сырые клавиши и подтверждения целиком его.
+	if a.tuiApp() != nil {
+		a.replTUI()
+		return
+	}
 	// Raw-режим stdin — ровно на время REPL. Без него Ctrl+O не работал:
 	// canonical-режим терминала перехватывал байт (VDISCARD при IEXTEN) и
 	// до watchKeys он не доходил, а Ctrl+S замораживал вывод (IXON).
 	// Не терминал (пайп, CI) — enableRaw сам не включится.
 	a.stdin.enableRaw()
 	defer a.stdin.disableRaw()
+	// Ctrl+O читаем ровно один раз на весь сеанс (см. watchKeys): и во
+	// время хода, и между ходами. Иначе мысли последнего ответа уехали
+	// бы вверх по экрану навсегда, а на границе ходов нажатие
+	// обрабатывалось бы двумя конкурирующими читателями. В машинных
+	// режимах (-p, -bench) клавиатура не нужна — читатель там
+	// только висел бы лишней горутиной.
+	keys := a.startWatcher(a.ctrlO)
+	defer keys.stopWatcher()
 	a.repl()
 }
 
@@ -520,7 +588,7 @@ func resolveColor(e colorEnv) (color bool, grade ui.ColorLevel) {
 	if !ok {
 		return color, grade
 	}
-	grade = ui.ColorLevel(lvl)
+	grade = lvl
 	if grade != ui.ColorNone && !e.NoColor && !e.Machine {
 		color = true
 	}
@@ -573,7 +641,13 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 		ShowTime:   a.cfgShowTime(),
 		Width:      width,
 		Grade:      grade,
+		// Блоки и таблицы — в скруглённых рамках: свой интерфейс вместо
+		// потока текста.
+		Panels: true,
 	})
+	// Полноэкранный интерфейс включается только для интерактивного
+	// терминала с юникодом и не в машинных режимах. Решение принимает
+	// вызывающий: флаги режимов живут в main.
 }
 
 func (a *app) cfgShowTime() bool {
@@ -617,6 +691,23 @@ func (a *app) saveSession() {
 	sessMu.Unlock()
 }
 
+// shutdown — закрыть всё, что переживёт процесс: дочерние MCP-серверы и
+// language servers, затем журнал миссии. Идемпотентна: её зовут и defer,
+// и аварийные ветки перед os.Exit, и сигнал.
+func (a *app) shutdown() {
+	if a.tools != nil {
+		a.tools.MCPShutdown()
+	}
+	if a.lsp != nil {
+		a.lsp.Shutdown()
+	}
+	a.closeMissionJournal()
+	// Остановить фоновую горутину автономных итераций.
+	if a.cronDone != nil {
+		close(a.cronDone)
+	}
+}
+
 // buildTools — собрать реестр инструментов.
 func (a *app) buildTools() {
 	// Замечания относятся к конкретной сборке реестра. Без сброса повторная
@@ -655,13 +746,13 @@ func (a *app) buildTools() {
 		a.tools.RegisterSubagentTools()
 	}
 	a.tools.RegisterExtTools()
-	if n, warns := a.tools.RegisterMCP(); n > 0 && !a.quiet {
+	n, warns := a.tools.RegisterMCP()
+	if n > 0 && !a.quiet {
 		a.setupNotes = append(a.setupNotes, fmt.Sprintf("MCP: подключено инструментов — %d", n))
-	} else {
-		for _, w := range warns {
-			a.setupNotes = append(a.setupNotes, w)
-		}
 	}
+	// Одно подключённое расширение не должно прятать предупреждения
+	// о соседних: раньше они терялись, если n > 0.
+	a.setupNotes = append(a.setupNotes, warns...)
 	a.reportPendingCode()
 }
 
@@ -814,9 +905,18 @@ func (a *app) installSignalHandler() {
 			a.mu.Lock()
 			c := a.cancel
 			running := a.running
+			tuiApp := a.tui
 			a.mu.Unlock()
 			if running && c != nil {
 				c()
+				continue
+			}
+			// В полноэкранном режиме терминал возвращает не os.Exit, а
+			// цикл интерфейса: он снимет raw-режим и выйдет из
+			// альтернативного экрана. Иначе Ctrl+C (присланный извне)
+			// оставил бы консоль в «слепом» состоянии.
+			if tuiApp != nil {
+				tuiApp.Quit()
 				continue
 			}
 			if !a.quiet {
@@ -826,11 +926,13 @@ func (a *app) installSignalHandler() {
 			// Терминал обязан вернуться в исходный режим ДО os.Exit:
 			// defer не выполнится, и после второго Ctrl+C пользователь
 			// остался бы со «слепым» терминалом без эха.
-			a.stdin.disableRaw()
+			if a.stdin != nil {
+				a.stdin.disableRaw()
+			}
 			// Прогон мог остаться неоконченным, и журнал обязан это
 			// сказать: иначе следующий запуск увидит последний чекпоинт
 			// и предложит продолжение, хотя человек закрыл его сам.
-			a.closeMissionJournal()
+			a.shutdown()
 			a.saveSession()
 			os.Exit(130)
 		}
@@ -944,13 +1046,10 @@ func (a *app) onReason(s string) {
 	a.markReasonPrinted(len(s))
 }
 
-// onReasonPub — onReason плюс публикация куска в SSE-шину для машинных
-// клиентов (/v1/events): терминал показывает размышления по Ctrl+O,
-// оболочка — свёрнутым блоком. Отдельный метод: тест проверяет, что
-// размышления доезжают до подписчиков, не поднимая агента.
+// onReasonPub — onReason: размышления доезжают до подписчиков, не поднимая
+// агента. (SSE-шина удалена вместе с веб-интерфейсом.)
 func (a *app) onReasonPub(s string) {
 	a.onReason(s)
-	a.serveBus.publish("reason", s)
 }
 
 // openThinkStream — открыть на экране поток размышлений: погасить строку
@@ -1006,13 +1105,6 @@ func (a *app) markReasonPrinted(n int) {
 	a.reasonMu.Lock()
 	defer a.reasonMu.Unlock()
 	a.reasonPrintedLen += n
-}
-
-// reasonText — накопленные размышления текущего хода.
-func (a *app) reasonText() string {
-	a.reasonMu.Lock()
-	defer a.reasonMu.Unlock()
-	return a.reasonBuf.String()
 }
 
 // toggleReason — Ctrl+O: показать размышления или свернуть их обратно.
@@ -1121,8 +1213,8 @@ func (a *app) showLastReason() {
 }
 
 // reasonPastShown — печатал ли REPL вывод после последнего блока мыслей.
-// Флаг живёт вне reasonMu: его читает только REPL (единственный поток
-// управления, вызывающий ctrlO), писать его тоже только он.
+// Читает флаг только REPL (единственный поток управления, вызывающий ctrlO),
+// а пишут showLastReason/clearReasonPast — поэтому доступ идёт под reasonMu.
 func (a *app) reasonPastShown() bool {
 	a.reasonMu.Lock()
 	defer a.reasonMu.Unlock()
@@ -1135,14 +1227,6 @@ func (a *app) clearReasonPast() {
 	a.reasonMu.Lock()
 	a.reasonPast = false
 	a.reasonMu.Unlock()
-}
-
-// reasonShownAll — показывали ли уже весь накопленный блок в этом ходу
-// (чтобы не печатать один и тот же текст дважды).
-func (a *app) reasonShownAll() bool {
-	a.reasonMu.Lock()
-	defer a.reasonMu.Unlock()
-	return a.reasonAny && a.reasonPrintedLen >= a.reasonBuf.Len()
 }
 
 // resetReason — новый ход: буфер и состояние хода обнуляются, воля
@@ -1280,6 +1364,8 @@ func (a *app) turn(text string) error {
 	// показа (Ctrl+O) при этом сохраняется — она настройка пользователя,
 	// а не состояние хода.
 	a.resetReason()
+	// Любой ход — активность: сбрасываем таймер автономных итераций.
+	a.cronTouch()
 	defer func() {
 		// Сначала «закрываем» ход: размышления становятся последними, и Ctrl+O
 		// между ходами показывает именно их. Потом — running=false: держать
@@ -1293,9 +1379,11 @@ func (a *app) turn(text string) error {
 		a.mu.Unlock()
 		cancel()
 		a.saveSession()
+		// Ход завершён — обновим метку активности для cron.
+		a.cronTouch()
 	}()
 
-	ag := a.newAgent(ctx, false)
+	ag := a.newAgent(false)
 	// Кот работает: строка «thinking...» с его мордочкой переливается
 	// под эхом задачи. Первый delta гасит строку, конец хода — тоже.
 	// Поза кота над строкой состояния не трогаем: после Enter курсор
@@ -1306,7 +1394,11 @@ func (a *app) turn(text string) error {
 		if a.repo.Cfg.PlanMode {
 			state, word = ui.MascotPensive, "planning..."
 		}
-		a.ui.RequestEcho(text)
+		// В полноэкранном режиме запрос уже стоит в ленте: печатать эхо
+		// второй раз — дублировать его.
+		if a.tuiApp() == nil {
+			a.ui.RequestEcho(text)
+		}
 		a.ui.SetSpinnerMascot(state)
 		a.ui.ShimmerStart(word, state)
 	}
@@ -1325,11 +1417,90 @@ func (a *app) turn(text string) error {
 	return err
 }
 
-// newAgent — собрать агента с UI-обработчиками.
-func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
+// cronTouch — пометить момент активности (ход или ввод пользователя).
+func (a *app) cronTouch() {
+	if !a.cronEnabled {
+		return
+	}
+	a.cronMu.Lock()
+	a.cronLastActive = time.Now()
+	a.cronMu.Unlock()
+}
+
+// cronNextInterval — следующий интервал ожидания: 15–20 минут со случайным
+// сдвигом, чтобы итерации разных сессий не били в один такт.
+func cronNextInterval() time.Duration {
+	return 15*time.Minute + time.Duration(rand.Int63n(int64(5*time.Minute)))
+}
+
+// cronLoop — фоновая горутина автономных итераций.
+// Тикает каждые 30 секунд; если пользователь молчит дольше интервала и
+// агент не занят, отправляет универсальную задачу самосовершенствования.
+func (a *app) cronLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.cronDone:
+			return
+		case <-ticker.C:
+			a.cronTick()
+		}
+	}
+}
+
+func (a *app) cronTick() {
+	a.cronMu.Lock()
+	enabled := a.cronEnabled
+	lastActive := a.cronLastActive
+	interval := a.cronInterval
+	a.cronMu.Unlock()
+	if !enabled {
+		return
+	}
+	// Не лезем, пока идёт ход или пользователь только что вводил.
+	a.mu.Lock()
+	running := a.running
+	a.mu.Unlock()
+	if running {
+		return
+	}
+	if time.Since(lastActive) < interval {
+		return
+	}
+	// Время пришло: поставить задачу и обновить метку активности, чтобы
+	// не бить в такт, пока пользователь молчит.
+	a.cronTouch()
+	if err := a.turn(cronUniversalPrompt()); err != nil && !a.quiet {
+		a.ui.Err("cron-iteration: " + err.Error())
+	}
+}
+
+// cronUniversalPrompt — универсальная задача для автономной итерации:
+// продолжать работу над проектом, искать баги, проблемы, уязвимости,
+// улучшать код.
+func cronUniversalPrompt() string {
+	return "Продолжай работу над проектом самостоятельно.\n\n" +
+		"Твоя задача — найти и исправить баги, проблемы и уязвимости, а затем улучшить проект дальше.\n\n" +
+		"Что делать:\n" +
+		"1. Просмотри структуру проекта, ключевые файлы и недавние изменения.\n" +
+		"2. Найди баги: обработка ошибок, пограничные случаи, необработанные nil, паники, утечки ресурсов (файлы, сети, горутины).\n" +
+		"3. Найди проблемы безопасности: SSRF, инъекции, обход путей (path traversal), валидация ввода, секреты в коде.\n" +
+		"4. Найди проблемы надёжности: гонки данных, конкурентность, таймауты, повторные попытки, деградация при сбоях.\n" +
+		"5. Найди проблемы качества: дублирование кода, мёртвый код, непонятные имена, отсутствие типов/проверок.\n" +
+		"6. Исправь найденные проблемы: правь код, добавляй проверки, улучшай обработку ошибок.\n" +
+		"7. После изменений прогони тесты (go test ./...), проверь сборку (go build ./...) и ветеринар (go vet ./...).\n" +
+		"8. Делай чекпоинты перед изменениями — если что-то сломалось, всегда можно откатиться (/revert).\n" +
+		"9. Не ломай работающий код ради косметики: улучшай только там, где есть реальная выгода.\n" +
+		"10. По итогу напиши краткий отчёт: что нашёл, что исправил, что осталось открытым.\n\n" +
+		"Работай осторожно и пошагово. Сначала изучи, потом исправь, потом проверь."
+}
+
+// ---------- Новый агент ----------
+func (a *app) newAgent(quiet bool) *agent.Agent {
 	stream := a.ui.NewStream()
 	a.stream = stream
-	thinking := false
 
 	ag := agent.New(agent.Deps{
 		Providers: a.client,
@@ -1339,8 +1510,8 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 		Model:     a.model,
 		Think:     providers.ThinkState(a.repo.Cfg),
 		Memory:    a.memory.Collect,
-		SkillsPrompt: func() string {
-			return a.tools.SkillsPromptBlock()
+		SkillsPrompt: func(query string) string {
+			return a.tools.SkillsPromptBlockFor(query)
 		},
 		MaxIters:    a.maxIters(),
 		MaxItersAbs: a.maxItersAbs(),
@@ -1356,39 +1527,19 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 		OnDelta: func(s string) {
 			// Первый кусок ответа — маскот умолкает и уступает место тексту.
 			a.ui.SpinnerStop()
-			if thinking {
-				if !quiet && !a.quiet {
-					a.ui.ThinkEnd()
-				}
-				thinking = false
-			}
 			// Ответ пошёл — поток размышлений закрыт. Дальше модель
 			// размышляет уже по ходу инструментов (в agent-режиме), и
 			// Ctrl+O снова покажет накопленное.
 			a.closeThinkStream()
 			stream.Write(s)
-			// SSE-подписчикам /v1/events отдаём тот же поток: дельты —
-			// дешёвые события, медленный подписчик их не тормозит.
-			a.serveBus.publish("delta", s)
 		},
-		// Размышления в TUI показываются по Ctrl+O, в оболочке — свёрнутым
-		// блоком; накопление в буфере размышлений делает onReason.
+		// Размышления в TUI показываются по Ctrl+O; накопление в буфере
+		// размышлений делает onReason.
 		OnReason: a.onReasonPub,
 		OnToolStart: func(tc core.ToolCall, tool *tools.Tool) {
-			a.serveBus.publish("tool_start", map[string]any{
-				// id нужен оболочке: карточки по имени склеивались,
-				// когда модель звала один инструмент дважды параллельно.
-				"id": tc.ID, "name": tc.Name, "args": shortArgs(tc), "kind": tool.Category,
-			})
 			a.onToolStart(tc, tool)
 		},
 		OnToolDone: func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
-			status, detail := serveToolStatus(res, err)
-			a.serveBus.publish("tool_done", map[string]any{
-				"id": tc.ID, "name": tc.Name, "status": status,
-				"detail":     core.Truncate(core.OneLine(detail), 200),
-				"elapsed_ms": elapsed.Milliseconds(),
-			})
 			a.onToolDone(tc, tool, res, err, elapsed)
 		},
 		OnUsage: a.onUsage,
@@ -1408,7 +1559,6 @@ func (a *app) newAgent(ctx context.Context, quiet bool) *agent.Agent {
 	if a.repo.Cfg.PlanMode {
 		ag.System = planModeSystem
 	}
-	_ = ctx
 	return ag
 }
 
@@ -1489,6 +1639,7 @@ func (a *app) onToolStart(tc core.ToolCall, tool *tools.Tool) {
 	// строки карточка инструмента дописалась бы в хвост последней мысли.
 	a.closeThinkStream()
 	a.ui.ToolStart(ui.ToolCall{
+		ID:   tc.ID,
 		Name: tc.Name,
 		Args: shortArgs(tc),
 		Kind: cat,
@@ -1524,10 +1675,16 @@ func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, e
 		detail = "готово"
 	}
 	lines := 0
-	if res.Text != "" {
-		lines = len(core.SplitLines(res.Text))
+	// Число строк показываем, только когда их больше одной: у одиночной
+	// строки «1 стр.» — шум, ничего не добавляющий. У картинки строк нет
+	// вовсе.
+	if res.Text != "" && len(res.Images) == 0 {
+		if n := len(core.SplitLines(res.Text)); n > 1 {
+			lines = n
+		}
 	}
 	a.ui.ToolEnd(ui.ToolCall{
+		ID:      tc.ID,
 		Name:    tc.Name,
 		Kind:    tool.Category,
 		Detail:  detail,
@@ -1545,11 +1702,29 @@ func (a *app) onUsage(u core.Usage, d time.Duration) {
 	sessMu.Lock()
 	a.sess.Stats.RecordRequest(u, d)
 	sessMu.Unlock()
+
+	// Скорость ВЫВОДА по этому запросу: сколько токенов модель написала
+	// за секунду. Входные токены сюда не входят: они — это повторённый
+	// контекст, и делить их на время значит показывать «2194 tok/s»,
+	// которых никто не писал.
+	rate := 0.0
+	if d > 0 {
+		rate = float64(u.CompletionTokens) / d.Seconds()
+	}
+	a.mu.Lock()
+	a.lastRate = rate
+	a.lastElapsed = d
+	a.mu.Unlock()
+
+	// Снимок расхода нужен и живой строке ожидания: пока модель думает,
+	// видно, как растёт контекст.
+	a.ui.SetMetrics(a.metrics())
+
 	if a.quiet {
 		return
 	}
 	if u.PromptTokens > 0 || u.CompletionTokens > 0 {
-		a.ui.UsageLine(d, u, a.model)
+		a.ui.UsageLine(a.metrics())
 	}
 }
 
@@ -1602,7 +1777,10 @@ func (a *app) repl() {
 				// Кот усаживается НАД строкой состояния и живёт на простое:
 				// моргает, скучает, засыпает. На любой ввод — замирает.
 				a.ui.MascotPerch()
-				a.ui.StatusLine(a.statusItems())
+				// Нижняя панель окна: слева состояние, справа расход —
+				// контекст с процентом от лимита модели, токены, скорость,
+				// время запроса и деньги.
+				a.ui.MetricsBar(a.statusItems(), a.metrics())
 				header = false
 				// Якорь анимации — только после усадки: курсор стоит на
 				// строке приглашения, и перерисовка знает, где кот.
@@ -1626,15 +1804,9 @@ func (a *app) repl() {
 					a.ui.Info("до связи!")
 				}
 			}
-			// MCP-серверы — дочерние процессы: гасим перед выходом.
-			a.tools.MCPShutdown()
-			// Language servers — тоже дочерние процессы: вежливый shutdown,
-			// потом kill. После MCP: там может лежать тот же gopls.
-			a.lsp.Shutdown()
-			// Журнал — после серверов и до saveSession: он дописывается
-			// на том же файловом дескрипторе, и закрывать его последним
-			// нельзя, иначе последняя запись не дойдёт до диска.
-			a.closeMissionJournal()
+			// Дочерние процессы и журнал — до saveSession: последняя
+			// запись журнала должна дойти до диска.
+			a.shutdown()
 			a.saveSession()
 			return
 		}
@@ -1648,6 +1820,8 @@ func (a *app) repl() {
 			line += a.stdin.Text()
 		}
 		line = strings.TrimSpace(line)
+		// Любой ввод пользователя сбрасывает таймер автономных итераций.
+		a.cronTouch()
 		// Любой ввод — кот замолкает немедленно, ещё до разбора строки.
 		// После Enter терминал уже перевёл курсор на новую строку, и
 		// слепая перерисовка успела бы попасть по чужим строкам, пока
@@ -1689,13 +1863,61 @@ func (a *app) repl() {
 	}
 }
 
+// metrics — снимок расхода сессии для панелей интерфейса.
+//
+// Собирается здесь, потому что только приложение знает про провайдера,
+// лимит контекста модели и состояние сессии. Интерфейс получает готовые
+// числа и рисует их.
+func (a *app) metrics() ui.Metrics {
+	m := ui.Metrics{Model: a.model}
+	provID := ""
+	if a.prov != nil {
+		m.Provider = a.prov.Label
+		m.ContextMax = a.prov.CtxLimit()
+		provID = a.prov.ID
+	}
+	sessMu.Lock()
+	if a.sess != nil {
+		m.Context = core.EstimateContext(a.sess.Messages)
+		m.Prompt = a.sess.Usage.PromptTokens
+		m.Completion = a.sess.Usage.CompletionTokens
+		m.Requests = a.sess.Economy.Requests
+		if price, ok := core.ModelPrice(provID, a.model); ok {
+			m.Cost = price.Cost(a.sess.Usage)
+			m.CostKnown = true
+		}
+		m.Autopilot = a.sess.Perms.Autopilot || a.sess.Perms.AutopilotAll
+		m.Plan = a.repo.Cfg.PlanMode
+	}
+	sessMu.Unlock()
+
+	a.mu.Lock()
+	m.Rate = a.lastRate
+	m.Last = a.lastElapsed
+	a.mu.Unlock()
+
+	if !a.sessionStart.IsZero() {
+		m.Session = time.Since(a.sessionStart)
+	}
+	return m
+}
+
 // statusItems — элементы нижней строки состояния (стиль Claude Code).
 // Порядок повторяет референс: модель · состояние · контекст · режимы.
 func (a *app) statusItems() []ui.StatusItem {
 	items := []ui.StatusItem{
 		{Text: a.model, Kind: ui.StatusMuted},
 		{Text: "idle", Kind: ui.StatusAccent},
-		{Text: core.Kfmt(core.EstimateContext(a.sess.Messages)) + " ctx", Kind: ui.StatusMuted},
+	}
+	// Сколько запросов стоила сессия: цифра рядом с моделью отвечает на
+	// вопрос «сколько это заняло» раньше, чем человек спросит.
+	if n := a.sess.Economy.Requests; n > 0 {
+		items = append(items, ui.StatusItem{Text: fmt.Sprintf("%d запр.", n), Kind: ui.StatusMuted})
+	}
+	// Каким ключом идёт запрос: при пуле из нескольких ключей это видно
+	// сразу, иначе расход по ключам не свести.
+	if n := a.prov.CurrentKeyIndex(); n > 1 {
+		items = append(items, ui.StatusItem{Text: fmt.Sprintf("ключ #%d", n), Kind: ui.StatusMuted})
 	}
 	if a.sess.AgentMode {
 		items = append(items, ui.StatusItem{Text: "agent", Kind: ui.StatusAccent})

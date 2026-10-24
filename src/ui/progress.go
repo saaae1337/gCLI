@@ -70,7 +70,12 @@ func (u *UI) Progress(ev ProgressUpdate) {
 
 // progressLine — собрать одну строку прогресса. Вызывается под mu.
 func (u *UI) progressLine(ev ProgressUpdate) string {
-	indent := u.railIndent()
+	// События приходят из горутин инструментов: переводы строк внутри
+	// подписи или текста ошибки разорвали бы журнал на части.
+	ev.Title = core1Line(ev.Title)
+	ev.Label = core1Line(ev.Label)
+	ev.Err = core1Line(ev.Err)
+	indent := u.railIndentLocked()
 	// Финальное событие — сводка, а не очередная цель. Печатаем его строкой
 	// состояния, а не «7/7»: после него ToolEnd всё равно добавит свою
 	// строку, и два подряд одинаковых счётчика только сбивают с толку.
@@ -110,18 +115,18 @@ func (u *UI) progressLine(ev ProgressUpdate) string {
 		// Сначала обеспечиваем узнаваемую подпись цели (как минимум
 		// 12 колонок — этого хватает, чтобы отличить «go test ./...» от
 		// «go build ./...»), остальное отдаём тексту ошибки.
-		labelWant := runeLen(ev.Label)
+		labelWant := cellWidth(ev.Label)
 		if labelWant > 12 {
 			labelWant = 12
 		}
-		errWant := runeLen(ev.Err)
-		if room := avail - labelWant - runeLen(sep); errWant > room {
+		errWant := cellWidth(ev.Err)
+		if room := avail - labelWant - cellWidth(sep); errWant > room {
 			errWant = room
 		}
 		if errWant < 8 {
 			errWant = 8
 		}
-		label := u.truncCols(ev.Label, avail-errWant-runeLen(sep))
+		label := u.truncCols(ev.Label, avail-errWant-cellWidth(sep))
 		return prefix + label + u.Yellow(sep+u.truncCols(ev.Err, errWant))
 	}
 	return prefix + u.truncCols(ev.Label, avail)

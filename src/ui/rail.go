@@ -40,7 +40,7 @@ func (u *UI) RailStart(tc ToolCall) {
 	// вызовы (субагенты) получают вертикаль рельса в отступе.
 	args := core.OneLine(tc.Args)
 	indent := u.railIndent()
-	used := visibleWidth(indent) + 1 + 1 + runeLen(tc.Name) + 2
+	used := visibleWidth(indent) + 1 + 1 + cellWidth(tc.Name) + 2
 	if maxArgs := u.Width() - used; args != "" && maxArgs > 14 {
 		args = truncate(args, maxArgs)
 	} else {
@@ -51,7 +51,7 @@ func (u *UI) RailStart(tc ToolCall) {
 
 	// Кот работает: пока идёт инструмент, под карточкой переливается
 	// «( >.< ) working...». Результат (RailEnd) погасит строку сам.
-	if u.mascot {
+	if u.Mascot() {
 		u.ShimmerStart("working...", MascotWork)
 	}
 }
@@ -75,7 +75,9 @@ func (u *UI) RailEnd(tc ToolCall) {
 		meta = append(meta, fmt.Sprintf("%d стр.", tc.Lines))
 	}
 	if tc.Elapsed > 0 {
-		meta = append(meta, core.HumanDuration(tc.Elapsed))
+		// Время окрашено по скорости: зелёный — мгновенно, жёлтый —
+		// заметно, красный — команда зависла. Читается без усилий.
+		meta = append(meta, u.c(u.ElapsedColor(tc.Elapsed), core.HumanDuration(tc.Elapsed)))
 	}
 	// Иконку статуса показываем только для неуспеха.
 	mark := ""
@@ -83,7 +85,7 @@ func (u *UI) RailEnd(tc ToolCall) {
 		g, c := u.emberStatusGlyph(tc.Status)
 		mark = u.c(c, g) + " "
 	}
-	used := visibleWidth(indent) + runeLen(u.g.Tick) + 2 + visibleWidth(mark)
+	used := visibleWidth(indent) + visibleWidth(u.g.Tick) + 2 + visibleWidth(mark)
 	tail := ""
 	if len(meta) > 0 {
 		tail = u.c(u.pal.Muted, " · "+strings.Join(meta, " · "))
@@ -96,8 +98,10 @@ func (u *UI) RailEnd(tc ToolCall) {
 	if avail < 8 {
 		avail = 8
 	}
+	// Результат — обычным текстом: он и есть главное в этой строке,
+	// а приглушать его до серого значит прятать ответ от человека.
 	u.RevealLine(indent + u.emberTail() + " " + mark +
-		u.Gray(truncate(text, avail)) + tail)
+		truncate(text, avail) + tail)
 }
 
 // RailEndChain — закрыть рельс после серии вызовов (последний зубец).
@@ -117,6 +121,13 @@ const (
 
 // railIndent — отступ под текущий уровень рельса.
 func (u *UI) railIndent() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.railIndentLocked()
+}
+
+// railIndentLocked — railIndent для вызова под уже взятым u.mu.
+func (u *UI) railIndentLocked() string {
 	// Отступ базовый — две колонки, чтобы рельс не лип к краю.
 	base := railGap + railGap
 	extra := ""
@@ -127,27 +138,19 @@ func (u *UI) railIndent() string {
 }
 
 // RailPush — войти на уровень глубже (для вложенных вызовов, например субагентов).
-func (u *UI) RailPush() { u.railDepth++ }
+func (u *UI) RailPush() {
+	u.mu.Lock()
+	u.railDepth++
+	u.mu.Unlock()
+}
 
 // RailPop — выйти на уровень выше.
 func (u *UI) RailPop() {
+	u.mu.Lock()
 	if u.railDepth > 0 {
 		u.railDepth--
 	}
-}
-
-// statusGlyph — иконка и цвет статуса результата.
-func (u *UI) statusGlyph(status string) (string, string) {
-	switch status {
-	case "fail", "error":
-		return u.g.Cross, u.pal.Err
-	case "denied":
-		return "⊘", u.pal.Warn
-	case "skip":
-		return "⊘", u.pal.Muted
-	default:
-		return u.g.Check, u.pal.OK
-	}
+	u.mu.Unlock()
 }
 
 // ThinkNote — блок приватных размышлений агента одним куском:

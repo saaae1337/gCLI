@@ -2,7 +2,19 @@
 
 package ui
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"strings"
+)
+
+// atoiSafe — безопасно распарсить число.
+func atoiSafe(s string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		return n
+	}
+	return def
+}
 
 // enableVT — на POSIX escape-последовательности поддерживаются всегда.
 func EnableVT() bool { return true }

@@ -3,9 +3,9 @@ package ui
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -81,7 +81,15 @@ type Options struct {
 	Colors ThemeColors
 	// Grade — принудительный уровень цвета (0 = определить автоматически).
 	Grade ColorLevel
+	// Panels — рисовать блоки и таблицы в скруглённых рамках (стиль
+	// OpenCode). Приложение включает это всегда: рамка отделяет данные
+	// от потока ответа, а без неё всё сливается в один текст.
+	Panels bool
 }
+
+// sinkBox — обёртка для atomic.Pointer: хранить интерфейс напрямую в
+// atomic.Value нельзя, разные конкретные типы привели бы к панике.
+type sinkBox struct{ s Sink }
 
 // UI — терминальный интерфейс.
 type UI struct {
@@ -91,6 +99,13 @@ type UI struct {
 	g     Glyphs
 	out   Writer
 	spins []string
+
+	// sinkRef — приёмник полноэкранного интерфейса. Атомарный: вывод идёт
+	// из горутин агента и субалгентов, а подключается при старте цикла.
+	sinkRef atomic.Pointer[sinkBox]
+	// width — ширина вывода. Атомарная по той же причине: фоновая
+	// горутина может печатать, пока интерфейс меняет ширину под TUI.
+	width atomic.Int64
 
 	// Уровень цвета: 16 / 256 / truecolor (определяется при создании).
 	grade colorLevel
@@ -112,13 +127,19 @@ type UI struct {
 	// модель действительно присылает размышления, и исчезает сама,
 	// как только модель перешла к ответу.
 	spinHint string
+	// metrics — последний снимок расхода. Нужен живым строкам (строка
+	// ожидания), которые перерисовываются каждые 90 мс: там видно, как
+	// растёт контекст, пока модель думает.
+	metrics Metrics
+	// mascotAnchor — сколько строк между макушкой кота и строкой ввода.
+	// Панель метрик добавляет строку, и кот должен перерисовываться над
+	// ней, а не поверх неё.
+	mascotAnchor int
+	// mascotLines — сколько строк напечатано с тех пор, как кот сел.
+	// Отсчёт нужен, чтобы привязка не зависела от того, кто и что
+	// печатал между котом и приглашением.
+	mascotLines int
 
-	// Потоковый markdown.
-	fence  bool
-	fenceL string
-	pend   string
-	// Текущий «блок» ответа — чтобы печатать в конце красивые рамки.
-	answerOpen bool
 	// Подавление обычного вывода (например, для -p).
 	quiet bool
 	// think — открыт ли поток размышлений: пока модель думает, на экране
@@ -167,9 +188,18 @@ func New(opts Options) *UI {
 	if !opts.Color {
 		grade = colorNone
 	}
+	// NO_COLOR мог отключить цвет уже после того, как вызывающий выставил
+	// Color: иначе спиннер, перелив и градиент печатали бы escape-коды в
+	// терминал, который их не ждёт.
+	if grade == colorNone {
+		opts.Color = false
+	}
 	u := &UI{opts: opts, out: out, grade: grade, g: GlyphsFor(opts.Theme, opts.Unicode)}
 	u.applyPalette()
 	u.spins = SpinnerFor(opts.Theme, opts.Unicode)
+	if opts.Width > 0 && opts.Width != 100 {
+		u.width.Store(int64(opts.Width))
+	}
 	if u.opts.Width <= 0 {
 		u.opts.Width = 100
 	}
@@ -184,6 +214,22 @@ func (u *UI) applyPalette() {
 	}
 	applyThemeColors(&pal, u.opts.Colors, u.grade)
 	u.pal = pal
+}
+
+// SetSink — подключить или отключить приёмник полноэкранного интерфейса.
+//
+// Зовётся из потока запуска, а читается из горутин агента: доступ
+// атомарный, поэтому позднее подключение не гоняется с первым выводом.
+func (u *UI) SetSink(s Sink) {
+	u.sinkRef.Store(&sinkBox{s: s})
+}
+
+// sink — текущий приёмник или nil.
+func (u *UI) sink() Sink {
+	if b := u.sinkRef.Load(); b != nil {
+		return b.s
+	}
+	return nil
 }
 
 // ColorLevel — текущий уровень поддержки цвета.
@@ -201,11 +247,11 @@ func (u *UI) AnimationsOn() bool { return u.canReveal() }
 
 // Width — ширина терминала для вывода.
 func (u *UI) Width() int {
-	if u.opts.Width > 0 && u.opts.Width != 100 {
-		return u.opts.Width
+	if w := int(u.width.Load()); w > 0 {
+		return w
 	}
 	if w := terminalWidth(); w > 20 {
-		u.opts.Width = w
+		u.width.Store(int64(w))
 		return w
 	}
 	return 100
@@ -214,7 +260,7 @@ func (u *UI) Width() int {
 // SetWidth — задать ширину вручную.
 func (u *UI) SetWidth(w int) {
 	if w > 20 {
-		u.opts.Width = w
+		u.width.Store(int64(w))
 	}
 }
 
@@ -224,14 +270,23 @@ func (u *UI) Theme() string { return u.opts.Theme }
 // SetMascot — включить/выключить маскота. При выключении фоновая
 // жизнь кота останавливается: никакого вывода из-под выключателя.
 func (u *UI) SetMascot(on bool) {
+	// Сначала выключаем флаг, потом гасим таймер: иначе MascotIdleStart,
+	// проскочивший между остановкой и записью, успел бы запустить новую
+	// фоновую анимацию уже «выключенного» маскота.
+	u.mu.Lock()
+	u.mascot = on
+	u.mu.Unlock()
 	if !on {
 		u.MascotIdleStop()
 	}
-	u.mascot = on
 }
 
 // Mascot — живёт ли маскот в интерфейсе.
-func (u *UI) Mascot() bool { return u.mascot }
+func (u *UI) Mascot() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.mascot
+}
 
 // SetSpinnerMascot — задать состояние маскота в спиннере:
 // MascotThink, пока модель думает, MascotWork, пока идут инструменты.
@@ -326,6 +381,10 @@ func (u *UI) Write(s string) {
 	defer u.mu.Unlock()
 	u.clearSpinLocked()
 	u.mascotAnchored = false
+	// Строки считаются: по ним кот поймёт, на сколько строк подняться
+	// при перерисовке. Панель метрик между котом и приглашением — одна
+	// строка, и без счёта кот прыгал бы на две строки выше нужного.
+	u.mascotLines += strings.Count(s, "\n")
 	u.put(s)
 }
 
@@ -347,6 +406,10 @@ func (u *UI) put(s string) {
 	if !utf8.ValidString(s) {
 		s = strings.ToValidUTF8(s, string(utf8.RuneError))
 	}
+	if sink := u.sink(); sink != nil {
+		sink.Text(s)
+		return
+	}
 	_, _ = u.out.Write([]byte(s))
 }
 
@@ -357,7 +420,44 @@ func (u *UI) Print(s string) { u.Write(s) }
 func (u *UI) Printf(f string, a ...any) { u.Write(fmt.Sprintf(f, a...)) }
 
 // Println — строка + перевод строки.
-func (u *UI) Println(s string) { u.Write(s + "\n") }
+//
+// В терминале строка начинается с «возврата каретки»: она всегда должна
+// начинаться с нулевой колонки, даже если курсор остался где-то посреди
+// строки. Так случается, когда фоновый рисунок (маскот, перелив)
+// оставил его не там, где ожидалось, — и без этого ответ модели уезжал
+// в середину экрана.
+//
+// В пайп управляющий символ не попадает: там вывод разбирают машины, и
+// лишний «CR» в начале строки — мусор.
+func (u *UI) Println(s string) { u.Write(u.lineStart() + s + "\n") }
+
+// lineStart — начало строки для терминала.
+//
+// Это управляющий символ, а не текст: на экране его не видно, и в
+// содержимом строки его нет.
+func (u *UI) lineStart() string {
+	// Полноэкранному интерфейсу CR не нужен: у него своя сетка клеток.
+	if u.sink() == nil && u.tty() {
+		return "\r"
+	}
+	return ""
+}
+
+// tty — пишем ли мы в терминал.
+func (u *UI) tty() bool {
+	if u == nil || u.out == nil {
+		return false
+	}
+	f, ok := u.out.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
 
 // PrintEmpty — пустая строка (пропускается в компактном режиме).
 func (u *UI) PrintEmpty() {
@@ -371,6 +471,14 @@ func (u *UI) PrintEmpty() {
 // Как и обычная печать, сбрасывает привязку маскота: после прямого вывода
 // позиция курсора заранее неизвестна.
 func (u *UI) RawWrite(s string) {
+	if sink := u.sink(); sink != nil {
+		// В полноэкранном интерфейсе курсором управляет он сам: из потока
+		// берём только видимый текст.
+		if txt := stripANSI(s); txt != "" {
+			sink.Text(txt)
+		}
+		return
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.mascotAnchored = false
@@ -381,6 +489,10 @@ func (u *UI) RawWrite(s string) {
 // после \033[H курсор прыгает в левый верхний угол, и старая привязка
 // маскота стала бы ложной (кот перерисовался бы по стёртому экрану).
 func (u *UI) ClearScreen() {
+	if sink := u.sink(); sink != nil {
+		sink.Clear()
+		return
+	}
 	u.RawWrite("\033[2J\033[H")
 }
 
@@ -403,10 +515,7 @@ func (u *UI) Step(s string) { u.Println(" " + u.Accent(u.g.Arrow) + " " + s) }
 
 // AutoOK — строка «автопилот одобрил изменение файла».
 func (u *UI) AutoOK(path string) {
-	p := core.OneLine(path)
-	if len([]rune(p)) > 72 {
-		p = string([]rune(p)[:72]) + "…"
-	}
+	p := truncate(core.OneLine(path), 72)
 	u.Println("  " + u.c(u.pal.OK, u.g.Check) + " " + u.Gray(u.c(u.pal.Muted, "✎ ")+p) +
 		"  " + u.AutoTag())
 }
@@ -421,6 +530,9 @@ func (u *UI) AutoTag() string {
 // приглашение становится полноправной строкой потока, а не отдельным
 // украшением. Отступ в две колонки держит поле.
 func (u *UI) Prompt(agentMode bool) {
+	if u.sink() != nil {
+		return
+	}
 	mark := u.emberMark(u.pal.Muted)
 	if agentMode {
 		mark = u.emberMark(u.pal.Accent)
@@ -431,7 +543,7 @@ func (u *UI) Prompt(agentMode bool) {
 // StatusLine — нижняя панель состояния: модель, режим, токены, автопилот.
 // Печатается перед приглашением к вводу, как строка статуса в Claude Code.
 func (u *UI) StatusLine(items []StatusItem) {
-	if u.quiet || len(items) == 0 {
+	if u.quiet || len(items) == 0 || u.sink() != nil {
 		return
 	}
 	parts := make([]string, 0, len(items))
@@ -475,7 +587,7 @@ func (u *UI) RequestEcho(text string) {
 	}
 	line := core.OneLine(text)
 	if w := u.Width() - 10; w > 20 {
-		line = core.Truncate(line, w)
+		line = truncate(line, w)
 	}
 	u.Println("  " + u.emberTail() + " " + u.Gray(line))
 }
@@ -497,22 +609,59 @@ type StatusItem struct {
 
 // Prompt2 — приглашение при чтении ответа пользователя.
 func (u *UI) Prompt2(question, hint string) {
+	if u.sink() != nil {
+		return
+	}
 	if question != "" {
 		u.Print("  " + u.Bold(question) + " ")
 	}
 	u.Print(u.Gray(hint))
 }
 
-// UsageLine — строка расхода токенов под ответом.
-func (u *UI) UsageLine(d time.Duration, us core.Usage, model string) {
-	parts := []string{u.c(u.pal.Muted, core.HumanDuration(d))}
-	if us.PromptTokens > 0 || us.CompletionTokens > 0 {
-		parts = append(parts, u.c(u.pal.Muted, "↑"+core.Kfmt(us.PromptTokens)+" ↓"+core.Kfmt(us.CompletionTokens)))
+// UsageLine — строка расхода под ответом.
+//
+// Показывает то, ради чего человек ждёт ответа: сколько занял запрос,
+// сколько токенов ушло, с какой скоростью и сколько теперь стоит
+// контекст в процентах от лимита модели.
+func (u *UI) UsageLine(m Metrics) {
+	if sink := u.sink(); sink != nil {
+		// В новом интерфейсе расход живёт в нижней панели, а под ответом
+		// остаётся короткая подпись: время запроса и скорость вывода.
+		var parts []string
+		if m.Last > 0 {
+			parts = append(parts, core.HumanDuration(m.Last))
+		}
+		if r := m.RateText(); r != "" {
+			parts = append(parts, r)
+		}
+		if m.Prompt > 0 || m.Completion > 0 {
+			parts = append(parts, "↑"+core.Kfmt(m.Prompt)+" ↓"+core.Kfmt(m.Completion))
+		}
+		if len(parts) > 0 {
+			sink.SetMeta(strings.Join(parts, "  ·  "))
+		}
+		return
 	}
-	if model != "" {
-		parts = append(parts, u.c(u.pal.Muted, model))
+	var parts []string
+	if m.Last > 0 {
+		parts = append(parts, u.c(u.pal.Muted, "запрос "+core.HumanDuration(m.Last)))
 	}
-	u.Println("  " + strings.Join(parts, u.c(u.pal.Muted, " · ")))
+	if r := m.RateText(); r != "" {
+		parts = append(parts, u.c(u.pal.Accent, "вывод "+r))
+	}
+	if m.Prompt > 0 || m.Completion > 0 {
+		parts = append(parts, u.c(u.pal.Muted, "↑"+core.Kfmt(m.Prompt)+" ↓"+core.Kfmt(m.Completion)))
+	}
+	if m.Context > 0 {
+		parts = append(parts, u.c(u.pal.Muted, "ctx "+m.ContextText()))
+	}
+	if m.CostKnown {
+		parts = append(parts, u.c(u.pal.Muted, core.FormatUSD(m.Cost)))
+	}
+	if len(parts) == 0 {
+		return
+	}
+	u.Println("  " + u.emberTail() + " " + strings.Join(parts, u.c(u.pal.Muted, " · ")))
 }
 
 // SetCompact — компактный режим (без пустых строк).
@@ -556,19 +705,19 @@ func (u *UI) RenderTodos(todos []core.Todo) {
 	// не начато — зубец. Отличаются цветом, а не только формой:
 	// три похожих значка в одной колонке глаз не различает.
 	markDone, markActive, markTodo := u.g.Star, u.g.Star, u.emberTickOf()
-	for i, t := range todos {
+	for _, t := range todos {
+		text := truncate(core.OneLine(t.Content), u.Width()-10)
 		switch t.Status {
 		case core.TodoCompleted:
 			u.Println("   " + u.c(u.pal.OK, markDone) + " " +
-				u.c(u.pal.Muted, core.StrikeOut(core.Truncate(core.OneLine(t.Content), u.Width()-10))))
+				u.c(u.pal.Muted, core.StrikeOut(text)))
 		case core.TodoInProgress:
 			u.Println("   " + u.c(u.pal.Accent, markActive) + " " +
-				u.c(u.pal.Accent, core.Truncate(core.OneLine(t.Content), u.Width()-10)))
+				u.c(u.pal.Accent, text))
 		default:
 			u.Println("   " + u.c(u.pal.Muted, markTodo) + " " +
-				u.c(u.pal.Muted, core.Truncate(core.OneLine(t.Content), u.Width()-10)))
+				u.c(u.pal.Muted, text))
 		}
-		_ = i
 	}
 	if active > 0 {
 		u.Println("")
@@ -584,7 +733,7 @@ func (u *UI) Plain(s string) { u.Println(s) }
 // Title — заголовок раздела верхнего уровня: ромб, имя, линия вправо.
 func (u *UI) Title(s string) {
 	u.Println("")
-	fill := u.Width() - 2 - 1 - 1 - runeLen(s) - 1
+	fill := u.Width() - 2 - 1 - 1 - visibleWidth(s) - 1
 	line := ""
 	if fill >= 3 {
 		line = " " + u.emberRule(fill)
@@ -596,7 +745,7 @@ func (u *UI) Title(s string) {
 // Section — заголовок раздела: ромб, имя, линия вправо до края.
 func (u *UI) Section(s string) {
 	u.Println("")
-	fill := u.Width() - 2 - 1 - 1 - runeLen(s) - 1
+	fill := u.Width() - 2 - 1 - 1 - visibleWidth(s) - 1
 	line := ""
 	if fill >= 3 {
 		line = " " + u.emberRule(fill)
@@ -617,7 +766,7 @@ const kvWidth = 18
 func (u *UI) KVPairs(rows [][2]string) {
 	w := 0
 	for _, r := range rows {
-		if n := runeLen(r[0]); n > w {
+		if n := cellWidth(r[0]); n > w {
 			w = n
 		}
 	}
@@ -641,6 +790,9 @@ func (u *UI) Bar(done, total int, width int) string {
 		width = 4
 	}
 	ratio := float64(done) / float64(total)
+	if ratio < 0 {
+		ratio = 0
+	}
 	if ratio > 1 {
 		ratio = 1
 	}
@@ -669,6 +821,9 @@ func (u *UI) Bar(done, total int, width int) string {
 
 // SpinnerStart — запустить анимацию ожидания «кадр + метка + время».
 func (u *UI) SpinnerStart(label string) {
+	if u.sink() != nil {
+		return
+	}
 	if !u.opts.Animations || !u.opts.Color || u.quiet {
 		return
 	}
@@ -712,7 +867,7 @@ func (u *UI) SpinnerStart(label string) {
 				label := u.spinLbl
 				// Обрезаем, чтобы не ломать строку на узком терминале.
 				maxl := u.opts.Width - 14
-				if maxl > 8 && runeLen(label) > maxl {
+				if maxl > 8 && cellWidth(label) > maxl {
 					label = truncate(label, maxl)
 				}
 				u.put("\r" + cReset + "\033[K" + u.pal.Accent + frame + cReset + " " + label + " " + u.pal.Muted + el.String() + cReset)
@@ -744,7 +899,11 @@ func (u *UI) ShimmerStart(word string, state MascotState) {
 // SpinnerStop и clearSpinLocked обнуляют её вместе с анимацией.
 func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 	u.SetSpinnerMascot(state)
-	if !u.mascot {
+	if u.sink() != nil {
+		// Полноэкранный интерфейс показывает ожидание сам.
+		return
+	}
+	if !u.Mascot() {
 		u.SpinnerStart(word)
 		return
 	}
@@ -789,9 +948,21 @@ func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 				face := u.mascotInline(u.spinMascot, int(time.Since(u.spinT0)/(300*time.Millisecond)))
 				el := time.Since(u.spinT0)
 				word := u.shimmerWord(u.spinShimmer, el.Seconds())
+				// Пока модель думает, кот уступает место переливу: привязку
+				// сбрасываем, иначе фоновый кот нарисовался бы поверх
+				// строки ожидания и над ответом.
+				u.mascotAnchored = false
 				// Счётчик секунд показывает, что ожидание не зависло.
 				line := "\r" + cReset + "\033[K" + face + cReset + " " + word + " " +
 					u.c(u.pal.Muted, shimmerElapsed(el))
+				// Пока модель думает, видно, сколько занято контекста:
+				// человек видит, вписывается ли ход в окно модели.
+				if m := u.metrics; m.Context > 0 {
+					ctxInfo := u.c(u.pal.Muted, "  ctx "+m.ContextText())
+					if visibleWidth(line+ctxInfo) <= u.opts.Width {
+						line += ctxInfo
+					}
+				}
 				// Подсказка про Ctrl+O идёт последней и уступает место
 				// переливу на узком терминале: без неё строка бессмысленна,
 				// с ней — просто теснее.
@@ -844,14 +1015,6 @@ func (u *UI) clearSpinLocked() {
 // runeLen — длина строки в рунах.
 func runeLen(s string) int { return len([]rune(s)) }
 
-// runeWidth — ширина строки в терминальных колонках.
-//
-// Кириллица даёт 1 колонку, CJK и эмодзи — 2, экранированные
-// последовательности — 0. Раньше здесь был тупой подсчёт рун, из-за чего
-// таблицы с японским текстом и эмодзи разъезжались, а padRight дописывал
-// меньше пробелов, чем нужно, и колонки наезжали друг на друга.
-func runeWidth(s string) int { return cellWidth(s) }
-
 // visibleWidth — ширина строки без ANSI-последовательностей.
 func visibleWidth(s string) int { return cellWidth(s) }
 
@@ -884,16 +1047,6 @@ func padTo(s string, w int) string {
 // truncate — обрезать строку до n колонок с многоточием.
 func truncate(s string, n int) string { return truncateCellsEll(s, n) }
 
-// center — центрировать строку в ширине w.
-func center(s string, w int) string {
-	pad := w - visibleWidth(s)
-	if pad <= 0 {
-		return s
-	}
-	left := pad / 2
-	return strings.Repeat(" ", left) + s + strings.Repeat(" ", pad-left)
-}
-
 // wrap — разбить текст на строки по ширине (с учётом переносов по словам).
 //
 // Считаем в колонках, а не в рунах: строка из японского текста в 40 колонок
@@ -917,7 +1070,7 @@ func wrap(text string, width int) []string {
 					out = append(out, line)
 					line = ""
 				}
-				cut := truncateCells(word, width)
+				cut := truncateCellsRaw(word, width)
 				if cut == "" {
 					// Широкий символ не помещается даже в пустую строку:
 					// отступаем, иначе получился бы бесконечный цикл.
@@ -942,22 +1095,6 @@ func wrap(text string, width int) []string {
 		}
 	}
 	return out
-}
-
-// wrapTo — разбить и вывести с отступом.
-func (u *UI) wrapTo(s, indent string) {
-	w := u.Width() - runeLen(indent) - 2
-	for _, l := range wrap(s, w) {
-		u.Println(indent + l)
-	}
-}
-
-// atoiSafe — безопасно распарсить число.
-func atoiSafe(s string, def int) int {
-	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
-		return n
-	}
-	return def
 }
 
 func maxInt(a, b int) int {

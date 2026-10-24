@@ -141,7 +141,11 @@ func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 	// Маркер события вместо «✎»: дифф — это не отдельный значок,
 	// а такой же шаг хода, как и вызов инструмента. Поэтому он встаёт
 	// в один ряд с остальными маркерами, а не выпадает из потока.
-	u.Println("  " + u.emberMark(u.pal.Accent) + " " + u.Head(core.OneLine(o.Path)))
+	path := core.OneLine(o.Path)
+	if avail := u.Width() - 4; avail > 0 {
+		path = truncate(path, avail)
+	}
+	u.Println("  " + u.emberMark(u.pal.Accent) + " " + u.Head(path))
 	if !o.NoStats {
 		u.Println("  " + u.emberTail() + " " + u.c(u.pal.Muted, strings.Join([]string{
 			u.c(u.pal.OK, "+"+core.Kfmt(added)),
@@ -186,7 +190,7 @@ func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 			continue
 		}
 		if !prevShown && i > 0 {
-			u.printlnDiffGap(6)
+			u.printlnDiffGap()
 		}
 		if shown >= maxLines {
 			hidden++
@@ -197,14 +201,13 @@ func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 		prevShown = true
 	}
 	if hidden > 0 {
-		u.printlnDiffGap(6)
+		u.printlnDiffGap()
 		u.Println(strings.Repeat(" ", 6) + u.Gray(fmt.Sprintf("%s ещё %d строк диффа скрыто", u.g.Ellipsis, hidden)))
 	}
 }
 
 // printlnDiffGap — разделитель пропущенных строк диффа.
-func (u *UI) printlnDiffGap(indent int) {
-	_ = indent
+func (u *UI) printlnDiffGap() {
 	// Пропуск обозначаем многоточием на зубце: он не спорит с плюсами
 	// и минусами строк диффа, как это делает пунктир.
 	u.Println("  " + u.emberTail() + " " + u.c(u.pal.Muted, u.g.Ellipsis))
@@ -212,14 +215,22 @@ func (u *UI) printlnDiffGap(indent int) {
 
 // printDiffOp — одна строка диффа с номерами строк с обеих сторон.
 func (u *UI) printDiffOp(op DiffOp) {
+	// Строка диффа не должна переползать на следующую: отступ, зубец,
+	// пробел и двухколоночный маркер «+ »/«− » уже заняли часть ширины.
+	// Зубец в ASCII-режиме шире на колонку, поэтому считаем по факту.
+	avail := u.Width() - (2 + visibleWidth(u.emberTail()) + 1 + 2)
+	if avail < 1 {
+		avail = 1
+	}
+	text := truncate(op.Text, avail)
 	var body string
 	switch op.Kind {
 	case '+':
-		body = u.c(u.pal.OK, "+ ") + u.c(u.pal.OK, op.Text)
+		body = u.c(u.pal.OK, "+ ") + u.c(u.pal.OK, text)
 	case '-':
-		body = u.c(u.pal.Err, "− ") + u.c(u.pal.Err, op.Text)
+		body = u.c(u.pal.Err, "− ") + u.c(u.pal.Err, text)
 	default:
-		body = u.c(u.pal.Muted, "  ") + u.c(u.pal.Muted, op.Text)
+		body = u.c(u.pal.Muted, "  ") + u.c(u.pal.Muted, text)
 	}
 
 	// Номера строк скрыты: важны сами изменения, а колонки цифр шумят.

@@ -14,6 +14,10 @@ type BlockOpts struct {
 	Accent   bool // выделить заголовок акцентным цветом
 	Footer   string
 	NoPad    bool
+	// Framed — нарисовать блок в скруглённой рамке (стиль OpenCode).
+	// По умолчанию рамки нет: рамка вокруг каждой таблицы превращается
+	// в лес рамок, и взгляд перестаёт цепляться за главное.
+	Framed bool
 }
 
 // Block — блок в стиле «УГОЛЬ»: ромб-маркер и линия вправо, без рамки.
@@ -27,6 +31,21 @@ type BlockOpts struct {
 // вертикали, которая превращалась бы в рельс вызовов). Зато по заголовку
 // сразу видно, где начинается самостоятельный блок.
 func (u *UI) Block(content string, o BlockOpts) {
+	// Рамка вокруг блока: данные отделены от потока ответа.
+	if u.opts.Panels || o.Framed {
+		body := content
+		if o.Subtitle != "" {
+			// Подзаголовок — первой строкой содержимого: в рамке нет
+			// отдельной строки под заголовком, а потерять его нельзя.
+			body = u.c(u.pal.Muted, o.Subtitle) + "\n" + content
+		}
+		u.Panel(body, PanelOpts{
+			Title:  o.Title,
+			Footer: o.Footer,
+			Accent: o.Accent,
+		})
+		return
+	}
 	var b strings.Builder
 
 	// Маркер у заголовка один — ромб темы. Отдельная иконка рядом с ним
@@ -48,12 +67,12 @@ func (u *UI) Block(content string, o BlockOpts) {
 		if o.Accent {
 			head = u.c(u.pal.Accent, plain)
 		}
-		used := 2 + 1 + 1 + runeLen(plain)
+		used := 2 + 1 + 1 + cellWidth(plain)
 		avail := u.Width() - used
 		switch {
-		case o.Subtitle != "" && avail > runeLen(o.Subtitle)+8:
+		case o.Subtitle != "" && avail > cellWidth(o.Subtitle)+8:
 			// Подзаголовок прижат к правому краю, хвост — линией.
-			fill := avail - runeLen(o.Subtitle)
+			fill := avail - cellWidth(o.Subtitle)
 			b.WriteString("  " + mark + " " + head +
 				u.emberRuleTail(fill) + o.Subtitle + "\n")
 		case o.Subtitle == "" && avail >= 12:
@@ -87,28 +106,43 @@ func (u *UI) contentLines(content string, width int) []string {
 			out = append(out, "")
 			continue
 		}
-		if runeLen(l) <= width {
+		l = validUTF8(l)
+		if cellWidth(l) <= width {
 			out = append(out, l)
 			continue
 		}
-		// Длинная строка (например, вывод команды) — режем аккуратно.
-		r := []rune(l)
-		for len(r) > width {
-			cut := width
-			// Стараемся резать по пробелу.
-			for cut > width/2 && r[cut-1] != ' ' {
-				cut--
+		// Длинная строка (например, вывод команды) — режем по колонкам
+		// терминала, а не по рунам: иероглиф занимает две колонки, и
+		// «ширина в рунах» выводила строку за правый край блока.
+		rest := l
+		for cellWidth(rest) > width {
+			cut := truncateCellsRaw(rest, width)
+			if cut == "" {
+				// Широкий кластер не помещается: берём его целиком,
+				// иначе цикл не сдвинется.
+				_, sz := nextCluster(rest, 0)
+				if sz <= 0 || sz > len(rest) {
+					sz = 1
+				}
+				cut = rest[:sz]
 			}
-			if cut <= width/2 {
-				cut = width
+			// Стараемся резать по пробелу, но не отдаём под это
+			// больше половины строки. В цветной строке пробел может
+			// оказаться внутри escape-последовательности — такую
+			// строку режем строго по границе кластера.
+			if !hasESC(cut) {
+				if idx := strings.LastIndexByte(cut, ' '); idx > 0 &&
+					cellWidth(cut[:idx]) >= width/2 {
+					cut = cut[:idx]
+				}
 			}
-			out = append(out, string(r[:cut]))
-			r = r[cut:]
-			for len(r) > 0 && r[0] == ' ' {
-				r = r[1:]
+			out = append(out, cut)
+			rest = rest[len(cut):]
+			for len(rest) > 0 && rest[0] == ' ' {
+				rest = rest[1:]
 			}
 		}
-		out = append(out, string(r))
+		out = append(out, rest)
 	}
 	return out
 }
@@ -116,7 +150,10 @@ func (u *UI) contentLines(content string, width int) []string {
 // emit — запись в терминал. Обязана идти через Write, а не напрямую в
 // u.out: пока активна строка ожидания, Write гасит её перед печатью.
 // Прямая запись в u.out оставила бы «thinking...» поверх блока.
-func (u *UI) emit(s string) { u.Write(s) }
+//
+// Возврат каретки — как и в Println: блок должен начинаться с нулевой
+// колонки, где бы курсор ни остался.
+func (u *UI) emit(s string) { u.Write(u.lineStart() + s) }
 
 // ---------- Таблицы ----------
 
@@ -159,12 +196,14 @@ func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 	squeeze()
 
 	var out strings.Builder
+	// В рамке заголовок живёт в верхней границе, а не отдельной строкой.
+	framed := o.Framed || u.opts.Panels
 	// Один маркер на заголовок — как в Block: без дополнительной иконки.
 	title := o.Title
 	plain := StripANSI(title)
-	if plain != "" {
+	if plain != "" && !framed {
 		head := u.Head(plain)
-		used := 2 + 1 + 1 + runeLen(plain)
+		used := 2 + 1 + 1 + cellWidth(plain)
 		avail := u.Width() - used
 		if avail >= 12 {
 			head = head + " " + u.emberRule(avail-1)
@@ -176,9 +215,12 @@ func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 
 	// Заголовки колонок — приглушённые, разделитель между ними — точка.
 	var hb strings.Builder
-	hb.WriteString("  ")
+	if !framed {
+		hb.WriteString("  ")
+	}
 	for i := range cols {
-		hb.WriteString(u.c(u.pal.Muted, padRight(StripANSI(cols[i].Title), sizes[i])))
+		title := truncate(StripANSI(cols[i].Title), sizes[i])
+		hb.WriteString(u.c(u.pal.Muted, padRight(title, sizes[i])))
 		if i < len(cols)-1 {
 			hb.WriteString(sep)
 		}
@@ -187,12 +229,17 @@ func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 
 	for _, r := range rows {
 		var b strings.Builder
-		b.WriteString("  ")
+		if !framed {
+			b.WriteString("  ")
+		}
 		for i := range cols {
 			cell := ""
 			if i < len(r) {
 				cell = r[i]
 			}
+			// Явно заданная Width — это предел колонки. Без обрезки
+			// длинная ячейка сдвигала разделитель и ломала таблицу.
+			cell = truncate(cell, sizes[i])
 			// Выравнивание учитывает ANSI: padRight/padLeft считают
 			// видимую ширину без экранных последовательностей. Раньше
 			// цветные ячейки не добивались пробелами, и колонки
@@ -209,7 +256,23 @@ func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 		out.WriteString(b.String() + "\n")
 	}
 	if o.Footer != "" {
+		if framed {
+			// Подпись в рамке — последней строкой перед нижней границей.
+			u.Panel(strings.TrimRight(out.String(), "\n"), PanelOpts{
+				Title:  o.Title,
+				Footer: o.Footer,
+				Accent: o.Accent,
+			})
+			return
+		}
 		out.WriteString("  " + u.c(u.pal.Muted, o.Footer) + "\n")
+	}
+	if framed {
+		u.Panel(strings.TrimRight(out.String(), "\n"), PanelOpts{
+			Title:  o.Title,
+			Accent: o.Accent,
+		})
+		return
 	}
 	out.WriteString("\n")
 	u.emit(out.String())
@@ -241,6 +304,8 @@ func tableWidths(cols []Column, rows [][]string) []int {
 
 // ToolCall — описание вызова инструмента для отрисовки.
 type ToolCall struct {
+	// ID — идентификатор вызова от модели (для параллельных вызовов).
+	ID      string
 	Name    string
 	Args    string
 	Kind    string // read | write | exec | net | plan | think | agent | ext
@@ -305,11 +370,19 @@ func (u *UI) kindGlyph(kind string) (glyph, color string) {
 
 // ToolStart — заголовок карточки инструмента (печатается до выполнения).
 func (u *UI) ToolStart(tc ToolCall) {
+	if sink := u.sink(); sink != nil {
+		sink.ToolStart(tc)
+		return
+	}
 	u.RailStart(tc)
 }
 
 // ToolEnd — результат инструмента под карточкой.
 func (u *UI) ToolEnd(tc ToolCall) {
+	if sink := u.sink(); sink != nil {
+		sink.ToolEnd(tc)
+		return
+	}
 	u.RailEnd(tc)
 }
 

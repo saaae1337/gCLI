@@ -288,10 +288,9 @@ func nextCluster(s string, i int) (w, size int) {
 func isEmoji(r rune) bool {
 	switch {
 	case r >= 0x1F300 && r <= 0x1FAFF, // пиктограммы, животные, предметы
-		r >= 0x1F000 && r <= 0x1F2FF, // игральные кости, масти, флаги
-		r >= 0x1F900 && r <= 0x1F9FF, // люди, профессии
-		r >= 0x1F1E6 && r <= 0x1F1FF, // региональные индикаторы (флаги)
-		r >= 0x2B00 && r <= 0x2BFF:   // стрелки и математические знаки
+		r >= 0x1F200 && r <= 0x1F2FF, // идеографические эмодзи
+		r == 0x1F004 || r == 0x1F0CF, // масть, джокер
+		r >= 0x1F1E6 && r <= 0x1F1FF: // региональные индикаторы (флаги)
 		return true
 	}
 	return false
@@ -310,7 +309,6 @@ func isWideRange(r rune) bool {
 		r >= 0xF900 && r <= 0xFAFF, // иероглифы, совместимость
 		r >= 0xFF00 && r <= 0xFF60, // полноширинные формы ASCII
 		r >= 0xFFE0 && r <= 0xFFE6,
-		r >= 0x1F004 || r == 0x1F0CF, // масть, джокер
 		r >= 0x20000 && r <= 0x3FFFD: // иероглифы, расширения B+
 		return true
 	}
@@ -354,13 +352,20 @@ func skipANSI(s string, i int) int {
 		}
 		return i - start
 	}
-	// Двухбайтовный CSI: ESC [ … финальная буква
+	// CSI: ESC [ … финальный байт 0x40–0x7E. Финалом может быть не
+	// только буква: «ESC[3~» (Delete) заканчивается тильдой, и прежняя
+	// проверка «только буква» съедала следующий за ней текст.
 	if i < len(s) && s[i] == '[' {
 		i++
 		for i < len(s) {
 			c := s[i]
-			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			if c >= 0x40 && c <= 0x7E {
 				return i + 1 - start
+			}
+			// Управляющий или не-ASCII байт не может быть частью CSI:
+			// иначе недописанная последовательность съест соседний текст.
+			if c < 0x20 || c >= 0x80 {
+				return i - start
 			}
 			i++
 		}
@@ -447,7 +452,86 @@ func cellWidth(s string) int {
 // Режем по кластерам и по накопленной ширине: символ, который не помещается
 // целиком, отбрасывается вместе со своими продолжениями, поэтому обрезка не
 // оставляет половину эмодзи и не выдаёт строку шире заданной.
+//
+// Если строка была цветной и обрезка отрезала её сброс, цвет закрывается
+// здесь же. Иначе терминал остаётся в последнем цвете, и весь следующий
+// вывод (включая приглашение) красится чужим цветом.
 func truncateCells(s string, n int) string {
+	out := trimTrailingEscape(truncateCellsRaw(s, n))
+	if out != s && out != "" && hasESC(out) {
+		out += cReset
+	}
+	return out
+}
+
+// trimTrailingEscape — убрать недописанную escape-последовательность
+// в конце строки. Обрезка по кластерам может остановиться сразу после
+// ESC или посреди CSI; дописанный к такому хвосту сброс цвета слился бы
+// с ним в одну последовательность и напечатал бы её хвост как текст.
+func trimTrailingEscape(s string) string {
+	for i := 0; i < len(s); {
+		if s[i] == 0x1B {
+			end, ok := ansiSeqEnd(s, i)
+			if !ok {
+				return strings.TrimRight(s[:i], "\x1b")
+			}
+			i = end
+			continue
+		}
+		_, sz := nextCluster(s, i)
+		if sz <= 0 {
+			sz = 1
+		}
+		i += sz
+	}
+	return s
+}
+
+// ansiSeqEnd — конец escape-последовательности в s[i] == ESC.
+// ok == false означает, что последовательность оборвана концом строки.
+func ansiSeqEnd(s string, i int) (int, bool) {
+	if i+1 >= len(s) {
+		return 0, false
+	}
+	switch s[i+1] {
+	case '[':
+		for j := i + 2; j < len(s); j++ {
+			c := s[j]
+			if c >= 0x40 && c <= 0x7E {
+				return j + 1, true
+			}
+			if c < 0x20 || c >= 0x80 {
+				// Последовательность оборвана посторонним байтом:
+				// skipANSI съедает только ESC[, а байт оставляет
+				// текстом — его нельзя терять при чистке хвоста.
+				return j, true
+			}
+		}
+		return 0, false
+	case ']':
+		for j := i + 2; j < len(s); j++ {
+			if s[j] == 0x07 {
+				return j + 1, true
+			}
+			if s[j] == 0x1B && j+1 < len(s) && s[j+1] == '\\' {
+				return j + 2, true
+			}
+		}
+		return 0, false
+	default:
+		c := s[i+1]
+		if c < 0x20 || c >= 0x80 {
+			// ESC не бывает началом такой пары: skipANSI считает
+			// его одиночным управляющим символом.
+			return i + 1, true
+		}
+		return i + 2, true
+	}
+}
+
+// truncateCellsRaw — обрезка без добавления сброса цвета. Нужна там, где
+// результат сравнивается с префиксом исходника (перенос по словам).
+func truncateCellsRaw(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}

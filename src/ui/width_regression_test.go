@@ -74,3 +74,101 @@ func TestEscapeBeforeMultibyteRuneKeepsRune(t *testing.T) {
 		t.Errorf("stripANSI съел часть буквы: %q вместо %q", plain, "ы")
 	}
 }
+
+// Раньше isEmoji считал эмодзи весь блок U+1F000–U+1F2FF и весь блок
+// стрелок U+2B00–U+2BFF. В них много узких символов, и каждая такая
+// строка получала лишнюю колонку. Широкими остаются только реальные
+// эмодзи, в том числе старые символы вроде ⬛ и 🀄.
+func TestCellWidthMixedBlocks(t *testing.T) {
+	cases := []struct {
+		name string
+		r    rune
+		want int
+	}{
+		{"стрелка U+2B04", 0x2B04, 1},
+		{"цифра U+1F100", 0x1F100, 1},
+		{"символ U+1FB00", 0x1FB00, 1},
+		{"квадрат U+2B1B", 0x2B1B, 2},
+		{"звезда U+2B50", 0x2B50, 2},
+		{"круг U+2B55", 0x2B55, 2},
+		{"масть U+1F004", 0x1F004, 2},
+		{"джокер U+1F0CF", 0x1F0CF, 2},
+	}
+	for _, c := range cases {
+		if got := cellWidth(string(c.r)); got != c.want {
+			t.Errorf("%s: ширина %d вместо %d", c.name, got, c.want)
+		}
+	}
+}
+
+// CSI заканчивается не только буквой: у «ESC[3~» (Delete) финал — тильда.
+// Прежний разбор ждал букву и съедал текст после последовательности.
+func TestCSITildeDoesNotEatText(t *testing.T) {
+	s := "\033[3~abc"
+	if got := cellWidth(s); got != 3 {
+		t.Errorf("ширина %d вместо 3: %q", got, s)
+	}
+	if got := stripANSI(s); got != "abc" {
+		t.Errorf("stripANSI = %q вместо %q", got, "abc")
+	}
+}
+
+// Сброс цвета, отрезанный вместе с хвостом строки, обязан быть дописан:
+// иначе терминал остаётся в красном и красит приглашение и следующий вывод.
+func TestTruncateCellsClosesColor(t *testing.T) {
+	s := "\033[31m" + strings.Repeat("я", 10) + "\033[0m"
+	got := truncateCells(s, 4)
+	if !strings.HasSuffix(got, cReset) {
+		t.Errorf("после обрезки нет сброса цвета: %q", got)
+	}
+	if w := cellWidth(got); w != 4 {
+		t.Errorf("ширина %d вместо 4: %q", w, got)
+	}
+	if !utf8.ValidString(got) || strings.ContainsRune(got, utf8.RuneError) {
+		t.Errorf("обрезка испортила UTF-8: %q", got)
+	}
+}
+
+// Недописанная escape-последовательность в хвосте не должна попасть
+// в вывод: сброс цвета, приклеенный к «ESC[3», превращал остаток
+// последовательности в обычный текст и разъезжалась ширина.
+func TestTruncateCellsDropsIncompleteEscape(t *testing.T) {
+	got := truncateCells("ab\033[3", 2)
+	if strings.ContainsRune(got, 0x1B) {
+		t.Errorf("в обрезанной строке остался escape: %q", got)
+	}
+	if w := cellWidth(got); w != 2 {
+		t.Errorf("ширина %d вместо 2: %q", w, got)
+	}
+}
+
+// Оборванная CSI перед обычным текстом не должна уносить этот текст:
+// разборщик считает ESC[ съеденным, а следующий байт — уже содержимым.
+func TestTruncateCellsKeepsTextAfterBrokenCSI(t *testing.T) {
+	got := truncateCells("x\033[\uFFFDabc", 100)
+	if !strings.Contains(got, "abc") {
+		t.Errorf("текст после оборванной CSI потерян: %q", got)
+	}
+	if w := cellWidth(got); w != 5 {
+		t.Errorf("ширина %d вместо 5: %q", w, got)
+	}
+}
+
+// StripANSI обязан понимать все виды CSI и OSC, а не только SGR с «m»:
+// «ESC[2K» очищает строку и заканчивается буквой K, OSC — BEL или ESC \.
+func TestStripANSINonSGR(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"\033[2Kabc", "abc"},
+		{"\033[3~abc", "abc"},
+		{"\033]0;title\033\\abc", "abc"},
+		{"\033]8;;https://example.com\007ссылка", "ссылка"},
+	}
+	for _, c := range cases {
+		if got := stripANSI(c.in); got != c.want {
+			t.Errorf("stripANSI(%q) = %q вместо %q", c.in, got, c.want)
+		}
+	}
+}

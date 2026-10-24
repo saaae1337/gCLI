@@ -80,6 +80,8 @@ func detectColorLevel() colorLevel {
 		return colorRGB
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TERM"))) {
+	case "dumb":
+		return colorNone
 	case "xterm-256color", "screen-256color", "alacritty", "wezterm", "foot", "kitty", "tmux-256color":
 		return color256
 	}

@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"gcli/core"
 )
@@ -412,6 +413,174 @@ func TestAutoHelpers(t *testing.T) {
 	buf.Reset()
 	if tag := StripANSI(u.AutoTag()); tag != "автопилот" {
 		t.Errorf("AutoTag = %q, ожидалось %q", tag, "автопилот")
+	}
+}
+
+// CRLF из ответа модели не должен оставлять «\r»: он возвращает курсор
+// в начало строки и затирает уже напечатанный текст.
+func TestStreamStripsCarriageReturns(t *testing.T) {
+	u, buf := testUI()
+	s := u.NewStream()
+	s.Write("первая\r\nвторая\r\n")
+	s.End()
+
+	out := buf.String()
+	if strings.ContainsRune(out, '\r') {
+		t.Errorf("в выводе остался CR: %q", out)
+	}
+	for _, want := range []string{"первая", "вторая"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("потеряна строка %q: %q", want, out)
+		}
+	}
+}
+
+// Длинный URL с кириллицей обрезался по байтам и рвал UTF-8 посреди
+// символа: в ответе появлялся знак замены.
+func TestInlineLongUnicodeURLStaysValid(t *testing.T) {
+	u, _ := testUI()
+	url := "https://example.com/" + strings.Repeat("я", 40)
+	got := u.inline("[ссылка](" + url + ")")
+
+	if !utf8.ValidString(got) {
+		t.Errorf("после обрезки URL строка невалидна: %q", got)
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Errorf("в ответе знак замены вместо буквы URL: %q", got)
+	}
+	if !strings.Contains(got, "ссылка") {
+		t.Errorf("текст ссылки потерян: %q", got)
+	}
+}
+
+// Заголовок с CJK должен тянуть линию на ширину текста в колонках:
+// «日本語» — это 6 колонок, а не 3 руны.
+func TestHeadingCJKRuleWidth(t *testing.T) {
+	u, _ := testUI()
+	got := StripANSI(u.RenderLine("## 日本語"))
+	if n := strings.Count(got, "─"); n != 6 {
+		t.Errorf("линия заголовка %d колонок вместо 6: %q", n, got)
+	}
+}
+
+// Заголовок раздела с CJK обязан занимать ровно ширину терминала:
+// расчёт по рунам оставлял лишние пробелы и уводил линию за край.
+func TestTitleCJKFillsWidth(t *testing.T) {
+	u, buf := testUI()
+	u.SetWidth(40)
+	u.Title("日本語")
+
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "◆") {
+			if got := cellWidth(line); got != 40 {
+				t.Errorf("заголовок шириной %d колонок вместо 40: %q", got, line)
+			}
+			return
+		}
+	}
+	t.Fatal("строка заголовка не найдена")
+}
+
+// Шапка блока с CJK и его тело не должны вылезать за ширину терминала.
+func TestBlockCJKWidth(t *testing.T) {
+	u, buf := testUI()
+	u.SetWidth(40)
+	u.Block(strings.Repeat("日本", 30), BlockOpts{Title: "日本語"})
+
+	foundHead := false
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if w := cellWidth(line); w > 40 {
+			t.Errorf("строка блока шире 40 колонок (%d): %q", w, line)
+		}
+		if strings.Contains(line, "◆") {
+			foundHead = true
+			if w := cellWidth(line); w != 40 {
+				t.Errorf("шапка блока шириной %d колонок вместо 40: %q", w, line)
+			}
+		}
+	}
+	if !foundHead {
+		t.Fatal("шапка блока не найдена")
+	}
+}
+
+// Длинный CJK-ключ шире обычной колонки: значение обязано начинаться
+// на одной вертикали у всех строк, а не съезжать из-за подсчёта рун.
+func TestKVPairsAlignsCJKKeys(t *testing.T) {
+	u, buf := testUI()
+	u.KVPairs([][2]string{
+		{strings.Repeat("日", 10), "x"},
+		{"k", "y"},
+	})
+
+	var starts []int
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		idx := strings.IndexAny(line, "xy")
+		if idx < 0 {
+			t.Fatalf("значение не найдено: %q", line)
+		}
+		starts = append(starts, cellWidth(line[:idx]))
+	}
+	if len(starts) != 2 {
+		t.Fatalf("ожидались две строки, получено %d:\n%s", len(starts), buf.String())
+	}
+	if starts[0] != starts[1] {
+		t.Errorf("значения начинаются в колонках %d и %d:\n%s", starts[0], starts[1], buf.String())
+	}
+}
+
+// Длинная CJK-задача в плане режется по колонкам: подсчёт в рунах
+// оставлял строку вдвое шире терминала.
+func TestRenderTodosCJKWidth(t *testing.T) {
+	u, buf := testUI()
+	u.SetWidth(30)
+	u.RenderTodos([]core.Todo{{
+		Content: strings.Repeat("日本語", 20),
+		Status:  core.TodoPending,
+	}})
+
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if w := cellWidth(line); w > 30 {
+			t.Errorf("строка плана шире 30 колонок (%d): %q", w, line)
+		}
+		if strings.ContainsRune(line, utf8.RuneError) {
+			t.Errorf("обрезка разорвала CJK-символ: %q", line)
+		}
+	}
+}
+
+// Путь и строки диффа с CJK не должны переползать за правый край.
+func TestPrintDiffFitsWidth(t *testing.T) {
+	u, buf := testUI()
+	u.SetWidth(40)
+	u.PrintDiff(
+		Diff("старое", strings.Repeat("新", 50)),
+		DiffOpts{Path: strings.Repeat("深", 30), NoStats: true},
+	)
+
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if w := cellWidth(line); w > 40 {
+			t.Errorf("строка диффа шире 40 колонок (%d): %q", w, line)
+		}
+		if strings.ContainsRune(line, utf8.RuneError) {
+			t.Errorf("обрезка разорвала CJK-символ: %q", line)
+		}
+	}
+}
+
+// Отрицательное значение прогресса не должно давать отрицательный
+// повтор строки (паника) или заполненную полосу.
+func TestBarNegativeDone(t *testing.T) {
+	u, _ := testUI()
+	got := u.Bar(-5, 10, 10)
+	if strings.Contains(got, u.g.BarFull) || strings.Contains(got, barPart) {
+		t.Errorf("при отрицательном прогрессе полоса заполнена: %q", got)
+	}
+	if w := cellWidth(got); w != 10 {
+		t.Errorf("ширина полосы %d вместо 10: %q", w, got)
 	}
 }
 

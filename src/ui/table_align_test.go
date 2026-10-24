@@ -60,6 +60,40 @@ func TestStatusMarkersUniform(t *testing.T) {
 	}
 }
 
+// Явно заданная Width — предел колонки: длинная CJK-ячейка не должна
+// сдвигать разделитель и ломать сетку таблицы.
+func TestTableExplicitWidthTruncatesOverlongCells(t *testing.T) {
+	u, buf := testUI()
+	u.SetWidth(60)
+	u.Table([]Column{
+		{Title: "名前", Width: 4},
+		{Title: "значение", Width: 8},
+	}, [][]string{{
+		strings.Repeat("日", 10), "x",
+	}}, BlockOpts{})
+
+	var sepStarts []int
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if w := cellWidth(line); w != 17 {
+			t.Errorf("строка таблицы шириной %d вместо 17: %q", w, line)
+		}
+		idx := strings.Index(line, " · ")
+		if idx < 0 {
+			t.Fatalf("разделитель колонок не найден: %q", line)
+		}
+		sepStarts = append(sepStarts, cellWidth(line[:idx]))
+	}
+	if len(sepStarts) != 2 {
+		t.Fatalf("ожидались шапка и строка данных, получено %d:\n%s", len(sepStarts), buf.String())
+	}
+	if sepStarts[0] != sepStarts[1] {
+		t.Errorf("разделитель сдвинут: колонки %d и %d\n%s", sepStarts[0], sepStarts[1], buf.String())
+	}
+}
+
 // Обрезка по ширине не должна разрывать глиф и не должна выходить за
 // лимит: иначе строка переползает на следующую.
 func TestTruncateKeepsGlyphIntact(t *testing.T) {

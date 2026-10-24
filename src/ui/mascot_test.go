@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -161,6 +162,23 @@ func TestMascotRender(t *testing.T) {
 	}
 }
 
+// В ASCII-режиме облачко реплики тоже ASCII: рамка «╭»/«╰» в консоли
+// без юникода превращается в кракозябры.
+func TestMascotSpeakASCIICloud(t *testing.T) {
+	u, buf := emberASCIIUI()
+	u.MascotSpeak(MascotIdle, "привет")
+
+	out := buf.String()
+	for _, bad := range []string{"╭", "╰"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("в ASCII-облачке осталась юникод-рамка %q:\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "+----------") {
+		t.Errorf("нет ASCII-хвоста облачка:\n%s", out)
+	}
+}
+
 // Морда-однострочник для спиннера и реплик: узнаётся и короткая.
 func TestMascotInline(t *testing.T) {
 	u, _ := mascotUI()
@@ -298,7 +316,7 @@ func shimmerHasHighlight(frame string) bool {
 // Перелив цикличен: кадры периода совпадают, а не «уехали и замерли».
 func TestShimmerIsCyclic(t *testing.T) {
 	u, _ := uiAt(ColorRGB, 60)
-	period := shimmerPeriod("thinking...")
+	period := float64(runeLen("thinking...")) / shimmerSpeed
 	a := u.shimmerWord("thinking...", 0)
 	b := u.shimmerWord("thinking...", period)
 	if a != b {
@@ -424,7 +442,7 @@ func TestMascotIdleStartStop(t *testing.T) {
 	}
 }
 
-// mascotRedraw — атомарный кадр с сохранением и восстановлением курсора.
+// mascotRedrawLines — атомарный кадр с сохранением и восстановлением курсора.
 func TestMascotRedrawAtomic(t *testing.T) {
 	buf := &syncBuf{}
 	u := New(Options{
@@ -435,9 +453,12 @@ func TestMascotRedrawAtomic(t *testing.T) {
 		Width:      60,
 		Out:        buf,
 	})
+	// Перерисовка поднимается на столько строк, сколько занял кот плюс
+	// строки между котом и приглашением: панель метрик добавляет две.
 	u.SetMascot(true)
 	u.mu.Lock()
-	u.mascotRedraw(MascotThink, 0)
+	u.mascotAnchor = 2
+	u.mascotRedrawLines(catLines(u.mascotFrameOf(MascotThink, 0)))
 	u.mu.Unlock()
 	out := buf.String()
 	if !strings.Contains(out, "\0337") || !strings.Contains(out, "\0338") {
@@ -448,8 +469,9 @@ func TestMascotRedrawAtomic(t *testing.T) {
 	if !strings.Contains(out, "-.-") || !strings.Contains(out, "/\\_/\\") {
 		t.Errorf("поза «думаю» не нарисована: %q", out)
 	}
-	if n := strings.Count(out, "\033[4A"); n != 1 {
-		t.Errorf("перерисовка должна подниматься ровно на %d строк (кот+статус), кадров: %d", mascotRedrawTop, n)
+	want := fmt.Sprintf("\033[%dA", catHeight+2)
+	if n := strings.Count(out, want); n != 1 {
+		t.Errorf("перерисовка должна подниматься на %d строк (кот+панель), кадров: %d", catHeight+2, n)
 	}
 }
 
