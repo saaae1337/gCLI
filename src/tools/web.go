@@ -35,8 +35,18 @@ func NewHTTPClient() *HTTPClient {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 20 * time.Second,
 	}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: tr}
+	// Редирект — это новый адрес от чужого сервера. Проверяем его так же,
+	// как исходный URL: иначе внешний сайт уводил бы запрос во внутреннюю
+	// сеть (при прокси dialer видит только прокси и не при чём).
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("слишком много перенаправлений")
+		}
+		return checkSSRF(req.URL.String())
+	}
 	return &HTTPClient{
-		Client:  &http.Client{Timeout: 30 * time.Second, Transport: tr},
+		Client:  client,
 		Version: core.Version,
 	}
 }
@@ -63,7 +73,6 @@ var (
 	// DuckDuckGo HTML.
 	reDDGResult  = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
 	reDDGSnippet = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
-	reDDGAlt     = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*result__url[^"]*"[^>]*>(.*?)</a>`)
 )
 
 // DecodeEntities — декодировать HTML-сущности.
@@ -273,9 +282,7 @@ func (r *Registry) hWebFetch(ctx context.Context, m map[string]any) (Result, err
 }
 
 func hostOf(u *url.URL) string {
-	h := u.Host
-	if i := strings.IndexByte(h, ':'); i > 0 {
-		h = h[:i]
-	}
-	return h
+	// Hostname, а не ручное отрезание по «:»: у IPv6 в Host скобки,
+	// и старый код возвращал «[» вместо адреса.
+	return u.Hostname()
 }

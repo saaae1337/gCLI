@@ -9,7 +9,7 @@ import (
 
 // TestBuiltinSkillsExist — встроенные навыки на месте и видны в списке.
 func TestBuiltinSkillsExist(t *testing.T) {
-	skills := BuiltinSkills()
+	skills := builtinSkills
 	if len(skills) < 3 {
 		t.Fatalf("ожидалось минимум 3 встроенных навыка, получено %d", len(skills))
 	}

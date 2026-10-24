@@ -390,6 +390,15 @@ func TestLSPSilentServerMustNotBreakEdit(t *testing.T) {
 	}
 }
 
+// TestReadFrameRejectsHugeFrame — Content-Length приходит от внешнего
+// процесса; гигантское значение не должно приводить к выделению памяти.
+func TestReadFrameRejectsHugeFrame(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("Content-Length: 999999999\r\n\r\n"))
+	if _, ok := readFrame(r); ok {
+		t.Fatal("фрейм с гигантским Content-Length принят")
+	}
+}
+
 // TestLSPMissingFileAnswers — несуществующий файл обязан дать понятную
 // ошибку, а не молча вернуть пустоту.
 func TestLSPMissingFileAnswers(t *testing.T) {

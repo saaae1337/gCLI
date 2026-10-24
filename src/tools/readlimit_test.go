@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,7 +167,7 @@ func TestHReadFileLongLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := New(Env{WorkDir: work})
-	res, err := r.hReadFile(nil, map[string]any{"path": "min.js"})
+	res, err := r.hReadFile(context.Background(), map[string]any{"path": "min.js"})
 	if err != nil {
 		t.Fatalf("длинная строка не должна ронять чтение: %v", err)
 	}

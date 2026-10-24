@@ -34,18 +34,6 @@ func (o *spawnOrder) list() []string {
 	return out
 }
 
-// after — номер запуска name в журнале (0, если не запускался).
-func (o *spawnOrder) after(name string) int {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	for i, n := range o.names {
-		if n == name {
-			return i
-		}
-	}
-	return 0
-}
-
 // waveReg — реестр, где каждый запуск запоминает задачу и порядок старта.
 func waveReg(t *testing.T, order *spawnOrder, body func(a SpawnArgs) (SpawnResult, error)) (*Registry, *[]ProgressEvent) {
 	t.Helper()

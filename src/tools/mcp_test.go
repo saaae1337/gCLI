@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -121,6 +122,33 @@ func TestMCPParseCallResult(t *testing.T) {
 	res3, _ := mcpParseCallResult(rawEmpty, "srv")
 	if res3.Text == "" {
 		t.Error("пустой ответ должен давать заглушку")
+	}
+}
+
+// TestMCPCallIgnoresLateResponse — после таймаута предыдущего вызова его
+// ответ может прийти уже во время следующего. Чужой id нельзя принимать
+// за текущий ответ: вызов обязан дождаться своего.
+func TestMCPCallIgnoresLateResponse(t *testing.T) {
+	c := &mcpConn{stdin: make(chan string, 1), done: make(chan struct{})}
+	go func() {
+		line := <-c.stdin
+		var req mcpRequest
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			return
+		}
+		ch := *c.pending.Load()
+		wrong := req.ID - 1
+		ch <- mcpResponse{ID: &wrong, Result: json.RawMessage(`"старый"`)}
+		right := req.ID
+		ch <- mcpResponse{ID: &right, Result: json.RawMessage(`"новый"`)}
+	}()
+
+	got, err := c.call(context.Background(), "test", nil)
+	if err != nil {
+		t.Fatalf("поздний ответ предыдущего вызова сломал текущий: %v", err)
+	}
+	if string(got) != `"новый"` {
+		t.Errorf("получен не тот ответ: %s", got)
 	}
 }
 

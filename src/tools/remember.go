@@ -259,7 +259,9 @@ func ForgetMemory(query string) (int, error) {
 func (r *Registry) hRemember(_ context.Context, m map[string]any) (Result, error) {
 	action := strings.ToLower(strings.TrimSpace(ArgStr(m, "action")))
 	if action == "" {
-		action = "write"
+		// Схема инструмента обещает read по умолчанию; write без факта
+		// возвращал ошибку и ломал чтение памяти без аргументов.
+		action = "read"
 	}
 	switch action {
 	case "write", "запомнить", "add":

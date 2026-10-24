@@ -382,12 +382,3 @@ func (r *Registry) ChangesSince(t time.Time) []Change {
 	}
 	return out
 }
-
-// changeStart — момент начала работы агента (первая правка).
-func (r *Registry) changeStart() time.Time {
-	list := r.change().all()
-	if len(list) == 0 {
-		return time.Time{}
-	}
-	return list[0].At
-}

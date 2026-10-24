@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,8 +33,11 @@ import (
 // у Anthropic, у OpenAI похоже; берём с запасом меньше лимита API).
 const maxImageBytes = 4 * 1024 * 1024
 
-// maxImagesPerResult — сколько изображений один инструмент может приложить.
-const maxImagesPerResult = 4
+// fullPageHeight — высота окна для снимка всей страницы.
+//
+// Страница длиннее 8000 px — редкость; если она длиннее, снизу останется
+// хвост, но верх (шапка, первый экран) виден целиком.
+const fullPageHeight = 8000
 
 // mimeByExt — MIME по расширению файла.
 var mimeByExt = map[string]string{
@@ -46,8 +51,9 @@ var mimeByExt = map[string]string{
 const schemaScreenshot = `{"type":"object","properties":{` +
 	`"target":{"type":"string","description":"URL (https://...) или путь к HTML-файлу страницы"},` +
 	`"out":{"type":"string","description":"Куда сохранить PNG (необязательно; по умолчанию .gcli/screenshots)"},` +
-	`"width":{"type":"integer","description":"Ширина вьюпорта, px (по умолчанию 1440)"},` +
-	`"height":{"type":"integer","description":"Высота вьюпорта, px (по умолчанию 900)"}` +
+	`"width":{"type":"integer","description":"Ширина вьюпорта в CSS-пикселях (по умолчанию 1440). Для мобильной проверки — 390."},` +
+	`"height":{"type":"integer","description":"Высота вьюпорта в CSS-пикселях (по умолчанию 900)"},` +
+	`"full_page":{"type":"boolean","description":"Снимок всей страницы целиком: ширина та же, высота окна увеличивается. Используй, чтобы увидеть низ страницы, не прокручивая её по кускам."}` +
 	`},"required":["target"]}`
 
 const schemaReadImage = `{"type":"object","properties":{` +
@@ -57,7 +63,8 @@ const schemaReadImage = `{"type":"object","properties":{` +
 // RegisterVision — инструменты зрения.
 func (r *Registry) RegisterVision() {
 	r.registerBound("screenshot", "Сделать скриншот страницы и ПОСМОТРЕТЬ на него глазами: снимок прикладывается к твоему контексту как изображение. "+
-		"Используй после вёрстки/изменения UI (target — URL или HTML-файл), чтобы проверить, как страница выглядит на самом деле.",
+		"Используй после вёрстки/изменения UI (target — URL или HTML-файл), чтобы проверить, как страница выглядит на самом деле. "+
+		"width — ширина вьюпорта в CSS-пикселях (390 — мобильный, 1440 — десктоп), full_page — снимок всей страницы целиком.",
 		schemaScreenshot, "read", false, func(r *Registry) Handler { return r.hScreenshot })
 	r.registerBound("read_image", "Посмотреть на изображение с диска (png, jpg, webp, gif): файл прикладывается к контексту как изображение. "+
 		"Используй для макетов, скриншотов пользователя, схем.",
@@ -124,10 +131,7 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 		if _, err := os.Stat(p); err != nil {
 			return Result{}, fmt.Errorf("файл не найден: %s", p)
 		}
-		target = "file://" + p
-		if runtime.GOOS == "windows" {
-			target = strings.ReplaceAll(target, "\\", "/")
-		}
+		target = fileURL(p)
 	} else {
 		// Сетевой адрес браузер качает сам — та же дыра, что закрыта у
 		// web_fetch: без проверки скриншот http://169.254.169.254/ приносил
@@ -141,6 +145,12 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	h := ArgInt(m, "height", 900)
 	w = core.Clamp(w, 240, 3840)
 	h = core.Clamp(h, 240, 3840)
+	// Вся страница: ширина та же, высота окна — большая. Иначе низ страницы
+	// виден только по кускам, и каждый кусок — отдельный запрос со своим
+	// снимком в контексте.
+	if ArgBool(m, "full_page") {
+		h = fullPageHeight
+	}
 
 	// Куда сохранить: .gcli/screenshots/<имя>.png или как попросили.
 	out := strings.TrimSpace(ArgStr(m, "out"))
@@ -181,6 +191,11 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 		"--hide-scrollbars",
 		"--force-device-scale-factor=1",
 		"--virtual-time-budget=4000",
+		// Лог браузера в stderr: оттуда берутся ошибки консоли страницы.
+		// Без этого агент видит снимок красивого экрана и не знает, что
+		// скрипт на странице падает.
+		"--enable-logging=stderr",
+		"--v=1",
 		"--user-data-dir=" + profile,
 		fmt.Sprintf("--window-size=%d,%d", w, h),
 		"--screenshot=" + outPath,
@@ -191,13 +206,87 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	defer cancel()
 	cmd := exec.CommandContext(cctx, browser, args...)
 	cmd.Env = append(os.Environ(), "HOME="+os.TempDir())
-	if _, err := cmd.CombinedOutput(); err != nil {
+	log, err := cmd.CombinedOutput()
+	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
 			return Result{}, fmt.Errorf("браузер не успел за 60 с — страница, вероятно, слишком тяжёлая")
 		}
 		return Result{}, fmt.Errorf("скриншот не удался: %v", err)
 	}
-	return r.attachImageFile(outPath, "screenshot")
+	res, err := r.attachImageFile(outPath, "screenshot")
+	if err != nil {
+		return res, err
+	}
+	// Ошибки консоли страницы — в текст результата: агент читает текст
+	// результата, а картинку он смотрит глазами.
+	if errs := consoleErrors(string(log)); len(errs) > 0 {
+		res.Text += "\n\nОшибки в консоли страницы:\n" + strings.Join(errs, "\n")
+		res.Summary += " · ошибок в консоли: " + strconv.Itoa(len(errs))
+	}
+	return res, nil
+}
+
+// consoleErrors — ошибки консоли страницы из лога браузера.
+//
+// Chromium пишет их в stderr строкой вида
+// «[INFO:CONSOLE(12)] "Uncaught TypeError: x", source: file:///…».
+// Необработанное исключение помечается INFO, а console.error — ERROR, так
+// что ловим оба.
+//
+// Оставляем только сообщения самой страницы: у них источник — её адрес
+// (file:// или http://). Всё остальное (расширения браузера, его
+// внутренние модули) — шум, и в контекст модели он не нужен. Из
+// сообщений страницы берём только ошибки: обычный console.log — это не
+// проблема.
+func consoleErrors(log string) []string {
+	var out []string
+	for _, line := range strings.Split(log, "\n") {
+		i := strings.Index(line, "CONSOLE")
+		if i < 0 {
+			continue
+		}
+		prefix := line[:i]
+		rest := line[i+len("CONSOLE"):]
+		// Отрезаем номер строки: "(12)] ".
+		j := strings.Index(rest, "]")
+		if j < 0 {
+			continue
+		}
+		rest = strings.TrimSpace(rest[j+1:])
+		if rest == "" {
+			continue
+		}
+		// Источник: страница или расширение браузера.
+		src := ""
+		if k := strings.Index(rest, ", source:"); k >= 0 {
+			src = strings.TrimSpace(rest[k+len(", source:"):])
+			rest = strings.TrimSpace(rest[:k])
+		}
+		if !strings.HasPrefix(src, "file://") && !strings.HasPrefix(src, "http") {
+			continue
+		}
+		msg := strings.Trim(strings.TrimSpace(rest), `"`)
+		if msg == "" {
+			continue
+		}
+		// Только ошибки: console.error и необработанные исключения.
+		isErr := strings.Contains(prefix, "ERROR:") ||
+			strings.HasPrefix(msg, "Uncaught ") ||
+			strings.HasPrefix(msg, "TypeError") ||
+			strings.HasPrefix(msg, "ReferenceError") ||
+			strings.HasPrefix(msg, "SyntaxError")
+		if !isErr {
+			continue
+		}
+		if len([]rune(msg)) > 200 {
+			msg = string([]rune(msg)[:200]) + "…"
+		}
+		out = append(out, "• "+msg)
+		if len(out) >= 10 {
+			break
+		}
+	}
+	return out
 }
 
 // hReadImage — приложить локальное изображение к контексту.
@@ -213,12 +302,39 @@ func (r *Registry) hReadImage(_ context.Context, m map[string]any) (Result, erro
 	return r.attachImageFile(abs, "read_image")
 }
 
+// fileURL — file://-адрес локального пути.
+//
+// Склейка «file://» + путь на Windows даёт «file://C:\x»: буква диска
+// уезжает в Host, и браузер файл не находит. Нужен «file:///C:/x».
+func fileURL(p string) string {
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(p)}
+	if !strings.HasPrefix(u.Path, "/") {
+		u.Path = "/" + u.Path
+	}
+	return u.String()
+}
+
 // attachImageFile — прочитать файл изображения и приложить к результату.
 func (r *Registry) attachImageFile(path, tool string) (Result, error) {
+	// Размер проверяем до чтения: иначе файл на гигабайт сначала целиком
+	// попадал в память и только потом отвергался.
+	st, err := os.Stat(path)
+	if err != nil {
+		return Result{}, fmt.Errorf("не удалось прочитать изображение: %v", err)
+	}
+	if st.IsDir() {
+		return Result{}, fmt.Errorf("это каталог, а не изображение: %s", path)
+	}
+	if st.Size() > maxImageBytes {
+		return Result{}, fmt.Errorf(
+			"изображение слишком большое (%s, потолок 4 МБ) — уменьши его и повтори",
+			core.HumanSize(int(st.Size())))
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось прочитать изображение: %v", err)
 	}
+	// Файл мог вырасти между Stat и ReadFile.
 	if len(data) > maxImageBytes {
 		return Result{}, fmt.Errorf(
 			"изображение слишком большое (%s, потолок 4 МБ) — уменьши его и повтори",
@@ -255,12 +371,4 @@ func (r *Registry) attachImageFile(path, tool string) (Result, error) {
 		Summary: fmt.Sprintf("%s: %s", tool, label),
 		Images:  []core.Image{img},
 	}, nil
-}
-
-// ClampImages — ограничить список изображений (потолок на один результат).
-func ClampImages(imgs []core.Image) []core.Image {
-	if len(imgs) > maxImagesPerResult {
-		return imgs[:maxImagesPerResult]
-	}
-	return imgs
 }

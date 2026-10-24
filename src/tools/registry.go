@@ -206,18 +206,6 @@ type ProgressEvent struct {
 	Final bool
 }
 
-// Short — короткая подпись события для UI.
-func (e ProgressEvent) Short() string {
-	s := e.Label
-	if e.Err != "" {
-		s = s + ": " + e.Err
-	}
-	if len([]rune(s)) > 60 {
-		s = string([]rune(s)[:60]) + "…"
-	}
-	return s
-}
-
 // ConfirmReq — запрос подтверждения.
 type ConfirmReq struct {
 	Kind   ConfirmKind
@@ -584,18 +572,6 @@ func (r *Registry) SetDepth(depth int) *Registry {
 	return r
 }
 
-// register — добавить инструмент.
-func (r *Registry) register(name, desc, schema, category string, confirm bool, h Handler) {
-	t := &Tool{
-		Def:          ToolDef{Name: name, Description: desc, Schema: schema},
-		Handler:      h,
-		Category:     category,
-		NeedsConfirm: confirm,
-	}
-	r.tools = append(r.tools, t)
-	r.byName[name] = t
-}
-
 // registerBound — добавить инструмент вместе с фабрикой обработчика.
 //
 // Фабрика нужна копиям реестра: они пересобирают обработчик уже на себя, и
@@ -613,7 +589,8 @@ func (r *Registry) registerBound(name, desc, schema, category string, confirm bo
 }
 
 // registerExt — добавить инструмент расширения (учитывая коллизии имён).
-func (r *Registry) registerExt(extName, name, desc, schema, category string, h Handler) (string, []string) {
+// Второй результат — был ли инструмент действительно зарегистрирован.
+func (r *Registry) registerExt(extName, name, desc, schema, category string, h Handler) (string, bool, []string) {
 	final := name
 	warns := []string{}
 	if r.byName[final] != nil {
@@ -621,7 +598,7 @@ func (r *Registry) registerExt(extName, name, desc, schema, category string, h H
 	}
 	if r.byName[final] != nil {
 		warns = append(warns, fmt.Sprintf("расширение %s: имя «%s» занято — пропущен", extName, name))
-		return final, warns
+		return final, false, warns
 	}
 	t := &Tool{
 		Def:      ToolDef{Name: final, Description: "[" + extName + "] " + desc, Schema: schema},
@@ -631,7 +608,7 @@ func (r *Registry) registerExt(extName, name, desc, schema, category string, h H
 	}
 	r.tools = append(r.tools, t)
 	r.byName[final] = t
-	return final, warns
+	return final, true, warns
 }
 
 // ---------- Хелперы разбора аргументов ----------
@@ -705,25 +682,6 @@ func ArgBool(m map[string]any, k string) bool {
 		}
 	}
 	return false
-}
-
-// ArgFloat — число с плавающей точкой.
-func ArgFloat(m map[string]any, k string, def float64) float64 {
-	switch v := m[k].(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			return f
-		}
-	}
-	return def
 }
 
 // ArgStrSlice — массив строк.

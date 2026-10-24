@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +57,42 @@ func TestDetectVerifyNode(t *testing.T) {
 	cands := DetectVerify(dir)
 	if len(cands) == 0 || !strings.Contains(cands[0].Cmd, "npm test") {
 		t.Errorf("для Node-проекта ожидался npm test, получено: %v", cands)
+	}
+}
+
+// TestDetectVerifyPythonDirMarker — pytest по умолчанию ищет тесты в
+// каталоге tests/ (или test/). Каталог — такой же маркер, как файл;
+// раньше existsGlob отбрасывал всё, что IsDir, и Python-проект без
+// pytest.ini не определялся.
+func TestDetectVerifyPythonDirMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cands := DetectVerify(dir)
+	for _, c := range cands {
+		if c.Cmd == "python -m pytest -q" {
+			return
+		}
+	}
+	t.Errorf("каталог tests/ не распознан как pytest-проект: %v", cands)
+}
+
+// TestDiffIgnoresOtherCommand — baseline одной команды нельзя сравнивать
+// с прогоном другой: иначе падения «чужой» проверки выглядят новыми.
+func TestDiffIgnoresOtherCommand(t *testing.T) {
+	prev := &VerifyReport{
+		Command:  "npm test",
+		Failures: []Failure{{Where: "app.test.js", What: "ожидалось 2"}},
+	}
+	rep := ParseVerify("go test ./...", 1, time.Second, "--- FAIL: TestX (0.00s)")
+	rep.Diff(prev)
+	if rep.HadBaseline {
+		t.Error("сравнение с baseline другой команды не должно считаться baseline")
+	}
+	if len(rep.NewFailures) != 0 || rep.Fixed != 0 {
+		t.Errorf("чужие падения попали в дифф: новых %d, исправлено %d",
+			len(rep.NewFailures), rep.Fixed)
 	}
 }
 
@@ -277,7 +314,7 @@ func TestVerifyToolEndToEnd(t *testing.T) {
 	t.Setenv("GCLI_HOME", t.TempDir()) // изолируем базовую линию
 	r := New(Env{WorkDir: dir})
 
-	res, err := r.hVerify(nil, map[string]any{"command": "go test ./..."})
+	res, err := r.hVerify(context.Background(), map[string]any{"command": "go test ./..."})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -290,7 +327,7 @@ func TestVerifyToolEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "p", "p.go"), []byte("package p\n\nfunc Add(a, b int) int { return a + Missing(a, b) }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res2, err := r.hVerify(nil, map[string]any{"command": "go build ./..."})
+	res2, err := r.hVerify(context.Background(), map[string]any{"command": "go build ./..."})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -308,7 +345,7 @@ func TestVerifySuggestModeRunsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := New(Env{WorkDir: dir})
-	res, err := r.hVerify(nil, map[string]any{"suggest": true})
+	res, err := r.hVerify(context.Background(), map[string]any{"suggest": true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +362,9 @@ func TestBaselineIsPerProject(t *testing.T) {
 	if baselinePath(a) == baselinePath(b) {
 		t.Fatal("у разных проектов должен быть свой baseline")
 	}
-	if baselinePath(a) != baselinePath(a) {
+	p1 := baselinePath(a)
+	p2 := baselinePath(a)
+	if p1 != p2 {
 		t.Error("baseline одного проекта должен быть стабильным")
 	}
 	if !strings.HasPrefix(filepath.Base(baselinePath(a)), "verify") &&

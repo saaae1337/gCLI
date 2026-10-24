@@ -77,6 +77,24 @@ func TestSSRFRespectsOptOut(t *testing.T) {
 	}
 }
 
+// TestProxyHostsMatchPort — исключение для прокси должно покрывать ровно
+// его хост:порт. Иначе прокси на localhost разрешал прямое соединение с
+// любым портом localhost, включая внутренние сервисы.
+func TestProxyHostsMatchPort(t *testing.T) {
+	for _, env := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+		"http_proxy", "https_proxy", "all_proxy"} {
+		t.Setenv(env, "")
+	}
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:3128")
+	got := proxyHosts()
+	if !got["127.0.0.1:3128"] {
+		t.Errorf("адрес прокси не найден: %v", got)
+	}
+	if got["127.0.0.1:8080"] {
+		t.Errorf("исключение прокси распространилось на чужой порт: %v", got)
+	}
+}
+
 // TestSSRFDialBlocksInternalIP — адрес проверяется в момент подключения, а не
 // только до запроса: иначе ответ DNS, подменивший адрес между проверкой и
 // соединением (rebinding), проходил бы фильтр.
@@ -113,10 +131,10 @@ func TestSSRFWebFetchBlocksInternal(t *testing.T) {
 	work := t.TempDir()
 	r := New(Env{WorkDir: work})
 	// Никакой сети тут быть не должно: проверка обязана сработать ДО запроса.
-	if _, err := r.hWebFetch(nil, map[string]any{"url": "http://169.254.169.254/latest/meta-data/"}); err == nil {
+	if _, err := r.hWebFetch(context.Background(), map[string]any{"url": "http://169.254.169.254/latest/meta-data/"}); err == nil {
 		t.Fatal("web_fetch обязан отклонить метаданные облака")
 	}
-	if _, err := r.hWebFetch(nil, map[string]any{"url": "http://localhost:1/"}); err == nil {
+	if _, err := r.hWebFetch(context.Background(), map[string]any{"url": "http://localhost:1/"}); err == nil {
 		t.Fatal("web_fetch обязан отклонить localhost")
 	}
 }
@@ -128,7 +146,7 @@ func TestSSRFExtHTTPToolBlocksInternal(t *testing.T) {
 	ext := Extension{Name: "внутренний"}
 	tool := ExtTool{Name: "local", URL: "http://127.0.0.1:9000/{input}", Method: "GET"}
 	h := r.extHTTPHandler(ext, tool)
-	if _, err := h(nil, map[string]any{"input": "admin"}); err == nil {
+	if _, err := h(context.Background(), map[string]any{"input": "admin"}); err == nil {
 		t.Fatal("HTTP-расширение не должно обходить SSRF-фильтр")
 	}
 }

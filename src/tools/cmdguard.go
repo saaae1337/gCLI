@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -237,6 +238,9 @@ func isDriveLetter(c byte) bool {
 // sysAllowed — служебный путь, который песочница не контролирует.
 func sysAllowed(p string) bool {
 	p = strings.ReplaceAll(p, `\`, "/")
+	// Сначала нормализуем: «/tmp/../etc/passwd» начинается с /tmp, но
+	// указывает на /etc — префиксная проверка без Clean пропускала его.
+	p = path.Clean(p)
 	for _, s := range sysPathOK {
 		if p == s || strings.HasPrefix(p, s+"/") {
 			return true

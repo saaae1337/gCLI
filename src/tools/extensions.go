@@ -100,9 +100,6 @@ func parseExtension(path string) (Extension, error) {
 
 const schemaExt = `{"type":"object","properties":{"input":{"type":"string","description":"Входные данные/аргументы. Для shell-инструментов приходят в переменную окружения (GCLI_INPUT) и stdin — в команде читай \"$GCLI_INPUT\"/\"%GCLI_INPUT%\", вставлять вход в строку команды нельзя. Для HTTP-инструментов подставляются в url/body как раньше."}},"required":[]}`
 
-// extToolCount — число подключённых инструментов расширений.
-var extToolCount int
-
 // extTrusted — можно ли подключать расширение.
 //
 // Расширение из глобального каталога доверено: его писал пользователь.
@@ -186,26 +183,24 @@ func (r *Registry) LoadExtensionTools() (int, []string) {
 			}
 			switch {
 			case t.Command != "":
-				name, w := r.registerExt(ext.Name, t.Name, desc, schemaExt, "ext", r.extCmdHandler(ext, t))
+				_, ok, w := r.registerExt(ext.Name, t.Name, desc, schemaExt, "ext", r.extCmdHandler(ext, t))
 				warns = append(warns, w...)
-				_ = name
-				count++
+				if ok {
+					count++
+				}
 			case t.URL != "":
-				name, w := r.registerExt(ext.Name, t.Name, desc, schemaExt, "ext", r.extHTTPHandler(ext, t))
+				_, ok, w := r.registerExt(ext.Name, t.Name, desc, schemaExt, "ext", r.extHTTPHandler(ext, t))
 				warns = append(warns, w...)
-				_ = name
-				count++
+				if ok {
+					count++
+				}
 			default:
 				warns = append(warns, fmt.Sprintf("расширение %s: у «%s» нет command и url — пропущен", ext.Name, t.Name))
 			}
 		}
 	}
-	extToolCount = count
 	return count, warns
 }
-
-// ExtToolCount — количество инструментов расширений.
-func ExtToolCount() int { return extToolCount }
 
 // extInputEnv — переменная окружения с входом расширения.
 func extInputEnv(t ExtTool) string {
@@ -252,8 +247,9 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		if strings.TrimSpace(cmdStr) == "" {
 			return Result{}, fmt.Errorf("пустая команда")
 		}
-		if t.ReadOnly && r.env.ReadOnly {
-			// В режиме только чтения расширение-запись всё равно пропускаем.
+		if r.env.ReadOnly && !t.ReadOnly {
+			// В режиме «только чтение» разрешены лишь расширения, явно
+			// помеченные read_only; всё, что может писать, — запрещено.
 			return Result{Error: "режим «только чтение»"}, nil
 		}
 		if !t.NoConfirm && r.env.Confirm != nil {
@@ -298,14 +294,17 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		lines := len(core.SplitLines(out))
 		out = core.TruncateUTF8(out, 8000, 8000)
 		if err != nil {
+			// Таймаут проверяем ДО ExitError: CommandContext убивает процесс,
+			// и ошибка приходит как обычный ненулевой код выхода. Иначе
+			// таймаут выглядел бы как штатное падение команды.
 			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
-			} else if cctx.Err() == context.DeadlineExceeded {
+			if cctx.Err() == context.DeadlineExceeded {
 				return Result{
 					Text:    fmt.Sprintf("Таймаут %ds. Частичный вывод:\n%s", timeout, out),
 					Summary: "таймаут",
 				}, nil
+			} else if errors.As(err, &ee) {
+				out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
 			} else {
 				return Result{}, fmt.Errorf("%v", err)
 			}

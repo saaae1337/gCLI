@@ -133,7 +133,7 @@ func (ts *trustStore) Check(kind, name string, files map[string]string) (TrustLe
 }
 
 // Approve — запомнить согласие.
-func (ts *trustStore) Approve(kind, name, hash, note string) {
+func (ts *trustStore) Approve(kind, name, hash string) {
 	if ts == nil || kind == "user" {
 		return
 	}
@@ -141,7 +141,6 @@ func (ts *trustStore) Approve(kind, name, hash, note string) {
 	ts.hashes[trustKey(kind, name)] = hash
 	ts.mu.Unlock()
 	ts.save()
-	_ = note
 }
 
 // Forget — забыть согласия (команда «доверять заново»).
@@ -303,7 +302,7 @@ func (r *Registry) TrustCode(w ProjectCodeWarning) {
 	if err != nil {
 		return
 	}
-	r.env.Trust.Approve(w.Kind, w.Name, hashSources(map[string]string{w.Path: string(data)}), w.What)
+	r.env.Trust.Approve(w.Kind, w.Name, hashSources(map[string]string{w.Path: string(data)}))
 }
 
 // FindPendingCode — найти недоверенный код по имени (для /ext trust x).

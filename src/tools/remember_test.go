@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -111,6 +112,23 @@ func TestRememberMovesToFrontWhenAlone(t *testing.T) {
 	}
 	if entries[0].Note != "стало" {
 		t.Errorf("комментарий не обновился: %q", entries[0].Note)
+	}
+}
+
+// TestRememberDefaultsToRead — схема обещает action=read по умолчанию.
+// Раньше пустой action означал write и падал на пустом факте.
+func TestRememberDefaultsToRead(t *testing.T) {
+	memHome(t)
+	if _, err := AddMemory("факт для чтения", ""); err != nil {
+		t.Fatal(err)
+	}
+	r := New(Env{WorkDir: t.TempDir()})
+	res, err := r.hRemember(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("чтение памяти без action вернуло ошибку: %v", err)
+	}
+	if !strings.Contains(res.Text, "факт для чтения") {
+		t.Errorf("память не прочитана: %s", res.Text)
 	}
 }
 

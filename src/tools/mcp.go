@@ -3,6 +3,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -132,6 +133,9 @@ type mcpConn struct {
 	pending atomic.Pointer[chan mcpResponse]
 	scanner *bufio.Scanner
 	closed  atomic.Bool
+	// stopOnce — Wait вызывается ровно один раз, даже если читатель уже
+	// успел заметить EOF и выставить closed.
+	stopOnce sync.Once
 }
 
 // mcpResponse — ответ сервера (result или error).
@@ -291,17 +295,23 @@ func (c *mcpConn) call(ctx context.Context, method string, params any) (json.Raw
 		return nil, ctx.Err()
 	}
 
-	select {
-	case resp := <-ch:
-		if resp.ID == nil || *resp.ID != id {
-			return nil, fmt.Errorf("чужой id ответа")
+	for {
+		select {
+		case resp := <-ch:
+			if resp.ID == nil || *resp.ID != id {
+				// Поздний ответ на предыдущий (уже отменённый) вызов.
+				// Раньше он обрывал текущий вызов ошибкой «чужой id».
+				continue
+			}
+			if resp.Err != nil {
+				return nil, resp.Err
+			}
+			return resp.Result, nil
+		case <-c.done:
+			return nil, fmt.Errorf("сервер остановлен")
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		if resp.Err != nil {
-			return nil, resp.Err
-		}
-		return resp.Result, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
 }
 
@@ -319,14 +329,16 @@ func (c *mcpConn) notify(method string, params any) {
 
 // stop — остановить процесс сервера.
 func (c *mcpConn) stop() {
-	if c.closed.Swap(true) {
-		return
-	}
-	// done, а не close(stdin): отправка в закрытый канал паникует, а
-	// зависший в call() отправитель в этот момент — обычное дело.
-	close(c.done)
-	_ = c.cmd.Process.Kill()
-	_ = c.cmd.Wait()
+	c.stopOnce.Do(func() {
+		c.closed.Store(true)
+		// done, а не close(stdin): отправка в закрытый канал паникует, а
+		// зависший в call() отправитель в этот момент — обычное дело.
+		close(c.done)
+		_ = c.cmd.Process.Kill()
+		// Wait обязателен даже если читатель уже увидел EOF: иначе процесс
+		// остаётся зомби, а на Windows не освобождаются его дескрипторы.
+		_ = c.cmd.Wait()
+	})
 }
 
 // alive — процесс ещё жив?
@@ -337,6 +349,35 @@ func (c *mcpConn) stop() {
 // stdout держит closed=false, а умерший обнаруживается читателем.
 func (c *mcpConn) alive() bool {
 	return c != nil && !c.closed.Load()
+}
+
+// saveInlineImage — сохранить картинку, пришедшую в base64, на диск.
+//
+// Путь нужен для того, чтобы картинка пережила перезапуск: в сессии
+// хранится путь, а не сами данные.
+func saveInlineImage(workDir, data, mime string) string {
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(workDir, ".gcli", "images")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	ext := ".png"
+	switch mime {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/webp":
+		ext = ".webp"
+	case "image/gif":
+		ext = ".gif"
+	}
+	name := filepath.Join(dir, "mcp-"+core.RandID(6)+ext)
+	if err := os.WriteFile(name, raw, 0o644); err != nil {
+		return ""
+	}
+	return name
 }
 
 // ---------- Регистрация инструментов MCP ----------
@@ -551,12 +592,12 @@ func (r *Registry) mcpHandler(server, fullName, callName string) Handler {
 		if err != nil {
 			return Result{}, fmt.Errorf("MCP «%s»: %v", server, err)
 		}
-		return mcpParseCallResult(raw, server)
+		return mcpParseCallResult(raw, server, r.workDir)
 	}
 }
 
 // mcpParseCallResult — разобрать результат tools/call: текст + картинки.
-func mcpParseCallResult(raw json.RawMessage, server string) (Result, error) {
+func mcpParseCallResult(raw json.RawMessage, server string, workDir ...string) (Result, error) {
 	var res struct {
 		Content []struct {
 			Type     string `json:"type"`
@@ -587,7 +628,13 @@ func mcpParseCallResult(raw json.RawMessage, server string) (Result, error) {
 				if mime == "" {
 					mime = "image/png"
 				}
-				imgs = append(imgs, core.Image{MIME: mime, Data: c.Data})
+				// Картинку кладём на диск: в сессии хранится путь, а не
+				// base64 — иначе файл сессии раздувается на мегабайты.
+				path := ""
+				if len(workDir) > 0 {
+					path = saveInlineImage(workDir[0], c.Data, mime)
+				}
+				imgs = append(imgs, core.Image{MIME: mime, Data: c.Data, Path: path})
 			}
 		case "resource":
 			b.WriteString("[resource] (содержимое ресурса не поддерживается этим инструментом)\n")

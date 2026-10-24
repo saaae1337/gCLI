@@ -250,7 +250,13 @@ func TestExpandSkillArgsLeavesBodyWithoutMarker(t *testing.T) {
 }
 
 func TestBuiltinBatchSkillExists(t *testing.T) {
-	s := builtinByName("batch-and-delegate")
+	var s *BuiltinSkill
+	for i := range builtinSkills {
+		if builtinSkills[i].Name == "batch-and-delegate" {
+			s = &builtinSkills[i]
+			break
+		}
+	}
 	if s == nil {
 		t.Fatal("встроенный навык про пакетный режим не найден")
 	}

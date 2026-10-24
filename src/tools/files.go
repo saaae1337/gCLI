@@ -25,7 +25,7 @@ const (
 
 	schemaGlob = `{"type":"object","properties":{"pattern":{"type":"string","description":"Шаблон, например src/**/*.go или *.md"},"max_results":{"type":"integer","description":"Лимит результатов (по умолчанию 200)"}},"required":["pattern"]}`
 
-	schemaGrep = `{"type":"object","properties":{"pattern":{"type":"string","description":"Регулярное выражение (Go/RE2)"},"path":{"type":"string","description":"Каталог поиска (по умолчанию текущий)"},"include":{"type":"string","description":"Фильтр имён файлов, например *.go"},"max_results":{"type":"integer","description":"Лимит результатов (по умолчанию 50)"}},"required":["pattern"]}`
+	schemaGrep = `{"type":"object","properties":{"pattern":{"type":"string","description":"Регулярное выражение (Go/RE2)"},"path":{"type":"string","description":"Каталог поиска (по умолчанию текущий)"},"include":{"type":"string","description":"Фильтр имён файлов, например *.go"},"max_results":{"type":"integer","description":"Лимит совпадений (по умолчанию 50)"},"context":{"type":"integer","description":"Сколько строк вокруг совпадения показать (0-10). Контекст экономит отдельный вызов read_file."}},"required":["pattern"]}`
 
 	schemaBash = `{"type":"object","properties":{"command":{"type":"string","description":"Команда для выполнения в shell"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах (5-300, по умолчанию 60)"},"workdir":{"type":"string","description":"Рабочий каталог команды (по умолчанию текущий)"}},"required":["command"]}`
 
@@ -43,7 +43,7 @@ const (
 
 	schemaSelf = `{"type":"object","properties":{"section":{"type":"string","description":"Часть отчёта: контекст, расход, итерации, заметки, субагенты, лимиты. Пусто — весь отчёт."}}}`
 
-	schemaVerify = `{"type":"object","properties":{"command":{"type":"string","description":"Команда проверки. Пусто — определить автоматически по файлам проекта"},"suggest":{"type":"boolean","description":"Только показать варианты проверки, ничего не запускать"},"list":{"type":"boolean","description":"То же, что suggest"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах (по умолчанию 300)"},"workdir":{"type":"string","description":"Каталог запуска"},"no_baseline":{"type":"boolean","description":"Не обновлять базовую линию: посмотреть, что сломано, не потеряв предыдущее состояние"}}}`
+	schemaVerify = `{"type":"object","properties":{"command":{"type":"string","description":"Команда проверки. Пусто — определить автоматически по файлам проекта"},"page":{"type":"string","description":"HTML-страница для проверки: битые ресурсы, мёртвые якоря, пустой title, картинки без alt. Без неё и без команды проверяется страница проекта, если она есть"},"suggest":{"type":"boolean","description":"Только показать варианты проверки, ничего не запускать"},"list":{"type":"boolean","description":"То же, что suggest"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах (по умолчанию 300)"},"workdir":{"type":"string","description":"Каталог запуска"},"no_baseline":{"type":"boolean","description":"Не обновлять базовую линию: посмотреть, что сломано, не потеряв предыдущее состояние"}}}`
 
 	schemaSpawn = `{"type":"object","properties":{"type":{"type":"string","description":"Тип субагента или имя своего агента из .gcli/agents/*.md. НЕОБЯЗАТЕЛЬНО: если не указать, роль подберётся автоматически по тексту задачи (появление исправь/тест/найди баги/план/верстка…). Типы: explorer — карта кода (только чтение); reviewer — ревью и баги (чтение); planner — план реализации (чтение); coder — реализация; tester — тесты; frontend — верстка с проверкой по скриншотам; researcher — веб-исследование; docs — документация; general — универсал"},"task":{"type":"string","description":"Чёткая задача для субагента: что сделать и что вернуть"},"name":{"type":"string","description":"Имя субагента (необязательно)"},"model":{"type":"string","description":"Модель субагента (необязательно, по умолчанию текущая)"},"read_only":{"type":"boolean","description":"Запретить любые изменения файлов (по умолчанию true для explorer/reviewer/planner/researcher)"}},"required":["task"]}`
 
@@ -84,12 +84,15 @@ func (r *Registry) registerBuiltins() {
 		schemaWrite, "write", true, func(r *Registry) Handler { return r.hWriteFile })
 	r.registerBound("edit_file", "Точечная замена фрагмента в файле. old_string должен точно совпадать с содержимым (с отступами). Сначала read_file.",
 		schemaEdit, "write", true, func(r *Registry) Handler { return r.hEditFile })
-	r.registerBound("list_dir", "Список файлов и папок в каталоге.", schemaList, "read", false, func(r *Registry) Handler { return r.hListDir })
+	r.registerBound("list_dir", "Список файлов и папок в каталоге. Это замена «ls»: для каталога бери list_dir, а не команду в bash — так вывод остаётся в контексте один раз и в понятном виде.",
+		schemaList, "read", false, func(r *Registry) Handler { return r.hListDir })
 	r.registerBound("glob", "Найти файлы по шаблону (поддерживается **).", schemaGlob, "read", false, func(r *Registry) Handler { return r.hGlob })
-	r.registerBound("grep", "Поиск по регулярному выражению в файлах проекта.", schemaGrep, "read", false, func(r *Registry) Handler { return r.hGrep })
+	r.registerBound("grep", "Поиск по регулярному выражению в файлах проекта. Параметр context показывает строки вокруг совпадения — с ним не нужно читать файл ради одного найденного места.",
+		schemaGrep, "read", false, func(r *Registry) Handler { return r.hGrep })
 	r.registerBound("outline", "Структура файла: что объявлено и на какой строке — функции, типы, методы с сигнатурами и первой строкой описания. Дешевле, чем читать файл целиком, чтобы понять, где что лежит; дальше открывай нужное место через read_file с offset. Точный разбор для Go, эвристика для Python, TypeScript, JavaScript, Rust и Java.",
 		schemaOutline, "read", false, func(r *Registry) Handler { return r.hOutline })
-	r.registerBound("bash", "Выполнить shell-команду и получить вывод. Не запускай интерактивные команды. Требует подтверждения пользователя.",
+	r.registerBound("bash", "Выполнить shell-команду и получить вывод. Не запускай интерактивные команды. Требует подтверждения пользователя. "+
+		"Вывод обрезается сам — «| head» и «| tail» не нужны. Для каталога есть list_dir, для чтения файла — read_file: командами не заменяй их.",
 		schemaBash, "exec", true, func(r *Registry) Handler { return r.hBash })
 	r.registerBound("web_search", "Поиск в интернете. Возвращает заголовки, ссылки и сниппеты.", schemaSearch, "net", false, func(r *Registry) Handler { return r.hWebSearch })
 	r.registerBound("web_fetch", "Скачать страницу и извлечь текст.", schemaFetch, "net", false, func(r *Registry) Handler { return r.hWebFetch })
@@ -300,7 +303,7 @@ func (r *Registry) hListDir(_ context.Context, m map[string]any) (Result, error)
 	}
 	note := ""
 	if truncated {
-		note = fmt.Sprintf("\n\n[показаны первые 500 записей из большего числа]")
+		note = "\n\n[показаны первые 500 записей из большего числа]"
 	}
 	rel := core.RelToWD(r.workDir, p)
 	return Result{
@@ -351,6 +354,10 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 	markRead(r.env.ReadFiles, p)
 	rel := core.RelToWD(r.workDir, p)
 	text := fmt.Sprintf("Записано: %s (%d строк, %s)", rel, len(core.SplitLines(content)), core.HumanSize(len(content)))
+	// Подсказка про проверку — сразу здесь, где модель принимает решение,
+	// что делать дальше. Без неё правка часто остаётся непроверенной до
+	// конца хода, и «работает» означает «ещё не запускали».
+	text += "\nПроверь результат: verify (для страницы — verify page=" + rel + ")."
 	// Тихая диагностика после правки: language server видит сломанные типы
 	// сразу, а не после сборки. Ошибка хука молча пропускается.
 	if diag := r.env.LSP.AutoDiagnostics(r.workDir, p); diag != "" {
@@ -360,6 +367,25 @@ func (r *Registry) hWriteFile(_ context.Context, m map[string]any) (Result, erro
 		Text:    text,
 		Summary: fmt.Sprintf("записан %s (%d строк)", rel, len(core.SplitLines(content))),
 	}, nil
+}
+
+// nearMatch — строка файла, где искомый фрагмент почти нашёлся.
+//
+// Ищем по первой строке фрагмента: модель обычно ошибается в отступах и
+// переносах, а суть строки переписывает верно. Найденная строка экономит
+// целый круг «прочитал — не нашёл — перечитал».
+func nearMatch(content, old string) string {
+	first := strings.SplitN(old, "\n", 2)[0]
+	needle := strings.TrimSpace(first)
+	if len([]rune(needle)) < 4 {
+		return ""
+	}
+	for i, l := range core.SplitLines(content) {
+		if strings.Contains(l, needle) {
+			return fmt.Sprintf("строка %d: %q", i+1, core.Truncate(core.OneLine(l), 120))
+		}
+	}
+	return ""
 }
 
 // hEditFile — точечная замена фрагмента.
@@ -396,14 +422,19 @@ func (r *Registry) editFileLabeled(m map[string]any, label string) (Result, erro
 	if old == "" {
 		return Result{}, fmt.Errorf("укажи old_string")
 	}
-	if old == "" {
-		return Result{}, fmt.Errorf("old_string пустой")
-	}
 	newS := ArgStr(m, "new_string")
 
 	cnt := strings.Count(content, old)
 	if cnt == 0 {
-		return Result{}, fmt.Errorf("old_string не найден в %s — проверь точность (пробелы, отступы); перечитай файл", core.RelToWD(r.workDir, p))
+		msg := "old_string не найден в " + core.RelToWD(r.workDir, p) +
+			" — проверь точность (пробелы, отступы); перечитай файл"
+		// Ближайшее совпадение: модель обычно ошибается в отступах, а не в
+		// сути, и одна найденная строка economит целый круг «прочитал —
+		// не нашёл — прочитал заново».
+		if nm := nearMatch(content, old); nm != "" {
+			msg += "; ближайшее совпадение — " + nm
+		}
+		return Result{}, fmt.Errorf("%s", msg)
 	}
 	replAll := ArgBool(m, "replace_all")
 	if cnt > 1 && !replAll {
@@ -428,6 +459,7 @@ func (r *Registry) editFileLabeled(m map[string]any, label string) (Result, erro
 	r.noteChange(p, label, content, updated, true)
 	rel := core.RelToWD(r.workDir, p)
 	text := fmt.Sprintf("Файл обновлён: %s (замен: %d)", rel, replaced)
+	text += "\nПроверь результат: verify."
 	// Тихая диагностика после правки — как в write_file.
 	if diag := r.env.LSP.AutoDiagnostics(r.workDir, p); diag != "" {
 		text += "\n" + diag
@@ -620,9 +652,14 @@ func (r *Registry) hGrep(_ context.Context, m map[string]any) (Result, error) {
 		}
 	}
 	maxRes := core.Clamp(ArgInt(m, "max_results", 50), 1, 500)
+	// Контекст вокруг совпадения: сколько строк показать сверху и снизу.
+	// Это экономит отдельный вызов read_file — модель сразу видит код
+	// вокруг найденного места, а не только саму строку.
+	ctxLines := core.Clamp(ArgInt(m, "context", 0), 0, 10)
 
 	var out []string
 	nfiles := 0
+	nmatch := 0
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, werr error) error {
 		if werr != nil {
 			return nil
@@ -661,16 +698,33 @@ func (r *Registry) hGrep(_ context.Context, m map[string]any) (Result, error) {
 		}
 		nfiles++
 		rel := core.RelToWD(r.workDir, path)
-		for i, line := range core.SplitLines(string(data)) {
-			if re.MatchString(line) {
-				l := line
-				if len([]rune(l)) > 240 {
-					l = string([]rune(l)[:240]) + "…"
+		lines := core.SplitLines(string(data))
+		// Уже показанные строки: соседние совпадения не должны печатать
+		// один и тот же контекст дважды.
+		printed := map[int]bool{}
+		for i, line := range lines {
+			if !re.MatchString(line) {
+				continue
+			}
+			nmatch++
+			for j := i - ctxLines; j < i; j++ {
+				if j < 0 || printed[j] {
+					continue
 				}
-				out = append(out, fmt.Sprintf("%s:%d: %s", rel, i+1, l))
-				if len(out) >= maxRes {
-					return errStopWalk
+				printed[j] = true
+				out = append(out, fmt.Sprintf("%s-%d- %s", rel, j+1, trimGrepLine(lines[j])))
+			}
+			printed[i] = true
+			out = append(out, fmt.Sprintf("%s:%d: %s", rel, i+1, trimGrepLine(line)))
+			for j := i + 1; j <= i+ctxLines && j < len(lines); j++ {
+				if printed[j] {
+					continue
 				}
+				printed[j] = true
+				out = append(out, fmt.Sprintf("%s-%d- %s", rel, j+1, trimGrepLine(lines[j])))
+			}
+			if nmatch >= maxRes {
+				return errStopWalk
 			}
 		}
 		return nil
@@ -679,13 +733,21 @@ func (r *Registry) hGrep(_ context.Context, m map[string]any) (Result, error) {
 		return Result{Text: fmt.Sprintf("Совпадений нет (паттерн: %s)", pat), Summary: "совпадений нет"}, nil
 	}
 	trunc := ""
-	if len(out) >= maxRes {
+	if nmatch >= maxRes {
 		trunc = fmt.Sprintf(" (показаны первые %d)", maxRes)
 	}
 	return Result{
-		Text:    fmt.Sprintf("Найдено %d совпадений в %d файлах%s:\n%s", len(out), nfiles, trunc, strings.Join(out, "\n")),
-		Summary: fmt.Sprintf("%d совпадений", len(out)),
+		Text:    fmt.Sprintf("Найдено %d совпадений в %d файлах%s:\n%s", nmatch, nfiles, trunc, strings.Join(out, "\n")),
+		Summary: fmt.Sprintf("%d совпадений", nmatch),
 	}, nil
+}
+
+// trimGrepLine — обрезать длинную строку найденного места.
+func trimGrepLine(l string) string {
+	if len([]rune(l)) > 240 {
+		return string([]rune(l)[:240]) + "…"
+	}
+	return l
 }
 
 func isAbs(p string) bool {

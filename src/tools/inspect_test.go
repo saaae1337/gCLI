@@ -227,26 +227,12 @@ func TestArgCoercion(t *testing.T) {
 			t.Errorf("ArgInt для %s = %d, ожидалось 7", name, got)
 		}
 	}
-	// ArgFloat дробь не режет: 7.9 остаётся 7.9, иначе пороги вроде
-	// «timeout > 0.5» срабатывают не там.
-	if got := ArgFloat(map[string]any{"n": float64(7.9)}, "n", -1); got != 7.9 {
-		t.Errorf("ArgFloat для 7.9 = %v", got)
-	}
-	if got := ArgFloat(map[string]any{"n": 3}, "n", -1); got != 3 {
-		t.Errorf("ArgFloat для int = %v", got)
-	}
-	if got := ArgFloat(map[string]any{"n": json.Number("2.5")}, "n", -1); got != 2.5 {
-		t.Errorf("ArgFloat для json.Number = %v", got)
-	}
 	// Отсутствующий и мусорный ключ — значение по умолчанию, без паники.
 	if got := ArgInt(map[string]any{}, "нет", 5); got != 5 {
 		t.Errorf("ArgInt для отсутствующего ключа = %d", got)
 	}
 	if got := ArgInt(map[string]any{"n": "мусор"}, "n", 5); got != 5 {
 		t.Errorf("ArgInt для нечисловой строки = %d", got)
-	}
-	if got := ArgFloat(map[string]any{"n": "мусор"}, "n", 5); got != 5 {
-		t.Errorf("ArgFloat для нечисловой строки = %v", got)
 	}
 	// Флаги приходят строками чаще, чем кажется: не все модели пишут JSON-тип.
 	for _, s := range []string{"true", "да", "YES", "1"} {

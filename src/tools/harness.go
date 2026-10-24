@@ -149,7 +149,6 @@ func readLinesFrom(p string, skip, linesLimit int, bytesLimit int64) (data []byt
 				line++
 				if line > skip && kept < linesLimit {
 					buf.Write(b)
-					kept++
 				}
 			}
 			// Файл кончился. Если последняя строка попала в выборку —

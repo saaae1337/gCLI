@@ -90,6 +90,17 @@ func TestGuardCommand_InternalFilesBlock(t *testing.T) {
 	}
 }
 
+// TestSysAllowedRejectsTraversal — служебный /tmp не должен прикрывать
+// путь, который после нормализации уходит из /tmp (например, в /etc).
+func TestSysAllowedRejectsTraversal(t *testing.T) {
+	if sysAllowed("/tmp/../etc/passwd") {
+		t.Error("/tmp/../etc/passwd ошибочно признан служебным путём")
+	}
+	if !sysAllowed("/tmp/gcli-out.txt") {
+		t.Error("обычный путь в /tmp должен оставаться разрешённым")
+	}
+}
+
 func TestCommandPaths_FindsUnixAndWindowsForms(t *testing.T) {
 	work := filepath.Join(string(filepath.Separator), "work")
 	got := commandPaths(`cat /etc/passwd`, work)

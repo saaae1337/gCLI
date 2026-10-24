@@ -67,6 +67,20 @@ func TestGitDiffRef(t *testing.T) {
 	}
 }
 
+// TestGitDiffRejectsOptionRef — ref приходит от модели, а git принимает
+// опции после «diff». «--output=файл» превращал просмотр diff в запись
+// файла (и чтение чужого дерева), поэтому такой ref обязан отклоняться.
+func TestGitDiffRejectsOptionRef(t *testing.T) {
+	dir := initGitRepo(t)
+	r := New(Env{WorkDir: dir})
+	if _, err := r.hGitDiff(context.Background(), map[string]any{"ref": "--output=evil.txt"}); err == nil {
+		t.Fatal("ref-опция прошла в git diff")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "evil.txt")); !os.IsNotExist(err) {
+		t.Fatal("git diff записал файл через ref-опцию")
+	}
+}
+
 // TestGitDiffBadRefExplains — несуществующий ref обязан сказать об
 // ошибке, а не вернуть пустой diff, который читается как «правок нет».
 func TestGitDiffBadRefExplains(t *testing.T) {

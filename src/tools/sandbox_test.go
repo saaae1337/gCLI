@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -250,7 +251,7 @@ func TestHGlobStaysInRoot(t *testing.T) {
 	}
 	r := New(Env{WorkDir: work, Sandbox: NewSandbox(work)})
 
-	res, err := r.hGlob(nil, map[string]any{"pattern": filepath.Join(sub, "*.go")})
+	res, err := r.hGlob(context.Background(), map[string]any{"pattern": filepath.Join(sub, "*.go")})
 	if err != nil {
 		t.Fatalf("glob по абсолютному шаблону: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestHGlobStaysInRoot(t *testing.T) {
 	}
 
 	// Корнем обхода не должен стать весь диск: в тексте ошибки это видно.
-	_, err = r.hGlob(nil, map[string]any{
+	_, err = r.hGlob(context.Background(), map[string]any{
 		"pattern": filepath.Join(filepath.Dir(work), "нигде", "*.go"),
 	})
 	if err == nil {
@@ -321,7 +322,7 @@ func TestHGrepSkipsDeniedSubtree(t *testing.T) {
 	sb := NewSandbox(work).WithDeny(secret)
 	r := New(Env{WorkDir: work, Sandbox: sb})
 
-	res, err := r.hGrep(nil, map[string]any{"pattern": needle, "path": ".", "max_results": 100})
+	res, err := r.hGrep(context.Background(), map[string]any{"pattern": needle, "path": ".", "max_results": 100})
 	if err != nil {
 		t.Fatalf("grep: %v", err)
 	}
@@ -337,7 +338,7 @@ func TestHGrepSkipsDeniedSubtree(t *testing.T) {
 func TestHBashWorkdirSandbox(t *testing.T) {
 	work := t.TempDir()
 	r := New(Env{WorkDir: work, Sandbox: NewSandbox(work)})
-	_, err := r.hBash(nil, map[string]any{
+	_, err := r.hBash(context.Background(), map[string]any{
 		"command": "echo hi",
 		"workdir": filepath.Join(work, ".."),
 	})

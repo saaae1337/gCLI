@@ -135,19 +135,21 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 
 	outBytes, err := cmdEx.CombinedOutput()
 	out := string(outBytes)
-	lines := len(core.SplitLines(out))
 	out = core.TruncateUTF8(out, maxBashOutput/2, maxBashOutput/2)
 
 	if err != nil {
+		// Таймаут проверяем ДО ExitError: CommandContext убивает процесс,
+		// и ошибка приходит как обычный ненулевой код выхода. Иначе
+		// таймаут выглядел бы как штатное завершение команды.
 		var ee *exec.ExitError
 		switch {
-		case errors.As(err, &ee):
-			out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
 		case cctx.Err() == context.DeadlineExceeded:
 			return Result{
 				Text:    fmt.Sprintf("Таймаут %ds. Частичный вывод:\n%s", timeout, out),
 				Summary: fmt.Sprintf("таймаут %ds", timeout),
 			}, nil
+		case errors.As(err, &ee):
+			out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
 		case ctx.Err() != nil:
 			return Result{Error: "команда прервана"}, nil
 		default:
@@ -157,9 +159,20 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 	if strings.TrimSpace(out) == "" {
 		out = "[нет вывода]"
 	}
+	// Итог одной строкой: первая строка вывода, если она короткая.
+	// Число строк в интерфейсе и так показывается отдельной меткой, а
+	// дублировать его в двух местах — значит показывать одно и то же
+	// дважды.
+	summary := core.OneLine(firstLine(out))
+	if summary == "" {
+		summary = "вывод"
+	}
+	if len([]rune(summary)) > 60 {
+		summary = string([]rune(summary)[:60]) + "…"
+	}
 	return Result{
 		Text:    out,
-		Summary: fmt.Sprintf("%d строк вывода · %s", lines, core.OneLine(firstLine(out))),
+		Summary: summary,
 	}, nil
 }
 

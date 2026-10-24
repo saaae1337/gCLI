@@ -98,9 +98,6 @@ const memoryTemplate = `# GCLI.md — память проекта для gcli
 - Особенности: <подводные камни, зависимости>
 `
 
-// MemoryTemplate — шаблон GCLI.md.
-func MemoryTemplate() string { return memoryTemplate }
-
 // ProjectFile — путь к файловому проектному файлу памяти: существующий
 // (по приоритету имён) или GCLI.md, который будет создан.
 func (m *Memory) ProjectFile() string {

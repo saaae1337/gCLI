@@ -102,8 +102,10 @@ func existsGlob(workDir, name string) bool {
 		matches, err := filepath.Glob(filepath.Join(workDir, name))
 		return err == nil && len(matches) > 0
 	}
-	st, err := os.Stat(filepath.Join(workDir, name))
-	return err == nil && !st.IsDir()
+	// Каталог — тоже валидный маркер: pytest по умолчанию ищет тесты
+	// в tests/ или test/, и раньше такие проекты не определялись.
+	_, err := os.Stat(filepath.Join(workDir, name))
+	return err == nil
 }
 
 func gitRepo(workDir string) bool {
@@ -318,6 +320,12 @@ func (rep *VerifyReport) Diff(prev *VerifyReport) {
 	if prev == nil {
 		return
 	}
+	// Сравнивать прогоны разных команд нельзя: падения одной команды
+	// выглядят «новыми» для другой, и агент чинит несуществующую регрессию.
+	// Пустая команда — старый baseline без поля, его сравниваем как раньше.
+	if prev.Command != "" && prev.Command != rep.Command {
+		return
+	}
 	rep.HadBaseline = true
 	old := map[string]bool{}
 	for _, f := range prev.Failures {
@@ -492,16 +500,36 @@ func (r *Registry) hVerify(ctx context.Context, m map[string]any) (Result, error
 		for _, c := range cands {
 			fmt.Fprintf(&b, "- %s: %s  # найдено по %s\n", c.Name, c.Cmd, strings.Join(c.Files, ", "))
 		}
+		if page := findHTMLPage(r.workDir); page != "" {
+			fmt.Fprintf(&b, "- страница: verify page=%s  # битые ресурсы, мёртвые якоря, пустой title\n",
+				core.RelToWD(r.workDir, page))
+		}
 		b.WriteString("\nПроверяй ПОСЛЕ каждой серии правок, а не в конце: дешевле чинить, пока помнишь, что менял.")
 		return Result{Text: b.String(), Summary: fmt.Sprintf("найдено проверок: %d", len(cands))}, nil
 	}
 
 	cmd := strings.TrimSpace(ArgStr(m, "command"))
+	// Явная страница для проверки.
+	if p := strings.TrimSpace(ArgStr(m, "page")); p != "" {
+		abs, err := r.pathArg(p)
+		if err != nil {
+			return Result{}, err
+		}
+		rep := checkHTMLPage(abs)
+		return Result{Text: rep.Text(), Summary: rep.Summary()}, nil
+	}
 	if cmd == "" {
 		// Команда не указана — берём лучшего кандидата сами.
 		cands := DetectVerify(r.workDir)
 		if len(cands) == 0 {
-			return Result{}, fmt.Errorf("не знаю, чем проверять этот проект — укажи command или запусти с list=true")
+			// Нет ни тестов, ни сборки — может, это статическая страница.
+			// Проверим её: битые ресурсы и мёртвые якоря ломают страницу
+			// тихо, и без проверки их видят только пользователь.
+			if page := findHTMLPage(r.workDir); page != "" {
+				rep := checkHTMLPage(page)
+				return Result{Text: rep.Text(), Summary: rep.Summary()}, nil
+			}
+			return Result{}, fmt.Errorf("не знаю, чем проверять этот проект — укажи command, page или запусти с list=true")
 		}
 		cmd = cands[0].Cmd
 	}

@@ -361,6 +361,7 @@ type lspConn struct {
 	pushSeq  map[string]uint64    // uri → счётчик push'ей (свежее времени)
 	opened   map[string]int64     // uri → версия документа
 	closed   bool
+	stopOnce sync.Once
 	rootURI  string
 	language string
 }
@@ -412,31 +413,36 @@ func (c *lspConn) dead() bool {
 }
 
 func (c *lspConn) stop() {
-	c.mu.Lock()
-	if c.closed {
+	c.stopOnce.Do(func() {
+		c.mu.Lock()
+		wasClosed := c.closed
 		c.mu.Unlock()
-		return
-	}
-	c.closed = true
-	pending := c.pending
-	c.pending = map[int64]chan lspResponse{}
-	c.mu.Unlock()
-	// Сначала вежливо: shutdown → exit (протокол LSP). Потом добиваем.
-	_, _ = c.call(10*time.Second, "shutdown", nil)
-	_ = c.notify("exit", nil)
-	_ = c.stdin.Close()
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-		_ = c.cmd.Wait()
-	}
-	for id, ch := range pending {
-		select {
-		case ch <- lspResponse{err: &lspError{Message: "соединение закрыто"}}:
-		default:
+		if !wasClosed {
+			// Сначала вежливо: shutdown → exit (протокол LSP). Пишем, пока
+			// closed ещё не выставлен, иначе write откажется отправлять.
+			_, _ = c.call(10*time.Second, "shutdown", nil)
+			_ = c.notify("exit", nil)
+			_ = c.stdin.Close()
 		}
-		close(ch)
-		_ = id
-	}
+		c.mu.Lock()
+		c.closed = true
+		pending := c.pending
+		c.pending = map[int64]chan lspResponse{}
+		c.mu.Unlock()
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = c.cmd.Process.Kill()
+			// Wait обязателен и когда readLoop уже увидел EOF: иначе
+			// процесс остаётся зомби (Unix) и течёт дескрипторами (Windows).
+			_ = c.cmd.Wait()
+		}
+		for _, ch := range pending {
+			select {
+			case ch <- lspResponse{err: &lspError{Message: "соединение закрыто"}}:
+			default:
+			}
+			close(ch)
+		}
+	})
 }
 
 // writeFrame — Content-Length-фрейминг LSP: заголовок + тело.
@@ -448,6 +454,11 @@ func writeFrame(w io.Writer, body []byte) error {
 	_, err := w.Write(body)
 	return err
 }
+
+// maxLSPFrameBytes — потолок тела одного LSP-фрейма. Заголовок приходит
+// от внешнего процесса: без потолка Content-Length: 9999999999 приводил
+// к попытке выделить гигабайты и ронял агент по памяти.
+const maxLSPFrameBytes = 16 << 20
 
 // readFrame — разобрать один фрейм. Возврат false = поток кончился.
 func readFrame(r *bufio.Reader) ([]byte, bool) {
@@ -468,7 +479,7 @@ func readFrame(r *bufio.Reader) ([]byte, bool) {
 			}
 		}
 	}
-	if length <= 0 {
+	if length <= 0 || length > maxLSPFrameBytes {
 		return nil, false
 	}
 	body := make([]byte, length)

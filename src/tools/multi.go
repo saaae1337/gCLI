@@ -172,18 +172,6 @@ func runSafe(fn func(ctx context.Context) (Result, error), ctx context.Context) 
 	return fn(ctx)
 }
 
-// countDone — сколько целей отдало результат (только для тестов/отладки:
-// в горутинях используется атомарный счётчик runBatch).
-func countDone(items []batchItem) int {
-	n := 0
-	for i := range items {
-		if items[i].res.Text != "" || items[i].err != nil || items[i].warn != "" {
-			n++
-		}
-	}
-	return n
-}
-
 // progress — отдать событие прогресса подписчику (nil-безопасно).
 func (r *Registry) progress(ev ProgressEvent) {
 	if r == nil || r.env.OnProgress == nil {

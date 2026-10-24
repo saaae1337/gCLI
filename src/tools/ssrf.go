@@ -144,7 +144,9 @@ func checkSSRF(raw string) error {
 //
 // К адресу прокси из переменных окружения не применяем проверку: соединение
 // идёт с прокси, а не с целью, и корпоративный прокси на 10.x.x.x — это
-// нормально. Цель проверяется до запроса (checkSSRF).
+// нормально. Цель проверяется до запроса (checkSSRF). Исключение — ровно
+// адрес прокси (хост и порт), а не любое соединение с его хостом: иначе
+// «http://localhost:8080» при прокси на localhost проходил бы напрямую.
 func ssrfDialContext(base *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	allowed := proxyHosts()
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -153,7 +155,7 @@ func ssrfDialContext(base *net.Dialer) func(ctx context.Context, network, addr s
 			return nil, err
 		}
 		host = strings.TrimSuffix(strings.ToLower(host), ".")
-		if allowed[host] || LocalNetAllowed() {
+		if allowed[net.JoinHostPort(host, port)] || LocalNetAllowed() {
 			return base.DialContext(ctx, network, addr)
 		}
 		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
@@ -181,7 +183,10 @@ func ssrfDialContext(base *net.Dialer) func(ctx context.Context, network, addr s
 	}
 }
 
-// proxyHosts — хосты прокси из HTTP_PROXY/HTTPS_PROXY/ALL_PROXY.
+// proxyHosts — адреса прокси из HTTP_PROXY/HTTPS_PROXY/ALL_PROXY.
+//
+// Ключ — «хост:порт», а не только хост: иначе исключение для прокси
+// открывало бы прямое соединение с любым портом того же хоста.
 func proxyHosts() map[string]bool {
 	out := map[string]bool{}
 	for _, env := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
@@ -197,9 +202,18 @@ func proxyHosts() map[string]bool {
 		if err != nil {
 			continue
 		}
-		if h := strings.ToLower(u.Hostname()); h != "" {
-			out[h] = true
+		host := strings.ToLower(u.Hostname())
+		if host == "" {
+			continue
 		}
+		port := u.Port()
+		if port == "" {
+			port = "80"
+			if strings.EqualFold(u.Scheme, "https") {
+				port = "443"
+			}
+		}
+		out[net.JoinHostPort(host, port)] = true
 	}
 	return out
 }

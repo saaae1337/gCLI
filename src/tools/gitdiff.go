@@ -64,6 +64,12 @@ func (r *Registry) hGitDiff(_ context.Context, m map[string]any) (Result, error)
 	// правки; имя может прийти от модели, поэтому идёт отдельным
 	// аргументом, а не склейкой в строку (см. gitOut).
 	ref := strings.TrimSpace(ArgStr(m, "ref"))
+	// git принимает опции и после «diff», поэтому ref вида «--output=…»
+	// заставил бы git писать файл (или читать чужое) вместо сравнения.
+	// Имя ревизии не может начинаться с дефиса.
+	if strings.HasPrefix(ref, "-") {
+		return Result{}, fmt.Errorf("ref не может начинаться с «-»: %s", ref)
+	}
 	args := []string{"diff", "--no-color"}
 	switch {
 	case ref != "":

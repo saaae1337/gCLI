@@ -156,9 +156,6 @@ func (r *Registry) SkillOff(name string) bool {
 // SetSkillsOff — задать список выключенных навыков.
 func (r *Registry) SetSkillsOff(names []string) { r.skillsOff = names }
 
-// SkillsOffList — список выключенных навыков.
-func (r *Registry) SkillsOffList() []string { return r.skillsOff }
-
 // maxSkillDesc — предел длины описания навыка в системном промпте.
 //
 // Раньше стоял 110, и описание обрезалось ровно на полуслове «Применять,
@@ -317,3 +314,85 @@ func (r *Registry) SkillNames() []string {
 
 // SkillTemplate — шаблон нового навыка.
 func SkillTemplate(name string) string { return fmt.Sprintf(skillTemplate, name, name) }
+
+// Порог экономного блока навыков.
+const (
+	// skillsLeanTokens — ниже этого размера полный список дешевле
+	// экономить: разница в токенах не окупает потери подсказки.
+	skillsLeanTokens = 900
+	// skillsLeanTop — сколько навыков получают полное описание.
+	skillsLeanTop = 3
+)
+
+// SkillsPromptBlockFor — блок навыков под конкретную задачу.
+//
+// Полный список с описаниями — около двух тысяч токенов, и он уходит в
+// КАЖДЫЙ запрос, хотя задача обычно про один-два навыка. Здесь полное
+// описание получают только те навыки, что подходят под запрос, а
+// остальные идут одним списком имён.
+//
+// Имена остаются, поэтому навык по-прежнему можно найти и вызвать:
+// подробности модель возьмёт сама через load_skill (по имени или по
+// запросу — навык подберётся сам).
+func (r *Registry) SkillsPromptBlockFor(query string) string {
+	skills := r.enabledSkills()
+	if len(skills) == 0 {
+		return ""
+	}
+	full := r.SkillsPromptBlock()
+	if core.ApproxTokens(full) <= skillsLeanTokens {
+		return full
+	}
+
+	// Подходящие навыки: с оценкой выше порога совпадения.
+	ranked := RankSkills(skills, query)
+	shown := map[string]bool{}
+	var described []Skill
+	for _, sc := range ranked {
+		if len(described) >= skillsLeanTop {
+			break
+		}
+		if sc.Score < skillMatchMinScore {
+			continue
+		}
+		shown[sc.Skill.Name] = true
+		described = append(described, sc.Skill)
+	}
+
+	var b strings.Builder
+	b.WriteString("# Навыки (skills)\n")
+	b.WriteString("Подключаемые навыки. Если задача попадает под навык — сначала вызови инструмент load_skill с его name и следуй инструкциям.\n")
+	b.WriteString("Не помнишь точного имени — вызови load_skill с query (что делаешь) и args: подберёт навык сам; впиши args, если в инструкциях есть $ARGUMENTS.\n")
+	if len(described) > 0 {
+		b.WriteString("Подробное описание — только у навыков под задачу; у остальных только имя (описание возьми через load_skill).\n")
+		for _, s := range described {
+			desc := skillDesc(s.Desc)
+			if w := skillDesc(s.When); w != "" {
+				desc += " [" + w + "]"
+			}
+			fmt.Fprintf(&b, "- %s — %s\n", s.Name, desc)
+		}
+	}
+	var others []string
+	for _, s := range skills {
+		if !shown[s.Name] {
+			others = append(others, s.Name)
+		}
+	}
+	if len(others) > 0 {
+		b.WriteString("- прочие: " + strings.Join(others, ", ") + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// enabledSkills — навыки, которые не выключены в настройках.
+func (r *Registry) enabledSkills() []Skill {
+	var out []Skill
+	for _, s := range r.LoadSkills() {
+		if r.SkillOff(s.Name) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
