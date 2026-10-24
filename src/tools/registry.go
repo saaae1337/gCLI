@@ -118,6 +118,19 @@ type Registry struct {
 	env       Env
 	skillsOff []string
 
+	// muTools — защита tools/byName от гонки «агент читает — UI пишет».
+	//
+	// Раньше мутировали реестр только на старте, но /mcp reload убивает
+	// и пересобирает инструменты mcpDropServer + registerMCPTool прямо во
+	// время работы, а агентная горутина в это же время читает Get/Defs и
+	// копирует реестр в Base/Restrict/Merge для субагентов. range по
+	// слайсу, который в этот момент перезаписывается, и чтение карты,
+	// в которую пишут, — это фатальная ошибка Go «concurrent map
+	// iteration and map write» / «concurrent map read and map write».
+	// Чтение — RLock (горячий путь Get и копии субагентов параллелятся),
+	// запись — Lock.
+	muTools sync.RWMutex
+
 	// log — журнал собственных правок агента (write_file, edit_file).
 	// Ссылочное поле, как и env.ReadFiles: реестр копируется по значку в
 	// Base(), и журнал должен быть общим у главного агента и субагентов.
@@ -342,6 +355,9 @@ func (r *Registry) Base() *Registry {
 	// делили одну карту с главным агентом: чтение субагента давало главному
 	// право редактировать файл, которого он не читал.
 	out.env.ReadFiles = snapshotRead(r.env.ReadFiles)
+	// Копия под muTools: Base зовут из горутин субагентов, пока /mcp reload
+	// может перезаписывать исходный список.
+	r.muTools.RLock()
 	for _, t := range r.tools {
 		// Инструменты расширений и MCP-серверов живут только у главного
 		// агента: субагентам — встроенный набор.
@@ -353,6 +369,7 @@ func (r *Registry) Base() *Registry {
 		out.tools = append(out.tools, &cp)
 		out.byName[t.Def.Name] = &cp
 	}
+	r.muTools.RUnlock()
 	return out
 }
 
@@ -364,6 +381,8 @@ func (r *Registry) RegisterExtTools() []string {
 
 // Defs — определения инструментов для API.
 func (r *Registry) Defs() []ToolDef {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
 	out := make([]ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
 		out = append(out, t.Def)
@@ -377,6 +396,8 @@ type ToolDef = core.ToolDef
 
 // Names — имена всех инструментов.
 func (r *Registry) Names() []string {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
 	out := make([]string, 0, len(r.tools))
 	for _, t := range r.tools {
 		out = append(out, t.Def.Name)
@@ -385,7 +406,11 @@ func (r *Registry) Names() []string {
 }
 
 // Get — найти инструмент по имени.
-func (r *Registry) Get(name string) *Tool { return r.byName[name] }
+func (r *Registry) Get(name string) *Tool {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
+	return r.byName[name]
+}
 
 // Register — добавить инструмент в реестр.
 //
@@ -397,6 +422,8 @@ func (r *Registry) Register(t *Tool) {
 	if t == nil || t.Def.Name == "" {
 		return
 	}
+	r.muTools.Lock()
+	defer r.muTools.Unlock()
 	if old, ok := r.byName[t.Def.Name]; ok {
 		for i, cur := range r.tools {
 			if cur == old {
@@ -412,10 +439,16 @@ func (r *Registry) Register(t *Tool) {
 }
 
 // Count — количество инструментов.
-func (r *Registry) Count() int { return len(r.tools) }
+func (r *Registry) Count() int {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
+	return len(r.tools)
+}
 
 // ExtCount — количество инструментов из расширений.
 func (r *Registry) ExtCount() int {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
 	n := 0
 	for _, t := range r.tools {
 		if t.ExtName != "" {
@@ -426,10 +459,19 @@ func (r *Registry) ExtCount() int {
 }
 
 // All — все инструменты.
-func (r *Registry) All() []*Tool { return r.tools }
+func (r *Registry) All() []*Tool {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
+	return r.tools
+}
 
 // Has — есть ли инструмент.
-func (r *Registry) Has(name string) bool { _, ok := r.byName[name]; return ok }
+func (r *Registry) Has(name string) bool {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
+	_, ok := r.byName[name]
+	return ok
+}
 
 // Restrict — вернуть копию реестра с ограниченным набором инструментов.
 //
@@ -457,6 +499,7 @@ func (r *Registry) Restrict(allow, deny []string) *Registry {
 	// право редактировать файлы, которые прочитал главный агент.
 	out.env.ReadFiles = snapshotRead(r.env.ReadFiles)
 
+	r.muTools.RLock()
 	for _, t := range r.tools {
 		if len(allowSet) > 0 && !allowSet[t.Def.Name] {
 			continue
@@ -474,6 +517,7 @@ func (r *Registry) Restrict(allow, deny []string) *Registry {
 		out.tools = append(out.tools, &cp)
 		out.byName[t.Def.Name] = &cp
 	}
+	r.muTools.RUnlock()
 	return out
 }
 
@@ -535,6 +579,7 @@ func (r *Registry) Merge(others ...*Registry) *Registry {
 	// Карта прочитанных файлов — своя копия: см. Base().
 	out.env.ReadFiles = snapshotRead(r.env.ReadFiles)
 	for _, reg := range append([]*Registry{r}, others...) {
+		reg.muTools.RLock()
 		for _, t := range reg.tools {
 			if out.byName[t.Def.Name] != nil {
 				continue
@@ -544,6 +589,7 @@ func (r *Registry) Merge(others ...*Registry) *Registry {
 			out.tools = append(out.tools, &cp)
 			out.byName[t.Def.Name] = &cp
 		}
+		reg.muTools.RUnlock()
 	}
 	return out
 }
@@ -584,6 +630,8 @@ func (r *Registry) registerBound(name, desc, schema, category string, confirm bo
 		Category:     category,
 		NeedsConfirm: confirm,
 	}
+	r.muTools.Lock()
+	defer r.muTools.Unlock()
 	r.tools = append(r.tools, t)
 	r.byName[name] = t
 }
@@ -593,6 +641,8 @@ func (r *Registry) registerBound(name, desc, schema, category string, confirm bo
 func (r *Registry) registerExt(extName, name, desc, schema, category string, h Handler) (string, bool, []string) {
 	final := name
 	warns := []string{}
+	r.muTools.Lock()
+	defer r.muTools.Unlock()
 	if r.byName[final] != nil {
 		final = "x_" + name
 	}

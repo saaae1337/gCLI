@@ -396,6 +396,8 @@ func MCPToolName(server, tool string) string {
 
 // mcpServerRegistered — инструменты этого сервера уже в реестре?
 func (r *Registry) mcpServerRegistered(name string) bool {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
 	for _, t := range r.tools {
 		if t.MCPSrv == name {
 			return true
@@ -533,11 +535,9 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 				desc = "инструмент MCP-сервера " + name
 			}
 			full := MCPToolName(name, t.Name)
-			if r.byName[full] != nil {
-				continue
+			if r.registerMCPToolIfAbsent(name, full, t.Name, desc, schema) {
+				count++
 			}
-			r.registerMCPTool(name, full, t.Name, desc, schema)
-			count++
 		}
 		if len(list.Tools) == 0 {
 			warns = append(warns, fmt.Sprintf("MCP «%s»: сервер не объявил ни одного инструмента", name))
@@ -546,8 +546,11 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 	return count, warns
 }
 
-// registerMCPTool — один инструмент MCP-сервера в реестре.
-func (r *Registry) registerMCPTool(server, fullName, callName, desc, schema string) {
+// registerMCPToolIfAbsent — один инструмент MCP-сервера в реестре;
+// проверка и добавление — под одним muTools, иначе два параллельных
+// reload успели бы оба пройти проверку и задвоить инструмент.
+// Возвращает true, если инструмент действительно добавлен.
+func (r *Registry) registerMCPToolIfAbsent(server, fullName, callName, desc, schema string) bool {
 	t := &Tool{
 		Def:      ToolDef{Name: fullName, Description: "[mcp:" + server + "] " + desc, Schema: schema},
 		Handler:  r.mcpHandler(server, fullName, callName),
@@ -555,8 +558,14 @@ func (r *Registry) registerMCPTool(server, fullName, callName, desc, schema stri
 		MCPSrv:   server,
 		MCPCall:  callName,
 	}
+	r.muTools.Lock()
+	defer r.muTools.Unlock()
+	if r.byName[fullName] != nil {
+		return false
+	}
 	r.tools = append(r.tools, t)
 	r.byName[fullName] = t
+	return true
 }
 
 // mcpHandler — вызов tools/call на сервере.
@@ -654,6 +663,8 @@ func mcpParseCallResult(raw json.RawMessage, server string, workDir ...string) (
 
 // MCPToolCount — сколько инструментов MCP подключено к реестру.
 func (r *Registry) MCPToolCount() int {
+	r.muTools.RLock()
+	defer r.muTools.RUnlock()
 	n := 0
 	for _, t := range r.tools {
 		if t.MCPSrv != "" {
@@ -666,11 +677,16 @@ func (r *Registry) MCPToolCount() int {
 // MCPStatus — сводка по MCP-серверам для /mcp и /tools.
 func (r *Registry) MCPStatus() (servers []string, tools int) {
 	cfg, _ := r.LoadMCPConfig()
+	// Счётчик инструментов — под muTools и БЕЗ muMCP в руках: иначе
+	// получаем вложенный порядок muTools → muMCP, а он нигде больше не
+	// нужен, и однажды кто-то возьмёт их в обратном порядке.
+	r.muTools.RLock()
 	for _, t := range r.tools {
 		if t.MCPSrv != "" {
 			tools++
 		}
 	}
+	r.muTools.RUnlock()
 	for name, srv := range cfg.Servers {
 		state := "вкл"
 		if srv.Enabled != nil && !*srv.Enabled {
@@ -717,6 +733,8 @@ func (r *Registry) MCPReload() (int, []string) {
 
 // mcpDropServer — убрать инструменты сервера из реестра.
 func (r *Registry) mcpDropServer(name string) {
+	r.muTools.Lock()
+	defer r.muTools.Unlock()
 	kept := r.tools[:0:0]
 	for _, t := range r.tools {
 		if t.MCPSrv == name {
