@@ -98,7 +98,10 @@ jobs:
           # успеваем показать, что именно упало. Выключаем -e, а выход
           # определяем сами последней строкой.
           set +e
-          go test ./... -count=1 2>&1 | tee ./ci-test.log
+          # -short пропускает браузерные тесты (screenshot): им нужен
+          # настоящий headless-браузер, который на раннерах то отсутствует,
+          # то падает по памяти, валил весь пакет и с ним Release.
+          go test -short ./... -count=1 2>&1 | tee ./ci-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Сколько строк в логе — само по себе полезно: пустой лог при
@@ -126,7 +129,7 @@ jobs:
       # проект, и там они уже находились.
       - name: go test -race
         if: matrix.os != 'macos-15'
-        run: go test -race -count=1 ./...
+        run: go test -short -race -count=1 ./...
 
       - name: go build
         # Путь в runner.temp, а не /tmp: на Windows-раннере pwsh понимает
@@ -158,7 +161,7 @@ jobs:
       # разных пакетов нельзя сложить в один отчёт.
       - name: go test -covermode=atomic -coverprofile
         run: |
-          go test -covermode=atomic -coverprofile=coverage.out -coverpkg=./... ./... -count=1
+          go test -short -covermode=atomic -coverprofile=coverage.out -coverpkg=./... ./... -count=1
 
       - name: Итог по пакетам
         run: go tool cover -func=coverage.out | tail -1

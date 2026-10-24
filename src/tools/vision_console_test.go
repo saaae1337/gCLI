@@ -42,8 +42,25 @@ func TestConsoleErrorsParsing(t *testing.T) {
 // TestScreenshotReportsConsoleErrors — снимок страницы с падающим скриптом
 // приносит текст ошибки: иначе агент увидит красивый экран и не узнает,
 // что страница сломана.
+//
+// Тест требует настоящий headless-браузер, и его пропуск должен быть
+// надёжным. Раньше проверка была «if _, err := findBrowser(); err != nil»:
+// findBrowser возвращает (string, []string), err здесь — []string, который
+// всегда nil, и skip не срабатывал никогда. Там, где браузера нет, тест
+// падал с «браузер не найден», а там, где он есть, но падает (CI-раннеры,
+// контейнеры без /dev/shm), — ронял весь пакет и с ним Release-workflow.
+//
+// Пропускаем в коротком прогоне (-short) и по GCLI_NO_BROWSER_TESTS:
+// это переменная окружения, а не флаг — её легко выставить и в CI, и
+// локально в сломанном окружении.
 func TestScreenshotReportsConsoleErrors(t *testing.T) {
-	if _, err := findBrowser(); err != nil {
+	if testing.Short() {
+		t.Skip("короткий прогон: браузерный тест пропущен")
+	}
+	if os.Getenv("GCLI_NO_BROWSER_TESTS") != "" {
+		t.Skip("GCLI_NO_BROWSER_TESTS задан: браузерный тест пропущен")
+	}
+	if p, _ := findBrowser(); p == "" {
 		t.Skip("браузера нет")
 	}
 	dir := t.TempDir()
