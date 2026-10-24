@@ -263,5 +263,9 @@ jobs:
 
       - name: govulncheck ./...
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          # @latest, а не закреплённая версия: govulncheck разбирает код
+          # через x/tools, и старая версия паникует на синтаксисе нового
+          # Go («unexpected expr: *ast.KeyValueExpr» на go1.27 от
+          # v1.1.4). Джоба уже на stable — значит и сканер свежий.
+          go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
