@@ -78,7 +78,7 @@ gcli -v
 ```bash
 git clone https://github.com/saaae1337/gCLI.git
 cd gCLI && ./build.sh one linux amd64   # только своя платформа
-# или ./build.sh — сразу все пять, в builds/
+# или ./build.sh — сразу все шесть, в builds/
 ```
 
 Каталог после клона называется `gCLI` — ровно с этими буквами. На Linux

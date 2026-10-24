@@ -83,7 +83,7 @@ func mcpSrvTools() []mcpSrvTool {
 	}
 	return []mcpSrvTool{
 		mk("gcli_prompt",
-			"Разовый запрос к gcli — терминальному ИИ-агенту. Агент видит проект в workdir, может читать файлы, писать код, запускать команды и проверять результат. Блокирует до ответа (потолок — timeout_min минут).",
+			"Разовый запрос к gcli — терминальному ИИ-агенту. Агент видит проект в workdir, может читать файлы, писать код, запускать команды и проверять результат. Блокирует до ответа (потолок — timeout_min минут). Обычные действия одобряет сам; это отключается переменной окружения GCLI_MCP_SERVE_YOLO=0 на стороне сервера.",
 			map[string]mcpSrvProp{
 				"prompt":      {"string", "задача для агента одной строкой"},
 				"workdir":     {"string", "каталог проекта (по умолчанию — каталог запуска gcli -mcp-serve)"},
@@ -274,10 +274,21 @@ func mcpSrvPrompt(workdir, prompt string, timeout time.Duration) (string, error)
 	defer cancel()
 	// Аргументы именно в таком порядке: -p поглощает следующий аргумент как
 	// значение, и «-p -json <промпт>» запускал ход с текстом «-json»,
-	// молча выбрасывая настоящий промпт. -yolo — как и обещает документация
-	// bench и gcli_prompt: изолированный ребёнок сам одобряет обычные
-	// действия, иначе задачи с файлами и командами падали всегда.
-	cmd := exec.CommandContext(ctx, exe, "-json", "-yolo", "-p", prompt)
+	// молча выбрасывая настоящий промпт.
+	//
+	// -yolo — как и обещает документация bench и gcli_prompt: изолированный
+	// ребёнок сам одобряет обычные действия, иначе задачи с файлами и
+	// командами падали всегда. Но это и полный отказ от подтверждений:
+	// MCP-хост, шлющий промпты, получает право исполнять всё в workdir без
+	// единого вопроса человеку. Решение вынесено оператору, запускающему
+	// сервер: GCLI_MCP_SERVE_YOLO=0 стартует ребёнка без -yolo — ходы,
+	// требующие подтверждения, тогда отклоняются (в -p подтверждать некому),
+	// зато ничего не исполняется молча.
+	args := []string{"-json", "-p", prompt}
+	if mcpSrvYolo() {
+		args = []string{"-json", "-yolo", "-p", prompt}
+	}
+	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = workdir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -294,6 +305,21 @@ func mcpSrvPrompt(workdir, prompt string, timeout time.Duration) (string, error)
 		return "", fmt.Errorf("агент вернул пустой ответ")
 	}
 	return string(out), nil
+}
+
+// mcpSrvYolo — пускать ли дочерний агент MCP-промпта с -yolo.
+//
+// По умолчанию — да: так задокументировано (bench, gcli_prompt), и без
+// этого задачи с файлами и командами в -p не работают — подтверждать
+// некому. GCLI_MCP_SERVE_YOLO=0|false|off|no выключает: ребёнок живёт в
+// режиме подтверждений, где каждый опасный шаг отклоняется. Годится для
+// хостов, чьи промпты оператор не контролирует.
+func mcpSrvYolo() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GCLI_MCP_SERVE_YOLO"))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
 }
 
 // mcpSrvMissionStatus — сводка состояния прогона с диска.

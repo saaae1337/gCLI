@@ -45,6 +45,18 @@ const (
 	finalizeTurns = 2
 )
 
+// Маркеры ошибок и предупреждений в тексте результата инструмента.
+//
+// Это не косметика, а контракт между execOne (который их ставит) и
+// LoopDetector.errKey (который по ним узнаёт однотипные ошибки): детектор
+// распознаёт неудачи по префиксу, и смена формулировки в одном месте
+// молча отключала бы обнаружение петель в другом. Править только вместе
+// — тест TestErrKeyMatchesExecOneMarkers ловит расхождение.
+const (
+	errPrefix  = "Ошибка: "
+	warnPrefix = "Предупреждение: "
+)
+
 // finalizePrompt — добавка к системному промпту на финальных ходах.
 const finalizePrompt = "" +
 	"\n\n# Финальный ход — сдай результат\n" +
@@ -886,7 +898,7 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 			return nil
 		}
 	}
-	a.MaybeAutoCompact()
+	a.MaybeAutoCompact(ctx)
 	return nil
 }
 
@@ -1212,10 +1224,10 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 
 	text := out.Text
 	if out.Error != "" {
-		text = "Предупреждение: " + out.Error
+		text = warnPrefix + out.Error
 	}
 	if err != nil {
-		text = "Ошибка: " + err.Error()
+		text = errPrefix + err.Error()
 	}
 	if text == "" {
 		text = "(инструмент не вернул результат)"
@@ -1283,8 +1295,12 @@ func (a *Agent) clampResult(s string) string {
 }
 
 // MaybeAutoCompact — сжать контекст, если он близок к порогу.
-func (a *Agent) MaybeAutoCompact() {
-	a.Compact(true)
+//
+// Контекст приходит из хода: авто-сжатие в конце хода обязано отменяться
+// вместе с ходом (Esc/Ctrl+C), иначе оно висело до 10 минут на сети под
+// context.Background() и игнорировало человека.
+func (a *Agent) MaybeAutoCompact(ctx context.Context) {
+	a.Compact(ctx, true)
 }
 
 // autoCompactDue — пора ли автоматически сжимать историю.
@@ -1310,7 +1326,17 @@ func (a *Agent) autoCompactDue(msgs []core.Message) bool {
 // auto отличает сжатие по порогу (в конце хода) от ручного /compact:
 // автоматическое сжимает только действительно большой контекст, ручное —
 // по прямой просьбе человека, даже если история ещё короткая.
-func (a *Agent) Compact(auto bool) bool {
+//
+// ctx — тот, кто живёт дольше запроса: у авто-сжатия это контекст хода,
+// у ручного — context.Background(). Раньше здесь всегда был Background,
+// и отменённый ход продолжал тянуть выжимку из сети.
+func (a *Agent) Compact(ctx context.Context, auto bool) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return false
+	}
 	if a.d.Session == nil {
 		return false
 	}
@@ -1328,7 +1354,7 @@ func (a *Agent) Compact(auto bool) bool {
 		System:    compactPrompt,
 		Messages:  msgs,
 	}
-	summary, err := a.callModel(context.Background(), creq, true)
+	summary, err := a.callModel(ctx, creq, true)
 	if err != nil || strings.TrimSpace(summary.Content) == "" {
 		return false
 	}

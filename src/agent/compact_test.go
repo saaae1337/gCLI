@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -50,7 +51,7 @@ func TestCompactKeepsSummaryInFallback(t *testing.T) {
 	}}
 	a := compactAgent(t, sess, summary)
 
-	if !a.Compact(false) {
+	if !a.Compact(context.Background(), false) {
 		t.Fatal("Compact вернул false: сжатие не состоялось")
 	}
 	var text strings.Builder
@@ -88,7 +89,7 @@ func TestCompactUsesReplaceWhenAvailable(t *testing.T) {
 		{Role: core.RoleUser, Content: "было много"},
 		{Role: core.RoleAssistant, Content: "и ещё"},
 	}
-	if !a.Compact(false) {
+	if !a.Compact(context.Background(), false) {
 		t.Fatal("Compact вернул false")
 	}
 	if !rs.replaced {
@@ -107,7 +108,7 @@ func TestCompactTooShortHistory(t *testing.T) {
 		Session:  sess,
 		Registry: tools.New(tools.Env{}),
 	}, ".")
-	if a.Compact(false) {
+	if a.Compact(context.Background(), false) {
 		t.Error("Compact сработал на одном сообщении")
 	}
 }

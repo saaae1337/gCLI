@@ -1,6 +1,10 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"gcli/wcwidth"
+)
 
 // ---------- Поле ввода ----------
 //
@@ -153,7 +157,10 @@ func (c *Composer) KillWord() {
 // visualRanges — границы видимых строк (индексы рун).
 //
 // Перенос по ширине; если рядом с границей есть пробел, рвём по нему,
-// чтобы слова не разрезались посередине без нужды.
+// чтобы слова не разрезались посередине без нужды. Ширина меряется по
+// графическим кластерам: составной символ (флаг, эмодзи с тоном кожи,
+// ZWJ-последовательность) не рвётся посередине и занимает столько же
+// колонок, сколько рисует терминал.
 func (c *Composer) visualRanges(width int) [][2]int {
 	if width < 1 {
 		width = 1
@@ -162,16 +169,22 @@ func (c *Composer) visualRanges(width int) [][2]int {
 	start := 0
 	w := 0
 	lastSpace := -1
-	for i, r := range c.text {
+	for i := 0; i < len(c.text); {
+		r := c.text[i]
 		if r == '\n' {
 			out = append(out, [2]int{start, i})
 			start = i + 1
 			w = 0
 			lastSpace = -1
+			i++
 			continue
 		}
-		rw := RuneWidth(r)
-		if w+rw > width && i > start {
+		cw, n := wcwidth.NextClusterRunes(c.text, i)
+		if n <= 0 {
+			n = 1
+			cw = RuneWidth(r)
+		}
+		if w+cw > width && i > start {
 			br := i
 			// Пробел недалеко от края — переносим по нему.
 			if lastSpace > start && i-lastSpace <= width/3 {
@@ -179,10 +192,7 @@ func (c *Composer) visualRanges(width int) [][2]int {
 			}
 			out = append(out, [2]int{start, br})
 			start = br
-			w = 0
-			for k := start; k < i; k++ {
-				w += RuneWidth(c.text[k])
-			}
+			w = widthBetween(c.text, start, i)
 			lastSpace = -1
 			for k := start; k < i; k++ {
 				if c.text[k] == ' ' {
@@ -190,13 +200,30 @@ func (c *Composer) visualRanges(width int) [][2]int {
 				}
 			}
 		}
-		w += rw
+		w += cw
 		if r == ' ' {
 			lastSpace = i
 		}
+		i += n
 	}
 	out = append(out, [2]int{start, len(c.text)})
 	return out
+}
+
+// widthBetween — ширина текста в рунах [from, to) по кластерам.
+// Границы ставит visualRanges и курсор, они выровнены по кластерам;
+// срез, режущий кластер посередине, считается целиком.
+func widthBetween(text []rune, from, to int) int {
+	w := 0
+	for i := from; i < to && i < len(text); {
+		cw, n := wcwidth.NextClusterRunes(text, i)
+		if n <= 0 {
+			break
+		}
+		w += cw
+		i += n
+	}
+	return w
 }
 
 // Lines — видимые строки текста.
@@ -228,9 +255,7 @@ func (c *Composer) CursorPos(width int) (int, int) {
 	x := 0
 	if line < len(ranges) {
 		start := ranges[line][0]
-		for k := start; k < c.cur && k < len(c.text); k++ {
-			x += RuneWidth(c.text[k])
-		}
+		x = widthBetween(c.text, start, c.cur)
 	}
 	return x, line
 }
@@ -246,13 +271,17 @@ func (c *Composer) Up(width int) {
 	target := ranges[line-1]
 	c.cur = target[0]
 	col := 0
-	for k := target[0]; k < target[1]; k++ {
-		rw := RuneWidth(c.text[k])
-		if col+rw > x {
+	for k := target[0]; k < target[1]; {
+		cw, n := wcwidth.NextClusterRunes(c.text, k)
+		if n <= 0 {
 			break
 		}
-		col += rw
-		c.cur = k + 1
+		if col+cw > x {
+			break
+		}
+		col += cw
+		k += n
+		c.cur = k
 	}
 }
 
@@ -267,13 +296,17 @@ func (c *Composer) Down(width int) {
 	target := ranges[line+1]
 	c.cur = target[0]
 	col := 0
-	for k := target[0]; k < target[1]; k++ {
-		rw := RuneWidth(c.text[k])
-		if col+rw > x {
+	for k := target[0]; k < target[1]; {
+		cw, n := wcwidth.NextClusterRunes(c.text, k)
+		if n <= 0 {
 			break
 		}
-		col += rw
-		c.cur = k + 1
+		if col+cw > x {
+			break
+		}
+		col += cw
+		k += n
+		c.cur = k
 	}
 }
 

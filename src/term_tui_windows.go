@@ -28,7 +28,13 @@ type winConsoleInfo struct {
 }
 
 const (
-	cStdOutputHandle     = ^uintptr(11) // (DWORD)-11
+	// cStdOutputHandle — (DWORD)-11, STD_OUTPUT_HANDLE.
+	//
+	// Было ^uintptr(11) с комментарием «(DWORD)-11», но ^11 — это -12
+	// (STD_ERROR_HANDLE): инверсия n даёт −n−1. Размер окна читался из
+	// буфера STDERR: работало, пока stderr смотрел в ту же консоль, и
+	// возвращало 0×0 (с запасными 80×24), когда stderr перенаправлен.
+	cStdOutputHandle     = ^uintptr(10) // (DWORD)-11
 	cEnableExtendedFlags = 0x0080
 	cEnableQuickEdit     = 0x0040
 )
@@ -85,4 +91,18 @@ func stdinIsTerminal() bool {
 	var mode uint32
 	r, _, _ := procGetConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode)))
 	return r != 0
+}
+
+// rawTUIHint — подсказка к отказу raw-режима на Windows.
+//
+// Отказ случается в двух разных мирах, и лечатся они по-разному: без
+// подсказки пользователь видит «не удалось включить raw-режим» и не знает,
+// виноват ли терминал, система или gcli.
+func rawTUIHint() string {
+	if !stdinIsTerminal() {
+		return " · ввод не подключён к консоли (пайп или mintty): запусти gcli в Windows Terminal, cmd или через winpty gcli"
+	}
+	// SetConsoleMode с ENABLE_VIRTUAL_TERMINAL_INPUT требует Windows 10
+	// 1607+; на более старых raw для полноэкранного режима недостижим.
+	return " · нужен Windows 10 1607+ (VT-ввод); на старой системе используй -plain"
 }

@@ -99,7 +99,7 @@ func TestNilSessionAndRegistryAreSafe(t *testing.T) {
 	if len(res) != 1 || !strings.Contains(res[0].text, "неизвестный") {
 		t.Errorf("без реестра вызов должен вернуть понятную ошибку: %+v", res)
 	}
-	if a.Compact(false) {
+	if a.Compact(context.Background(), false) {
 		t.Error("без сессии сжимать нечего")
 	}
 	if got := a.CollectReport(context.Background()); got != "" {
@@ -297,7 +297,7 @@ func TestCompactCheckpointsMissionBeforeReplacingHistory(t *testing.T) {
 		},
 	})
 
-	if !a.Compact(false) {
+	if !a.Compact(context.Background(), false) {
 		t.Fatal("Compact вернул false")
 	}
 	if msgsAtCheckpoint != 2 {

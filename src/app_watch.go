@@ -97,7 +97,13 @@ func watchRunCommand(dir, command string, timeout time.Duration) (string, int, b
 	defer cancel()
 	cmd := exec.CommandContext(ctx, shell, args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	// Capture вместо CombinedOutput: проверка может светить гигабайтным
+	// логом (рекурсивная сборка, бесконечный тест), а агенту нужна лишь
+	// вершина и хвост.
+	captured := core.NewCapture(64 * 1024)
+	cmd.Stdout = captured
+	cmd.Stderr = captured
+	err := cmd.Run()
 	code := 0
 	timedOut := false
 	if err != nil {
@@ -116,7 +122,7 @@ func watchRunCommand(dir, command string, timeout time.Duration) (string, int, b
 			}
 		}
 	}
-	return string(out), code, timedOut
+	return captured.String(), code, timedOut
 }
 
 func asExitError(err error, target **exec.ExitError) bool {

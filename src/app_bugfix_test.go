@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"gcli/core"
 	"gcli/ui"
 )
 
@@ -75,12 +76,12 @@ func TestWatchTimeoutLabeled(t *testing.T) {
 // и разделителями (защита LoadSession/DeleteSession от обхода путей).
 func TestSessionIDValidation(t *testing.T) {
 	for _, bad := range []string{"../../etc/passwd", "", "..", "a/b", "a\\b", ".hidden", "x:y", strings.Repeat("x", 65)} {
-		if validSessionID(bad) {
+		if core.ValidSessionID(bad) {
 			t.Errorf("плохой id %q прошёл проверку", bad)
 		}
 	}
 	for _, good := range []string{"20260102-150405-ab12", "sess_1", "S.PNG", "a-b_c.json"} {
-		if !validSessionID(good) {
+		if !core.ValidSessionID(good) {
 			t.Errorf("нормальный id %q отвергнут", good)
 		}
 	}

@@ -71,6 +71,22 @@ func (r *Registry) RegisterVision() {
 		schemaReadImage, "read", false, func(r *Registry) Handler { return r.hReadImage })
 }
 
+// browserNeedsNoSandbox — запускать ли Chromium с --no-sandbox.
+//
+// Песочница рендера требует setuid-помощника или user-namespace; под root
+// и в контейнерах без них Chromium падает на старте (typical CI: signal:
+// aborted, core dumped). Явное GCLI_BROWSER_NO_SANDBOX включает флаг и на
+// обычной машине — например, для окружений с кривыми правами.
+func browserNeedsNoSandbox() bool {
+	if os.Getenv("GCLI_BROWSER_NO_SANDBOX") != "" {
+		return true
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return false
+	}
+	return os.Geteuid() == 0
+}
+
 // findBrowser — найти headless-браузер для скриншотов.
 func findBrowser() (string, []string) {
 	if p := strings.TrimSpace(os.Getenv("GCLI_BROWSER")); p != "" {
@@ -191,6 +207,11 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 		"--hide-scrollbars",
 		"--force-device-scale-factor=1",
 		"--virtual-time-budget=4000",
+		// Классический краш Chromium в контейнерах и на CI-раннерах
+		// (signal: aborted, core dumped): /dev/shm слишком мал для
+		// его IPC-разделяемой памяти. Флаг переводит её в /tmp —
+		// медленнее, но снимок не падает.
+		"--disable-dev-shm-usage",
 		// Лог браузера в stderr: оттуда берутся ошибки консоли страницы.
 		// Без этого агент видит снимок красивого экрана и не знает, что
 		// скрипт на странице падает.
@@ -201,17 +222,33 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 		"--screenshot=" + outPath,
 		target,
 	}
+	// Песочница Chromium не работает под root и в контейнерах без
+	// user-namespace: браузер падает до отрисовки. В обычном запуске
+	// от root это тоже спасает, а на пользовательской машине флаг не
+	// нужен — включаем только там, где без него краш.
+	if browserNeedsNoSandbox() {
+		args = append(args, "--no-sandbox")
+	}
 
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, browser, args...)
 	cmd.Env = append(os.Environ(), "HOME="+os.TempDir())
-	log, err := cmd.CombinedOutput()
+	// Лог браузера — через Capture: с --v=1 Chromium на тяжёлой странице
+	// выдаёт десятки мегабайт. Окно большое (по 1 МБ), чтобы ошибки
+	// консоли страницы не потерялись в середине.
+	logCap := core.NewCapture(1024 * 1024)
+	cmd.Stdout = logCap
+	cmd.Stderr = logCap
+	err = cmd.Run()
 	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
 			return Result{}, fmt.Errorf("браузер не успел за 60 с — страница, вероятно, слишком тяжёлая")
 		}
-		return Result{}, fmt.Errorf("скриншот не удался: %v", err)
+		// Хвост лога — в ошибку: без него краш браузера («signal: aborted»)
+		// нечитаем, и отличить нехватку памяти от сломанного профиля
+		// можно было только повторным запуском руками.
+		return Result{}, fmt.Errorf("скриншот не удался: %v\n%s", err, core.TruncateUTF8(logCap.String(), 600, 600))
 	}
 	res, err := r.attachImageFile(outPath, "screenshot")
 	if err != nil {
@@ -219,7 +256,7 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	}
 	// Ошибки консоли страницы — в текст результата: агент читает текст
 	// результата, а картинку он смотрит глазами.
-	if errs := consoleErrors(string(log)); len(errs) > 0 {
+	if errs := consoleErrors(logCap.String()); len(errs) > 0 {
 		res.Text += "\n\nОшибки в консоли страницы:\n" + strings.Join(errs, "\n")
 		res.Summary += " · ошибок в консоли: " + strconv.Itoa(len(errs))
 	}

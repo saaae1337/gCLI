@@ -16,7 +16,7 @@ import (
 )
 
 // Version — версия приложения (обновляется при сборке через -ldflags).
-var Version = "0.7.0.0"
+var Version = "0.7.2.0"
 
 // ---------- Типы диалога ----------
 
@@ -121,6 +121,22 @@ func ValidStatus(s string) string {
 		return s
 	}
 	return TodoPending
+}
+
+// FirstNonEmpty — первое непустое значение из списка.
+//
+// Жила в трёх копиях с разными сигнатурами (app_subagents, tools/lsp,
+// subagents/grounding) — теперь одна. Вариант с проверкой по TrimSpace
+// живёт в grounding как firstNonBlank: там «пробельная» строка обязана
+// считаться пустой, а здесь — нет, чтобы не менять поведение типов,
+// где пробел — валидное значение.
+func FirstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // CheckpointMeta — метаданные резервной копии файла для /undo.

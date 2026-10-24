@@ -128,9 +128,10 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 			a.announceDeny(req, rule)
 			return false
 		case core.PermAllow:
-			if a.sess.Perms.AutopilotAll {
-				return true
-			}
+			// Правило явно разрешило — вопрос не задаётся. Раньше здесь
+			// был «if AutopilotAll { return true }; return true»: обе
+			// ветки возвращали true, и if только притворялся, что
+			// автопилот тут чем-то управляет.
 			return true
 		}
 	}
@@ -370,10 +371,12 @@ func (a *app) quietConfirm(req tools.ConfirmReq) bool {
 	if a.sess.Perms.Autopilot {
 		return a.autoApprove(req)
 	}
-	if a.sess.Perms.BashAll && req.Kind != tools.ConfirmExec {
-		return true
-	}
-	if a.sess.Perms.BashAll && req.Kind == tools.ConfirmExec && !tools.IsDangerous(req.Detail) {
+	// BashAll разрешает все небезопасные (нежёсткие) действия: и
+	// не-команды, и команды без признаков опасности. Опасная команда
+	// требует явного согласия даже с BashAll — тихий режим не должен
+	// молча делать rm -rf.
+	if a.sess.Perms.BashAll &&
+		(req.Kind != tools.ConfirmExec || !tools.IsDangerous(req.Detail)) {
 		return true
 	}
 	if req.Kind == tools.ConfirmWrite && a.sess.Perms.FileWrite {
@@ -515,18 +518,6 @@ func (a *app) recordCheckpoint(path, label string) {
 	a.repo.RecordCheckpoint(a.sess, path, label)
 }
 
-// validSessionID — id сессии: только безопасные для имени файла символы,
-// без разделителей и «..».
-func validSessionID(id string) bool {
-	if id == "" || len(id) > 64 || strings.Contains(id, "..") ||
-		strings.ContainsAny(id, `/\:`) || strings.HasPrefix(id, ".") {
-		return false
-	}
-	for _, r := range id {
-		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
+// Проверка id сессии живёт в core.ValidSessionID: она была продублирована
+// здесь дословно, а security-функция в двух экземплярах — уязвимость с
+// отсрочкой (правишь одну — вторая молча остаётся дырявой).

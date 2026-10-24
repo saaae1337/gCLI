@@ -192,3 +192,26 @@ func TestLoopDetectorConcurrent(t *testing.T) {
 		t.Error("счётчик вытесненных не может быть отрицательным")
 	}
 }
+
+// TestErrKeyMatchesExecOneMarkers — связка execOne ↔ errKey.
+//
+// execOne помечает неудачи инструментами константами errPrefix/warnPrefix,
+// errKey узнаёт по ним однотипные ошибки. Константы в одном пакете, но
+// контракт живёт в двух файлах: если однажды переименуют префикс в одном
+// месте и забудут про другой, детектор петель молча ослепнет. Этот тест —
+// предохранитель.
+func TestErrKeyMatchesExecOneMarkers(t *testing.T) {
+	// Ровно то, что execOne собирает из err != nil и out.Error.
+	failure := errPrefix + "old_string не найден в файле"
+	warning := warnPrefix + "файл пуст"
+	if errKey(failure) == "" {
+		t.Errorf("errKey не узнал ошибку execOne: %q", failure)
+	}
+	if errKey(warning) == "" {
+		t.Errorf("errKey не узнал предупреждение execOne: %q", warning)
+	}
+	// Успешный вывод — не ошибка, ключа нет.
+	if errKey("5 успешно, 0 с ошибкой") != "" {
+		t.Errorf("успешный вывод принят за ошибку")
+	}
+}

@@ -130,7 +130,7 @@ func (r *Repo) SaveSession(s *Session) error {
 // id валидируется: он приходит и из HTTP (?session=...), а «../../x» без
 // проверки превращал LoadSession в оракул по json-файлам машины.
 func (r *Repo) LoadSession(id string) (*Session, error) {
-	if !validSessionID(id) {
+	if !ValidSessionID(id) {
 		return nil, fmt.Errorf("плохой id сессии: %q", id)
 	}
 	if !strings.HasSuffix(id, ".json") {
@@ -171,7 +171,7 @@ func (r *Repo) ListSessions() []Session {
 
 // DeleteSession — удалить сессию и её чекпоинты.
 func (r *Repo) DeleteSession(id string) error {
-	if !validSessionID(id) {
+	if !ValidSessionID(id) {
 		return fmt.Errorf("плохой id сессии: %q", id)
 	}
 	// LoadSession принимает и «id», и «id.json»; удаление обязано
@@ -181,11 +181,17 @@ func (r *Repo) DeleteSession(id string) error {
 	return os.Remove(filepath.Join(r.Store.Sessions(), id+".json"))
 }
 
-// validSessionID — id сессии из сети: только безопасные для имени файла
+// ValidSessionID — id сессии из сети: только безопасные для имени файла
 // символы, без разделителей и «..».
-func validSessionID(id string) bool {
+//
+// Экспортирована не для удобства, а потому что id приходит из HTTP
+// (/v1/history), и проверять его обязаны все, кто превращает его в путь:
+// вторая частная копия в app_session.go уже существовала и могла бы
+// разойтись с этой молча — security-функция в двух экземплярах это
+// уязвимость с отсрочкой.
+func ValidSessionID(id string) bool {
 	if id == "" || len(id) > 64 || strings.Contains(id, "..") ||
-		strings.ContainsAny(id, `/\:`) || strings.HasPrefix(id, ".") {
+		strings.ContainsAny(id, `/:\`) || strings.HasPrefix(id, ".") {
 		return false
 	}
 	for _, r := range id {

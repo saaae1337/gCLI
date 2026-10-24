@@ -230,14 +230,15 @@ func (a *app) replTUI() {
 		return
 	}
 	// Raw-режим мог отказать (терминал без управления): честно
-	// откатываемся в обычный REPL и говорим об этом.
+	// откатываемся в обычный REPL и говорим об этом — с подсказкой,
+	// что именно не так и как обойти.
 	a.ui.SetSink(nil)
 	a.setTUI(nil)
 	if a.stdin == nil {
 		a.stdin = newStdin()
 	}
 	a.banner()
-	a.ui.Warn("полноэкранный интерфейс недоступен: " + err.Error())
+	a.ui.Warn("полноэкранный интерфейс недоступен: " + err.Error() + rawTUIHint())
 	a.stdin.enableRaw()
 	defer a.stdin.disableRaw()
 	keys := a.startWatcher(a.ctrlO)

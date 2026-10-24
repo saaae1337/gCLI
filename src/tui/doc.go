@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"gcli/wcwidth"
 )
 
 // ---------- Лента диалога ----------
@@ -691,27 +693,37 @@ func renderPlainSegs(segs Line, w int, t Theme, first, next string, st Style) []
 }
 
 // cutText — отрезать кусок не шире w. Старается резать по пробелу.
+//
+// Режет по графическим кластерам: составной символ (флаг, эмодзи с
+// модификаторами) целиком уходит в одну из частей и не рвётся посередине —
+// иначе на стыке строк оставалась бы половина эмодзи, а ширина кусков не
+// сходилась с тем, что напечатает терминал.
 func cutText(s string, w int) (cut, rest string) {
+	s = wcwidth.ValidUTF8(s)
 	cur := 0
 	lastSpace := -1
-	for i, r := range s {
-		rw := RuneWidth(r)
-		if cur+rw > w {
+	for i := 0; i < len(s); {
+		cw, size := wcwidth.ClusterAt(s, i)
+		if size <= 0 {
+			break
+		}
+		r, _ := utf8.DecodeRuneInString(s[i:])
+		if cur+cw > w {
 			if lastSpace > 0 {
 				return strings.TrimRight(s[:lastSpace], " "), strings.TrimLeft(s[lastSpace:], " ")
 			}
 			if i == 0 {
-				// Даже одна руна шире строки: отдаём её, иначе цикл
+				// Даже один кластер шире строки: отдаём его, иначе цикл
 				// вызывающего кода не сдвинется с места.
-				_, size := utf8.DecodeRuneInString(s)
 				return s[:size], s[size:]
 			}
 			return s[:i], s[i:]
 		}
-		cur += rw
+		cur += cw
 		if r == ' ' {
 			lastSpace = i
 		}
+		i += size
 	}
 	return s, ""
 }

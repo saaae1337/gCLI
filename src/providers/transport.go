@@ -93,9 +93,30 @@ const maxKeyAttempts = 8
 // Ключ может кончиться посреди работы: запрос не проходит, и без
 // следующего ключа сессия встала бы. Здесь ключи перебираются по кругу,
 // пока не кончатся или не упрётся в лимит попыток.
+//
+// Поворот возможен только ДО первого доставленного события. Если часть
+// потока уже ушла получателю (текст, reasoning, вызовы инструментов), то
+// перезапуск запроса другим ключом продублировал бы всё доставленное в
+// контексте: модель увидела бы половину ответа дважды и продолжила бы её
+// как новую. Поэтому ошибка после первого события — финальная, даже если
+// по смыслу это «ключ исчерпан».
 func (c *Client) streamWithKeys(ctx context.Context, p *Provider, req *http.Request, onData streamFunc) error {
+	delivered := false
+	guarded := func(data string) error {
+		err := onData(data)
+		if err != nil {
+			if delivered {
+				// Срываем метки retryErr/keyError: их наличие — сигнал
+				// к повтору, а повтор здесь запрещён.
+				return errors.New(err.Error())
+			}
+			return err
+		}
+		delivered = true
+		return nil
+	}
 	for attempt := 0; ; attempt++ {
-		err := c.doSSE(ctx, req, onData)
+		err := c.doSSE(ctx, req, guarded)
 		if err == nil {
 			return nil
 		}

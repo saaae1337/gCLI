@@ -17,7 +17,7 @@ jobs:
     # Ревью не должно блокировать merge: это подсказка, а не контроль.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Полная история нужна для git diff между ветками.
           fetch-depth: 0

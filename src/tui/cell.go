@@ -4,6 +4,9 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"gcli/wcwidth"
 )
 
 // ---------- Цвет и стиль ----------
@@ -108,6 +111,7 @@ func (s Style) With(attrs ...string) Style {
 // Cell — одна клетка экрана.
 type Cell struct {
 	R    rune
+	Rest string // хвост графического кластера: ZWJ, модификаторы, вторая руна флага
 	S    Style
 	Cont bool // вторая половина широкого символа
 }
@@ -143,13 +147,22 @@ func (s *Screen) Clear() {
 // In — координаты внутри экрана.
 func (s *Screen) In(x, y int) bool { return x >= 0 && y >= 0 && x < s.W && y < s.H }
 
-// Set — поставить символ.
+// Set — поставить одиночный символ.
 func (s *Screen) Set(x, y int, r rune, st Style) {
+	s.setCluster(x, y, wcwidth.RuneWidth(r), r, "", st)
+}
+
+// setCluster — поставить графический кластер шириной w клеток.
+//
+// base — базовый символ, rest — его продолжения (ZWJ, модификаторы,
+// вторая руна флага). Продолжения занимают ноль клеток на экране, но
+// обязаны попасть в вывод вместе с базой: терминал рисует кластер одной
+// картинкой, и если хвост потерять, на его месте останется мусор.
+func (s *Screen) setCluster(x, y, w int, base rune, rest string, st Style) {
 	if !s.In(x, y) {
 		return
 	}
-	w := RuneWidth(r)
-	if w == 0 {
+	if w <= 0 {
 		return
 	}
 	if w > 2 {
@@ -165,10 +178,7 @@ func (s *Screen) Set(x, y int, r rune, st Style) {
 			s.Cells[y*s.W+x] = Cell{R: ' ', S: st}
 			return
 		}
-		if s.Cells[y*s.W+x+1].Cont {
-			// уже continuation — просто перезапишем ниже
-		}
-		s.Cells[y*s.W+x] = Cell{R: r, S: st}
+		s.Cells[y*s.W+x] = Cell{R: base, Rest: rest, S: st}
 		s.Cells[y*s.W+x+1] = Cell{R: 0, S: st, Cont: true}
 		return
 	}
@@ -177,7 +187,7 @@ func (s *Screen) Set(x, y int, r rune, st Style) {
 	if x+1 < s.W && s.Cells[y*s.W+x+1].Cont {
 		s.Cells[y*s.W+x+1] = Cell{R: ' ', S: st}
 	}
-	s.Cells[y*s.W+x] = Cell{R: r, S: st}
+	s.Cells[y*s.W+x] = Cell{R: base, Rest: rest, S: st}
 }
 
 // Char — поставить один символ, не трогая остальное.
@@ -185,21 +195,40 @@ func (s *Screen) Char(x, y int, r rune, st Style) { s.Set(x, y, r, st) }
 
 // Text — нарисовать строку, вернуть следующую колонку.
 //
-// Управляющие символы выкидываются: в кадр они попасть не должны.
+// Строка разбирается по графическим кластерам: составной символ (флаг,
+// ZWJ-последовательность, эмодзи с тоном кожи) занимает ровно столько
+// клеток, сколько рисует терминал, и целиком хранится в базовой клетке.
+// Управляющие символы и ANSI-разметка в кадр не попадают.
 func (s *Screen) Text(x, y int, text string, st Style) int {
-	for _, r := range text {
-		if r == '\n' || r == '\r' || r == '\t' {
+	text = wcwidth.ValidUTF8(text)
+	for i := 0; i < len(text); {
+		if text[i] == 0x1b {
+			i += wcwidth.SkipANSI(text, i)
 			continue
 		}
-		w := RuneWidth(r)
-		if w == 0 {
+		w, size := wcwidth.ClusterAt(text, i)
+		if size <= 0 {
+			break
+		}
+		base, bsz := utf8.DecodeRuneInString(text[i:])
+		if base == '\n' || base == '\r' || base == '\t' {
+			i += size
+			continue
+		}
+		if w <= 0 {
+			i += size
 			continue
 		}
 		if x+w > s.W {
 			break
 		}
-		s.Set(x, y, r, st)
+		rest := ""
+		if size > bsz {
+			rest = text[i+bsz : i+size]
+		}
+		s.setCluster(x, y, w, base, rest, st)
 		x += w
+		i += size
 	}
 	return x
 }
@@ -275,6 +304,9 @@ func (s *Screen) Plain() string {
 				continue
 			}
 			b.WriteRune(c.R)
+			if c.Rest != "" {
+				b.WriteString(c.Rest)
+			}
 		}
 		b.WriteByte('\n')
 	}
@@ -392,6 +424,12 @@ func (r *Renderer) Draw(s *Screen) {
 				ch = ' '
 			}
 			b.WriteRune(ch)
+			// Хвост кластера печатается вместе с базой: терминал
+			// рисует всю последовательность одной картинкой и
+			// сдвигает курсор ровно на w клеток.
+			if c.Rest != "" {
+				b.WriteString(c.Rest)
+			}
 		}
 		for x := minX; x <= maxX; x++ {
 			r.prev.Cells[y*s.W+x] = s.Cells[y*s.W+x]

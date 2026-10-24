@@ -3,6 +3,8 @@ package tui
 import (
 	"strconv"
 	"strings"
+
+	"gcli/wcwidth"
 )
 
 // ---------- ANSI в стилизованные строки ----------
@@ -25,41 +27,16 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
-// skipEscape — длина escape-последовательности с позиции i.
+// skipEscape — индекс за концом escape-последовательности с позиции i
+// (i стоит на ESC). Исторический контракт этого пакета — абсолютный
+// индекс, в отличие от wcwidth.SkipANSI, возвращающего длину.
+//
+// Логика живёт в gcli/wcwidth — общей с ui реализации, куда доехали
+// все починки с фаззинга: не-ASCII после ESC не съедается, финальный
+// байт CSI ищется не только среди букв, оборванный OSC не тащит хвост
+// строки внутрь последовательности.
 func skipEscape(s string, i int) int {
-	j := i + 1
-	if j >= len(s) {
-		return j
-	}
-	switch s[j] {
-	case '[':
-		j++
-		for j < len(s) && !(s[j] >= 0x40 && s[j] <= 0x7e) {
-			j++
-		}
-		if j < len(s) {
-			j++
-		}
-		return j
-	case ']':
-		// OSC: до BEL или ESC \.
-		j++
-		for j < len(s) {
-			if s[j] == 0x07 {
-				return j + 1
-			}
-			if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
-				return j + 2
-			}
-			j++
-		}
-		return j
-	}
-	// Двухбайтовые: ESC ( B и подобные.
-	if j+1 < len(s) && (s[j] == '(' || s[j] == ')') {
-		return j + 2
-	}
-	return j + 1
+	return i + wcwidth.SkipANSI(s, i)
 }
 
 // parseStyled — разобрать строку с ANSI в куски.

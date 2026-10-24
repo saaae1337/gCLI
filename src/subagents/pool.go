@@ -162,7 +162,7 @@ type Pool struct {
 	mu    sync.Mutex
 	runs  map[string]*Run
 	order []string
-	slots slotCounter
+	slots chan struct{} // семафор параллельных слотов (вместимость maxPar)
 
 	// nameSeq — счётчик автоимён по типу. Живёт отдельно от runs, потому
 	// что между вычислением имени (autoName) и регистрацией запуска в runs
@@ -199,6 +199,7 @@ func NewPool(runner Runner, opts PoolOptions) *Pool {
 	if p.maxPar <= 0 {
 		p.maxPar = 3
 	}
+	p.slots = make(chan struct{}, p.maxPar)
 	if p.maxDepth <= 0 {
 		p.maxDepth = 1
 	}
@@ -422,38 +423,34 @@ func (p *Pool) joinFlight(ctx context.Context, spec Spec, f *flight) (Outcome, e
 	return p.reuse(spec, out, ReuseFlight, f.srcName, time.Now())
 }
 
-// slots — счётчик занятых параллельных слотов (защищён mu).
-// Выделен отдельно от runs, чтобы лимит работал и до регистрации запуска.
-type slotCounter struct {
-	used int
-}
-
 // acquire — занять слот (с ожиданием, если все заняты).
+//
+// Слот — элемент канала-семафора вместимостью maxPar. Раньше был счётчик
+// с опросом: ждущие просыпались по таймеру раз в 60 мс, и освободившийся
+// слот простаивал до будильника. Канал будит ровно одного ждущего сразу
+// после release, а select на ctx.Done снимает ожидающего без задержки.
 func (p *Pool) acquire(ctx context.Context) error {
-	for {
-		p.mu.Lock()
-		if p.slots.used < p.maxPar {
-			p.slots.used++
-			p.mu.Unlock()
-			return nil
-		}
-		p.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(60 * time.Millisecond):
-		}
+	// Быстрый путь: свободный слот предпочтителен даже при уже отменённом
+	// ctx — взявший слот вызов всё равно тут же вернёт его в release.
+	select {
+	case p.slots <- struct{}{}:
+		return nil
+	default:
+	}
+	select {
+	case p.slots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
 // release — освободить слот.
 func (p *Pool) release() {
-	p.mu.Lock()
-	if p.slots.used > 0 {
-		p.slots.used--
+	select {
+	case <-p.slots:
+	default:
 	}
-	p.mu.Unlock()
 }
 
 // autoName — сгенерировать имя субагента.
