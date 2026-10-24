@@ -441,7 +441,7 @@ func listEvidence(a map[string]any, ok bool) []Evidence {
 		return nil
 	}
 	ev := Evidence{Kind: EvList, OK: ok}
-	ev.Path = normPath(firstNonEmpty(path, pattern))
+	ev.Path = normPath(firstNonBlank(path, pattern))
 	if ev.Path != "" {
 		ev.Pat = pattern
 	}
@@ -1001,7 +1001,10 @@ func coreTruncate(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-func firstNonEmpty(vals ...string) string {
+// firstNonBlank — первое непустое значение, где пустое — это и «пробельное».
+// Отличается от core.FirstNonEmpty тем, что строка из одних пробелов
+// считается отсутствующей: в отчётах заземления такой хвост не аргумент.
+func firstNonBlank(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {
 			return v

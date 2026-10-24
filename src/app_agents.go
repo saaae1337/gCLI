@@ -67,7 +67,7 @@ func (a *app) cmdAgents(rest string) {
 		a.ui.Ok(fmt.Sprintf("глубина вложенности: %d", n))
 	case "model":
 		if len(parts) < 2 {
-			a.ui.Info("модель субагентов: " + firstNonEmpty(a.repo.Cfg.SubModel, "как у главного ("+a.model+")"))
+			a.ui.Info("модель субагентов: " + core.FirstNonEmpty(a.repo.Cfg.SubModel, "как у главного ("+a.model+")"))
 			return
 		}
 		if strings.ToLower(parts[1]) == "same" || strings.ToLower(parts[1]) == "главная" {
@@ -165,7 +165,7 @@ func (a *app) setSubRoute(parts []string) {
 		a.repo.Cfg.SubRoute = false
 		a.saveConfig()
 		a.ui.Ok("маршрутизация выключена — субагенты едут на модели " +
-			firstNonEmpty(a.repo.Cfg.SubModel, a.model))
+			core.FirstNonEmpty(a.repo.Cfg.SubModel, a.model))
 	default:
 		a.ui.Err("значение: on | off")
 	}
@@ -247,7 +247,7 @@ func (a *app) listAgentTypes() {
 			if ca.ReadOnly {
 				mode = "только чтение"
 			}
-			model := firstNonEmpty(ca.Model, "—")
+			model := core.FirstNonEmpty(ca.Model, "—")
 			rows = append(rows, []string{ca.Name, ca.Scope, mode, model,
 				core.Truncate(core.OneLine(ca.Desc), 40)})
 		}

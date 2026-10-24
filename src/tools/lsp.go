@@ -133,7 +133,7 @@ func (h *LSPHub) conn(workDir, path string) (*lspConn, error) {
 		ext := strings.ToLower(filepath.Ext(path))
 		if h.cfgCmds[ext] != "" || lspPresets[ext] != "" {
 			return nil, fmt.Errorf("сервер %q не найден в PATH — установи его или переопредели ключом lsp в config.json",
-				firstNonEmpty(h.cfgCmds[ext], lspPresets[ext]))
+				core.FirstNonEmpty(h.cfgCmds[ext], lspPresets[ext]))
 		}
 		return nil, fmt.Errorf("для %s нет language server (пресеты: %s)",
 			filepath.Base(path), strings.Join(mapKeysString(lspPresets), " "))
@@ -854,13 +854,6 @@ func (c *lspConn) definition(path string, line, character int) (string, error) {
 		return "определения:\n  " + strings.Join(parts, "\n  "), nil
 	}
 	return "определение не найдено", nil
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func mapKeysString(m map[string]string) []string {

@@ -8,9 +8,9 @@ package ui
 // (флаги, ZWJ-последовательности, тона кожи) он расходился с этим.
 
 import (
-        "strings"
+	"strings"
 
-        "gcli/wcwidth"
+	"gcli/wcwidth"
 )
 
 // cellWidth — ширина строки в колонках терминала, без ANSI.
@@ -49,22 +49,22 @@ func truncateCellsRaw(s string, n int) string { return wcwidth.TruncateRaw(s, n)
 // ESC или посреди CSI; дописанный к такому хвосту сброс цвета слился бы
 // с ним в одну последовательность и напечатал бы её хвост как текст.
 func trimTrailingEscape(s string) string {
-        for i := 0; i < len(s); {
-                if s[i] == 0x1B {
-                        end, ok := wcwidth.SeqEnd(s, i)
-                        if !ok {
-                                return strings.TrimRight(s[:i], "\x1b")
-                        }
-                        i = end
-                        continue
-                }
-                _, sz := nextCluster(s, i)
-                if sz <= 0 {
-                        sz = 1
-                }
-                i += sz
-        }
-        return s
+	for i := 0; i < len(s); {
+		if s[i] == 0x1B {
+			end, ok := wcwidth.SeqEnd(s, i)
+			if !ok {
+				return strings.TrimRight(s[:i], "\x1b")
+			}
+			i = end
+			continue
+		}
+		_, sz := nextCluster(s, i)
+		if sz <= 0 {
+			sz = 1
+		}
+		i += sz
+	}
+	return s
 }
 
 // truncateCells — обрезать строку до n колонок, не разрывая символ.
@@ -77,24 +77,24 @@ func trimTrailingEscape(s string) string {
 // здесь же. Иначе терминал остаётся в последнем цвете, и весь следующий
 // вывод (включая приглашение) красится чужим цветом.
 func truncateCells(s string, n int) string {
-        out := trimTrailingEscape(truncateCellsRaw(s, n))
-        if out != s && out != "" && hasESC(out) {
-                out += cReset
-        }
-        return out
+	out := trimTrailingEscape(truncateCellsRaw(s, n))
+	if out != s && out != "" && hasESC(out) {
+		out += cReset
+	}
+	return out
 }
 
 // truncateCellsEll — обрезать до n колонок, поставив в конце «…».
 func truncateCellsEll(s string, n int) string {
-        if n <= 0 {
-                return ""
-        }
-        if cellWidth(s) <= n {
-                return s
-        }
-        // Многоточие должно поместиться: режем до n-1.
-        cut := truncateCells(s, n-1)
-        return cut + ellipsis
+	if n <= 0 {
+		return ""
+	}
+	if cellWidth(s) <= n {
+		return s
+	}
+	// Многоточие должно поместиться: режем до n-1.
+	cut := truncateCells(s, n-1)
+	return cut + ellipsis
 }
 
 // firstCluster — первый графический кластер строки целиком, с ZWJ,

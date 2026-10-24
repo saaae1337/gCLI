@@ -150,7 +150,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Name:     runName,
 		Type:     string(t),
 		Task:     spec.Task,
-		Model:    firstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
+		Model:    core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
 		ModelWhy: spec.ModelWhy,
 		Status:   string(statusOf(err)),
 		Depth:    spec.Depth,
@@ -171,7 +171,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Dispatched: args.Type == "",
 		Reuse:      string(out.Reuse),
 		ReusedFrom: out.ReusedFrom,
-		Model:      firstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
+		Model:      core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
 		ModelWhy:   spec.ModelWhy,
 		Summary:    out.Summary,
 		Full:       out.Full,
@@ -193,15 +193,6 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // runSubagent — собственный цикл субагента.
@@ -271,7 +262,7 @@ func (a *app) sessionSpent() int {
 // равно проверяет это первым, но лишний параметр с пустым значением читался
 // бы как «явно указано», и подмена вернулась бы незаметно.
 func (a *app) routeModelFor(role subagents.Type) (string, string) {
-	cur := firstNonEmpty(a.repo.Cfg.SubModel, a.model)
+	cur := core.FirstNonEmpty(a.repo.Cfg.SubModel, a.model)
 	v := subagents.RouteModel(role, subagents.RouteOptions{
 		Current:    cur,
 		ProviderID: a.prov.ID,

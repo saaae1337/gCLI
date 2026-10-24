@@ -148,3 +148,35 @@ func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
 }
+
+// mcpSrvYolo — управление флагом -yolo у дочернего агента. По умолчанию
+// включён (задокументированное поведение), GCLI_MCP_SERVE_YOLO=0 выключает:
+// тогда ходы, требующие подтверждения, отклоняются вместо молчаливого
+// исполнения.
+func TestMcpSrvYolo(t *testing.T) {
+	cases := []struct {
+		env  string
+		want bool
+	}{
+		{"", true},       // без переменной — как задокументировано
+		{"1", true},      // явное включение
+		{"yes", true},    // всё, что не в списке выключения, — включено
+		{"0", false},     // выключение
+		{"false", false}, // выключение словом
+		{"off", false},   // выключение словом
+		{"no", false},    // выключение словом
+		{" off ", false}, // пробелы не мешают
+		{"FALSE", false}, // регистр не важен
+	}
+	for _, c := range cases {
+		if c.env == "" {
+			t.Setenv("GCLI_MCP_SERVE_YOLO", "")
+			os.Unsetenv("GCLI_MCP_SERVE_YOLO")
+		} else {
+			t.Setenv("GCLI_MCP_SERVE_YOLO", c.env)
+		}
+		if got := mcpSrvYolo(); got != c.want {
+			t.Errorf("GCLI_MCP_SERVE_YOLO=%q: mcpSrvYolo = %v, хочу %v", c.env, got, c.want)
+		}
+	}
+}
