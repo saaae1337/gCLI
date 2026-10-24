@@ -179,3 +179,71 @@ jobs:
           name: coverage
           path: src/coverage.out
           retention-days: 14
+
+  # Fuzz-цели раньше жили только у того, кто сам догадался их запустить,
+  # и гнили: падение находилось через месяцы, если вообще находилось.
+  # Дым по 12 секунд на цель ловит паники на свежих входах в каждом пуше.
+  # -run '^$' отключает обычные тесты: здесь гоняется только фаззи.
+  fuzz:
+    name: fuzz smoke
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: по 12 секунд на цель
+        run: |
+          set -e
+          # Пары «пакет цель»: -fuzz принимает ровно один шаблон за прогон,
+          # поэтому цели не смешивают в один вызов.
+          for t in \
+            "gcli/core FuzzStripJSONC" \
+            "gcli/core FuzzMissionNormalize" \
+            "gcli/core FuzzParseDur" \
+            "gcli/core FuzzOneLineAndTruncateNeverPanic" \
+            "gcli/wcwidth FuzzTruncate" \
+            "gcli/wcwidth FuzzStringWidth" \
+            "gcli/ui FuzzWidthInvariants" \
+          ; do
+            set -- $t
+            echo "::group::$1/$2"
+            # Пакет — импорт-путём (gcli/core), а не «./gcli/core»:
+            # точка ведёт отсчёт от каталога, а модуль называется gcli.
+            go test -run '^$' -fuzz "^$2\$" -fuzztime 12s "$1"
+            echo "::endgroup::"
+          done
+
+  # Официальный сканер уязвимостей Go: сверяет стандартную библиотеку
+  # и модули (в этом репозитории модулей ноль, но stdlib живёт в
+  # бинарнике) с базой golang.org/x/vuln. Заноза в старом Go видна
+  # здесь, а не в отчёте пользователя. Версия закреплена: свежие релизы
+  # govulncheck требуют более новый toolchain, чем 1.22 в проекте.
+  vuln:
+    name: govulncheck
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: govulncheck ./...
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...
