@@ -1236,21 +1236,25 @@ func (a *app) cmdPerms(rest string) {
 		a.permsSub(arg, tail)
 		return
 	}
+	// Снимок под sessMu: панель идёт по списку «всегда разрешённых»
+	// команд из очереди ввода, а grantBashExact пишет в карту из хода —
+	// итерация живой карты против записи падала бы фатально.
+	exact := a.permBashExactList()
 	a.ui.Println("")
 	a.ui.KVPairs([][2]string{
 		{"автопилот", autopilotStatus(a)},
 		{"песочница файлов", sandboxStatus(a.sandbox)},
 		{"правила из конфигов", strconv.Itoa(a.rules.Len())},
-		{"запись файлов без подтверждения", yesNo(a.sess.Perms.FileWrite)},
-		{"любые bash-команды без подтверждения", yesNo(a.sess.Perms.BashAll)},
-		{"сетевые запросы без подтверждения", yesNo(a.sess.Perms.WebFetch)},
-		{"разрешённых команд", strconv.Itoa(len(a.sess.Perms.BashExact))},
+		{"запись файлов без подтверждения", yesNo(a.permFileWrite())},
+		{"любые bash-команды без подтверждения", yesNo(a.permBashAll())},
+		{"сетевые запросы без подтверждения", yesNo(a.permWebFetch())},
+		{"разрешённых команд", strconv.Itoa(len(exact))},
 	})
 	a.showPermissionRules()
-	if len(a.sess.Perms.BashExact) > 0 {
+	if len(exact) > 0 {
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Gray("разрешённые команды:"))
-		for c := range a.sess.Perms.BashExact {
+		for _, c := range exact {
 			a.ui.Println("    " + a.ui.Gray("· "+c))
 		}
 	}
@@ -1509,14 +1513,13 @@ func (a *app) cmdAgent(arg string) {
 }
 
 func (a *app) cmdYolo() {
-	a.sess.Perms.BashAll = !a.sess.Perms.BashAll
-	if a.sess.Perms.BashAll {
-		a.sess.Perms.FileWrite = true
-		a.sess.Perms.WebFetch = true
-		a.saveSession()
+	// Переключение под sessMu: confirm в ходе читает эти флаги на каждом
+	// подтверждении и выдаёт гранты параллельно с командой (cron-ход).
+	on := a.toggleBashAll()
+	a.saveSession()
+	if on {
 		a.ui.Warn("YOLO: подтверждения отключены (кроме опасных команд). Действуй осторожно!")
 	} else {
-		a.saveSession()
 		a.ui.Ok("подтверждения снова включены")
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +172,119 @@ func (a *app) setAgentMode(on bool) {
 	sessMu.Unlock()
 }
 
+// ---------- Разрешения под sessMu ----------
+//
+// confirm() зовётся из хода и выдаёт гранты после ответа пользователя,
+// а /yolo, /autopilot и /perms меняют и читают те же флаги из очереди
+// ввода — команды не блокируются busy-очередью и идут параллельно с
+// cron-ходом. Без лока это гонки на bool и карте, причём итерация
+// панели /perms против гранта из хода падала бы фатально.
+
+// permAutopilot — автопилот включён.
+func (a *app) permAutopilot() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Perms.Autopilot
+}
+
+// permAutopilotAll — усиленный автопилот: одобряется вообще всё.
+func (a *app) permAutopilotAll() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Perms.AutopilotAll
+}
+
+// permFileWrite — запись файлов без подтверждения.
+func (a *app) permFileWrite() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Perms.FileWrite
+}
+
+// grantFileWrite — «всегда для файлов».
+func (a *app) grantFileWrite() {
+	sessMu.Lock()
+	a.sess.Perms.FileWrite = true
+	sessMu.Unlock()
+}
+
+// permBash — можно ли выполнить команду без вопроса: флаг «все» или
+// точное правило. Признак опасности проверяет вызывающий (чистая
+// функция от req, к сессии отношения не имеет).
+func (a *app) permBash(cmd string) bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Perms.BashAll || a.sess.Perms.BashExact[cmd]
+}
+
+// permBashAll — только флаг «все команды» (без точных правил).
+func (a *app) permBashAll() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Perms.BashAll
+}
+
+// grantBashExact — «всегда эта команда». Карта создаётся лениво под
+// локом: гранты приходят из хода, где субагентные подтверждения могут
+// быть параллельными.
+func (a *app) grantBashExact(cmd string) {
+	sessMu.Lock()
+	if a.sess.Perms.BashExact == nil {
+		a.sess.Perms.BashExact = map[string]bool{}
+	}
+	a.sess.Perms.BashExact[cmd] = true
+	sessMu.Unlock()
+}
+
+// grantBashAll — «все команды».
+func (a *app) grantBashAll() {
+	sessMu.Lock()
+	a.sess.Perms.BashAll = true
+	sessMu.Unlock()
+}
+
+// permWebFetch — сетевые запросы без подтверждения.
+func (a *app) permWebFetch() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Perms.WebFetch
+}
+
+// grantWebFetch — «всегда» для сети.
+func (a *app) grantWebFetch() {
+	sessMu.Lock()
+	a.sess.Perms.WebFetch = true
+	sessMu.Unlock()
+}
+
+// permBashExactList — снимок «всегда разрешённых» команд под sessMu,
+// отсортированный для стабильного вывода. Панель /perms идёт по списку
+// из очереди ввода, а grantBashExact пишет в карту из хода — итерация
+// живой карты против записи падала бы фатально.
+func (a *app) permBashExactList() []string {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	out := make([]string, 0, len(a.sess.Perms.BashExact))
+	for c := range a.sess.Perms.BashExact {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// toggleBashAll — /yolo: переключить «все команды»; включение заодно
+// открывает файлы и сеть. Возвращает новое состояние.
+func (a *app) toggleBashAll() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	a.sess.Perms.BashAll = !a.sess.Perms.BashAll
+	if a.sess.Perms.BashAll {
+		a.sess.Perms.FileWrite = true
+		a.sess.Perms.WebFetch = true
+	}
+	return a.sess.Perms.BashAll
+}
+
 // ---------- Подтверждения ----------
 
 // permDecision — что говорят правила разрешений об этом действии.
@@ -218,7 +332,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 
 	// Автопилот: безопасные операции одобряются самим агентом, вопросы
 	// пользователю задаются только для опасных команд и сетевых запросов.
-	if a.sess.Perms.Autopilot {
+	if a.permAutopilot() {
 		if a.autoApprove(req) {
 			a.announceAuto(req)
 			return true
@@ -227,7 +341,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 
 	switch req.Kind {
 	case tools.ConfirmWrite:
-		if a.sess.Perms.FileWrite {
+		if a.permFileWrite() {
 			return true
 		}
 		if ch, ok := a.tuiConfirm(tui.Confirm{
@@ -242,7 +356,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 			case tui.ChoiceYes:
 				return true
 			case tui.ChoiceAlways:
-				a.sess.Perms.FileWrite = true
+				a.grantFileWrite()
 				a.saveSession()
 				return true
 			}
@@ -254,7 +368,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		case confirmYes:
 			return true
 		case confirmAlways:
-			a.sess.Perms.FileWrite = true
+			a.grantFileWrite()
 			a.saveSession()
 			return true
 		}
@@ -262,7 +376,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 
 	case tools.ConfirmExec:
 		danger := tools.IsDangerous(req.Detail)
-		allowed := (a.sess.Perms.BashAll && !danger) || (a.sess.Perms.BashExact[req.Detail] && !danger)
+		allowed := !danger && a.permBash(req.Detail)
 		if allowed {
 			return true
 		}
@@ -278,11 +392,11 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 			case tui.ChoiceYes:
 				return true
 			case tui.ChoiceAlways:
-				a.sess.Perms.BashExact[req.Detail] = true
+				a.grantBashExact(req.Detail)
 				a.saveSession()
 				return true
 			case tui.ChoiceAll:
-				a.sess.Perms.BashAll = true
+				a.grantBashAll()
 				a.saveSession()
 				return true
 			}
@@ -303,18 +417,18 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		case confirmYes:
 			return true
 		case confirmAlways:
-			a.sess.Perms.BashExact[req.Detail] = true
+			a.grantBashExact(req.Detail)
 			a.saveSession()
 			return true
 		case confirmAll:
-			a.sess.Perms.BashAll = true
+			a.grantBashAll()
 			a.saveSession()
 			return true
 		}
 		return false
 
 	case tools.ConfirmNet:
-		if a.sess.Perms.WebFetch {
+		if a.permWebFetch() {
 			return true
 		}
 		if ch, ok := a.tuiConfirm(tui.Confirm{
@@ -327,7 +441,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 			case tui.ChoiceYes:
 				return true
 			case tui.ChoiceAlways:
-				a.sess.Perms.WebFetch = true
+				a.grantWebFetch()
 				a.saveSession()
 				return true
 			}
@@ -340,7 +454,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		case confirmYes:
 			return true
 		case confirmAlways:
-			a.sess.Perms.WebFetch = true
+			a.grantWebFetch()
 			a.saveSession()
 			return true
 		}
@@ -404,7 +518,7 @@ func (a *app) announceDeny(req tools.ConfirmReq, rule core.Rule) {
 
 // autoApprove — можно ли одобрить операцию без участия пользователя.
 func (a *app) autoApprove(req tools.ConfirmReq) bool {
-	if a.sess.Perms.AutopilotAll {
+	if a.permAutopilotAll() {
 		return true
 	}
 	switch req.Kind {
@@ -443,18 +557,18 @@ func (a *app) announceAuto(req tools.ConfirmReq) {
 
 // quietConfirm — авторешение в режиме -p/--json.
 func (a *app) quietConfirm(req tools.ConfirmReq) bool {
-	if a.sess.Perms.Autopilot {
+	if a.permAutopilot() {
 		return a.autoApprove(req)
 	}
 	// BashAll разрешает все небезопасные (нежёсткие) действия: и
 	// не-команды, и команды без признаков опасности. Опасная команда
 	// требует явного согласия даже с BashAll — тихий режим не должен
 	// молча делать rm -rf.
-	if a.sess.Perms.BashAll &&
+	if a.permBashAll() &&
 		(req.Kind != tools.ConfirmExec || !tools.IsDangerous(req.Detail)) {
 		return true
 	}
-	if req.Kind == tools.ConfirmWrite && a.sess.Perms.FileWrite {
+	if req.Kind == tools.ConfirmWrite && a.permFileWrite() {
 		return true
 	}
 	return false
@@ -464,9 +578,13 @@ func (a *app) quietConfirm(req tools.ConfirmReq) bool {
 
 // setAutopilot — включить/выключить автопилот (сессия + конфиг).
 func (a *app) setAutopilot(on bool) {
+	sessMu.Lock()
 	a.sess.Perms.Autopilot = on
 	if !on {
 		a.sess.Perms.AutopilotAll = false
+	}
+	sessMu.Unlock()
+	if !on {
 		a.repo.Cfg.AutopilotAll = false
 	}
 	a.repo.Cfg.Autopilot = on
@@ -478,8 +596,10 @@ func (a *app) setAutopilot(on bool) {
 // потенциально разрушительные команды. Это явный риск, поэтому режим
 // всегда берёт верх над обычным автопилотом.
 func (a *app) setAutopilotAll(on bool) {
+	sessMu.Lock()
 	a.sess.Perms.AutopilotAll = on
 	a.sess.Perms.Autopilot = on
+	sessMu.Unlock()
 	a.repo.Cfg.AutopilotAll = on
 	a.repo.Cfg.Autopilot = on
 	a.saveConfig()
@@ -557,7 +677,7 @@ func (a *app) askUser(question string, options []string) (string, error) {
 	}
 	// В автопилоте задача должна решаться без пользователя: если вариантов
 	// немного, выбираем первый разумный, иначе просим агента решить самому.
-	if a.sess.Perms.Autopilot {
+	if a.permAutopilot() {
 		if len(options) > 0 {
 			ans := options[0]
 			a.ui.Info("автопилот: выбран вариант «" + ans + "» — " + core.Truncate(core.OneLine(question), 70))

@@ -285,3 +285,61 @@ func TestAgentModeRace(t *testing.T) {
 		t.Error("последняя запись в каждом цикле — false, но флаг оказался true")
 	}
 }
+
+// TestPermsRace — confirm() выдаёт гранты («всегда») из хода, а /yolo и
+// /perms читают и меняют те же флаги из очереди ввода, не блокируясь
+// busy-очередью (cron-ход идёт фоном). Итерация по карте BashExact в
+// панели против гранта из хода падала бы фатально, не просто гонкой.
+func TestPermsRace(t *testing.T) {
+	a, _ := cmdApp(t)
+
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				a.grantBashExact(fmt.Sprintf("cmd-%d", w))
+				a.grantFileWrite()
+				a.grantWebFetch()
+				a.grantBashAll()
+				_ = a.permBash("cmd-x")
+				_ = a.permBashAll()
+				_ = a.permFileWrite()
+				_ = a.permWebFetch()
+				_ = a.permAutopilot()
+				_ = a.permAutopilotAll()
+				_ = a.permBashExactList()
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	for w := 0; w < 4; w++ {
+		if !a.permBash(fmt.Sprintf("cmd-%d", w)) {
+			t.Errorf("грант cmd-%d потерялся", w)
+		}
+	}
+	if !a.permFileWrite() || !a.permWebFetch() || !a.permBashAll() {
+		t.Error("гранты yolo-семейства потерялись")
+	}
+	if got := a.permBashExactList(); len(got) != 4 || got[0] != "cmd-0" {
+		t.Errorf("список точных команд = %v, ожидалось 4 отсортированных", got)
+	}
+
+	// /yolo: включение открывает файлы и сеть, выключение не отзывает
+	// уже выданные гранты.
+	a2, _ := cmdApp(t)
+	if !a2.toggleBashAll() {
+		t.Error("первый /yolo должен включить BashAll")
+	}
+	if !a2.permFileWrite() || !a2.permWebFetch() {
+		t.Error("включение /yolo должно открыть запись файлов и сеть")
+	}
+	if a2.toggleBashAll() {
+		t.Error("второй /yolo должен выключить BashAll")
+	}
+	if !a2.permFileWrite() || !a2.permWebFetch() {
+		t.Error("выключение /yolo не должно отзывать выданные гранты")
+	}
+}
