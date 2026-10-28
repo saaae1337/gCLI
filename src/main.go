@@ -108,9 +108,8 @@ type app struct {
 	// mission — задание автономного прогона и его трекер. Живут на app,
 	// а не внутри агента: mission.json переживает перезапуск, а агент
 	// создаётся на каждый ход заново.
-	mission     core.Mission
-	missionTr   *core.Tracker
-	missionNote string
+	mission   core.Mission
+	missionTr *core.Tracker
 	// missionJournal — append-only журнал прогона. Отдельный файл от
 	// mission_state.json по той же причине, что и там: снимок перезаписывается
 	// и при падении на записи теряется, а журнал дописывается и битый хвост
@@ -508,9 +507,7 @@ func main() {
 	// Продолжение после обрыва проверяется ДО старта нового трекера: оно
 	// читает счётчики прошлого прогона, и новый трекер их бы затёр.
 	a.loadMissionResume()
-	if a.startTracker() {
-		a.missionNote = a.mission.Summary()
-	}
+	a.startTracker()
 
 	a.installSignalHandler()
 

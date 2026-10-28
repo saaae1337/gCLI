@@ -510,7 +510,6 @@ func (a *app) attachMission(ag *agent.Agent) {
 	// вернулось бы в сеанс, в котором никакого обрыва не было.
 	a.missionResume = ""
 	ag.StartMission(a.mission, deps)
-	a.missionNote = a.mission.Summary()
 }
 
 // saveMissionState — записать состояние прогона на диск.
