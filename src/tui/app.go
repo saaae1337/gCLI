@@ -622,18 +622,32 @@ func (a *App) submitLocked() {
 	a.doc.AddUser(text)
 	a.scroll = 0
 	a.busy = true
-	a.runSubmit(text)
-}
-
-// runSubmit — запустить обработчик в отдельной горутине.
-func (a *App) runSubmit(text string) {
 	h := a.handle.Submit
 	if h == nil {
-		a.mu.Lock()
+		a.busy = false
+		return
+	}
+	a.launchSubmit(h, text)
+}
+
+// runSubmit — запустить обработчик в отдельной горутине. Вызывается без
+// лока, поэтому a.handle читается под мьютексом: при выходе Run очищает
+// handle под тем же мьютексом, и незалоченное чтение гоняло бы с ним.
+func (a *App) runSubmit(text string) {
+	a.mu.Lock()
+	h := a.handle.Submit
+	if h == nil {
 		a.busy = false
 		a.mu.Unlock()
 		return
 	}
+	a.mu.Unlock()
+	a.launchSubmit(h, text)
+}
+
+// launchSubmit — горутина хода. Вызывать, когда состояние уже выставлено
+// (busy=true, запрос в ленте) и handle прочитан под мьютексом.
+func (a *App) launchSubmit(h func(string), text string) {
 	go func() {
 		defer func() {
 			// Ошибка паники не должна оставить интерфейс «занятым».
@@ -821,8 +835,8 @@ func (a *App) SetMetrics(m Metrics) {
 func (a *App) Toast(s string) {
 	a.mu.Lock()
 	a.toastLocked(s)
-	a.mu.Unlock()
 	a.markDirty()
+	a.mu.Unlock()
 }
 
 // Raw — управляющая последовательность в терминал мимо кадра (OSC52).
@@ -834,8 +848,8 @@ func (a *App) Raw(s string) {
 func (a *App) SetMascot(on bool) {
 	a.mu.Lock()
 	a.opt.HideMascot = !on
-	a.mu.Unlock()
 	a.markDirty()
+	a.mu.Unlock()
 }
 
 // SetCronEnabled — показать или скрыть бейдж автономных итераций в строке
@@ -843,8 +857,8 @@ func (a *App) SetMascot(on bool) {
 func (a *App) SetCronEnabled(on bool) {
 	a.mu.Lock()
 	a.opt.CronEnabled = on
-	a.mu.Unlock()
 	a.markDirty()
+	a.mu.Unlock()
 }
 
 // Clear — очистить ленту.
