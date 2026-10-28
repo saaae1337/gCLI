@@ -815,7 +815,13 @@ func toolActivity(t ToolInfo) string {
 		arg = arg[:i]
 	}
 	if len(arg) > 42 {
-		arg = arg[:42] + "…"
+		// Срез по байту разрезал руну (кириллица в аргументе) — в строке
+		// активности рисовался мусорный символ. Отступаем до границы руны.
+		cut := 42
+		for cut > 0 && arg[cut]&0xC0 == 0x80 {
+			cut--
+		}
+		arg = arg[:cut] + "…"
 	}
 	return t.Name + " " + arg
 }
@@ -1272,10 +1278,18 @@ func (a *App) completePaletteLocked() {
 func (a *App) atToken() (string, bool) {
 	t := a.comp.Text()
 	cur := a.comp.Cursor()
-	if cur > len(t) || a.comp.Len() > 400 {
+	if a.comp.Len() > 400 {
 		return "", false
 	}
-	head := t[:cur]
+	// Text() отдаёт байты, Cursor() считает руны: срез t[:cur] на
+	// кириллице резал строку посреди руны, и @-токен после русского
+	// текста не находился — подсказка файлов молча пропадала.
+	// Работаем в рунах.
+	r := []rune(t)
+	if cur > len(r) {
+		return "", false
+	}
+	head := string(r[:cur])
 	start := strings.LastIndexAny(head, " \n\t") + 1
 	tok := head[start:]
 	if !strings.HasPrefix(tok, "@") || len(tok) > 100 {
@@ -1427,12 +1441,19 @@ func (a *App) completeFileLocked() bool {
 	path := items[a.palSel]
 	t := a.comp.Text()
 	cur := a.comp.Cursor()
-	head := t[:cur]
+	// Text() отдаёт байты, Cursor() считает руны: срезы t[:cur] и
+	// t[cur:] на кириллице резали посреди руны — подстановка пути
+	// портила текст поля ввода невалидным UTF-8. Работаем в рунах.
+	r := []rune(t)
+	if cur > len(r) {
+		return false
+	}
+	head := string(r[:cur])
 	start := strings.LastIndexAny(head, " \n\t") + 1
 	if !strings.HasPrefix(head[start:], "@") {
 		return false
 	}
-	next := head[:start] + "@" + path + " " + t[cur:]
+	next := head[:start] + "@" + path + " " + string(r[cur:])
 	a.comp.SetText(next)
 	a.palSel = 0
 	a.fileHide = ""
