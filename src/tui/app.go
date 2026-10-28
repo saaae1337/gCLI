@@ -161,10 +161,13 @@ type App struct {
 	activity string
 	// doneAt — когда закончился последний ход: кот празднёт пару секунд.
 	doneAt time.Time
-	// files — кэш списка файлов для @-дополнения, filesAt — когда собран.
-	files    []string
-	filesAt  time.Time
-	fileHide string // @-токен, для которого список закрыли по Esc
+	// files — кэш списка файлов для @-дополнения, filesAt — когда собран;
+	// filesBusy — сборка списка идёт в фоне (обход каталога под мьютексом
+	// замораживал интерфейс и горутины агента на больших репозиториях).
+	files     []string
+	filesAt   time.Time
+	filesBusy bool
+	fileHide  string // @-токен, для которого список закрыли по Esc
 }
 
 // modalKind — вид окна поверх ленты.
@@ -1324,6 +1327,34 @@ func collectFiles(root string) []string {
 	return out
 }
 
+// collectFilesFn — точка подмены в тестах: регрессия проверяет, что
+// fileItems не блокируется на обходе каталога.
+var collectFilesFn = collectFiles
+
+// refreshFilesLocked — запустить фоновую сборку списка файлов проекта.
+//
+// Раньше WalkDir шёл синхронно под мьютексом: тик, отрисовка и горутины
+// агента (StreamText, метрики, статусы инструментов) ждали обхода всего
+// репозитория, и на больших деревьях интерфейс замирал на секунды —
+// пока в поле ввода оставался @-токен, обход повторялся каждые 10 секунд.
+// Теперь список собирает горутина, а палитра до её завершения показывает
+// прошлый (несвежий) список; по готовности его подхватит ближайший тик.
+func (a *App) refreshFilesLocked() {
+	if a.filesBusy {
+		return // сборка уже идёт — отдаём прошлый список
+	}
+	a.filesBusy = true
+	root := a.opt.WorkDir
+	go func() {
+		got := collectFilesFn(root)
+		a.mu.Lock()
+		a.files = got
+		a.filesAt = time.Now()
+		a.filesBusy = false
+		a.mu.Unlock()
+	}()
+}
+
 // fileItems — подходящие пути для текущего @-токена: сначала префикс,
 // затем подстрока — «main» находит и src/main.go, и README.md c «main» внутри.
 func (a *App) fileItems() []string {
@@ -1331,9 +1362,8 @@ func (a *App) fileItems() []string {
 	if !ok {
 		return nil
 	}
-	if time.Since(a.filesAt) > 10*time.Second || a.files == nil {
-		a.files = collectFiles(a.opt.WorkDir)
-		a.filesAt = time.Now()
+	if a.filesAt.IsZero() || time.Since(a.filesAt) > 10*time.Second {
+		a.refreshFilesLocked()
 	}
 	base = strings.ToLower(base)
 	var pref, substr []string
