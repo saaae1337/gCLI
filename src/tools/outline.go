@@ -291,7 +291,13 @@ func outlineHeuristic(ext string, lines []string) []decl {
 	var out []decl
 	for i, line := range lines {
 		if len(line) > 400 {
-			line = line[:400]
+			// Срез по байту резал руну посередине: битая строка шла и в
+			// регэксп, и в сигнатуру агенту. Отступаем до границы руны.
+			cut := 400
+			for cut > 0 && line[cut]&0xC0 == 0x80 {
+				cut--
+			}
+			line = line[:cut]
 		}
 		for _, ru := range rules {
 			if ru.re.FindStringSubmatch(line) == nil {
