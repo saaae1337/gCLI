@@ -1,40 +1,39 @@
 package tui
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-// Регрессия: команда вида /stats печатает в ленту панель с
-// рамками и ANSI — и интерфейс замирает на десятки секунд. Тест гоняет
-// Doc.Text + Layout на реальном выводе и на синтетике из правил.
+// Регрессия: панели старых команд печатают в ленту правила из псевдографики,
+// ANSI и — главное — паддинг ячеек таблиц из одних пробелов. Пробельный
+// прогон длиннее ширины строки возвращал из cutText пустой кусок, и
+// renderPlainSegs зацикливался навсегда, держа мьютекс: /stats, /usage,
+// /model и любой другой вывод с таблицей замораживал интерфейс. Теперь
+// раскладка обязана завершаться за миллисекунды.
 func TestLayoutNoHangOnSpaceRuns(t *testing.T) {
-	raw, err := os.ReadFile("/home/z/my-project/repl_stats.txt")
-	if err != nil {
-		t.Skip("нет файла с реальным выводом")
-	}
-	text := string(raw)
-
 	d := &Doc{}
-	start := time.Now()
-	d.Text(text)
-	ls := d.Layout(LayoutOpts{Width: 78, Theme: Dark()})
-	t.Logf("реальный вывод: %d блоков → %d строк за %v", len(d.blocks), len(ls), time.Since(start))
 
-	// Синтетика: правило из псевдографики и ANSI-строка — типичные куски
-	// старых панелей.
-	d2 := &Doc{}
+	// Правило из боковой псевдографики — без единого пробела внутри.
 	rule := "  " + strings.Repeat("─", 76) + "\n"
-	ansi := "\x1b[38;2;201;138;62m  ✦ \x1b[0m\x1b[2mРасход за 30 дней\x1b[0m\n"
-	big := strings.Repeat(rule+ansi, 20)
-	start = time.Now()
-	d2.Text(big)
-	ls2 := d2.Layout(LayoutOpts{Width: 78, Theme: Dark()})
-	t.Logf("синтетика 20 панелей: %d строк за %v", len(ls2), time.Since(start))
+	// Строка таблицы с ANSI и хвостовым паддингом из пробелов.
+	ansi := "\x1b[38;2;201;138;62m  ✦ \x1b[0m\x1b[2mРасход за 30 дней\x1b[0m" +
+		strings.Repeat(" ", 90) + "\n"
+	// Чистый пробельный прогон — прямой виновник зависания.
+	spaces := strings.Repeat(" ", 120) + "\n"
+	big := strings.Repeat(rule+ansi+spaces, 20)
 
-	if time.Since(start) > 5*time.Second {
-		t.Fatalf("раскладка катастрофически медленная: %v", time.Since(start))
+	start := time.Now()
+	d.Text(big)
+	ls := d.Layout(LayoutOpts{Width: 78, Theme: Dark()})
+	elapsed := time.Since(start)
+	t.Logf("60 строк панелей: %d строк раскладки за %v", len(ls), elapsed)
+
+	if elapsed > 5*time.Second {
+		t.Fatalf("раскладка катастрофически медленная: %v", elapsed)
+	}
+	if len(ls) == 0 {
+		t.Fatal("раскладка пустая")
 	}
 }
