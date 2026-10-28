@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,6 +40,15 @@ func NewClient() *Client {
 		},
 	}
 }
+
+// sseStallTimeout — предел тишины в SSE-потоке. После 200 OK сервер может
+// замолчать: перегруженный прокси, полумёртвое соединение, зависший
+// апстрим. Без предела чтение потока висит вечно, и ход выглядит
+// «думающим» до Ctrl+C. Две минуты — щедро: легитимная задержка первого
+// токена и интервалы keepalive-комментариев укладываются в минуту, а
+// зависание теперь ограничено. Переменная, а не константа — тестовый шов;
+// ноль или меньше отключает watchdog.
+var sseStallTimeout = 120 * time.Second
 
 // retryErr — ошибка, при которой можно повторить запрос (до первого байта потока).
 type retryErr struct{ err error }
@@ -258,6 +268,14 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 	if c == nil || c.HTTP == nil {
 		return fmt.Errorf("нет HTTP-клиента для запроса к провайдеру")
 	}
+	// Производный контекст для обрыва тишины: отмена watchdog отличается
+	// от отмены человеком тем, что родительский контекст ещё жив. Запрос
+	// обязан уйти именно с этим контекстом — иначе отмена не разблокирует
+	// чтение тела.
+	sctx, scancel := context.WithCancel(ctx)
+	defer scancel()
+	req = req.Clone(sctx)
+
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		// Отмена человеком — не сетевой сбой: повторять такой запрос нельзя.
@@ -309,6 +327,40 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 		}
 	}
 
+	// Watchdog тишины: поток обязан присылать что-то (данные или
+	// keepalive-комментарии «: ping») не реже предела, иначе соединение
+	// считается оборванным — производный контекст закрывается, чтение
+	// разблокируется. Отметка активности ставится на каждой строке
+	// сканера, включая уже буферизованные: данные не теряются.
+	var lastActivity atomic.Int64
+	touch := func() { lastActivity.Store(time.Now().UnixNano()) }
+	touch()
+	if sseStallTimeout > 0 {
+		// Предел снимается один раз: горутина живёт после возврата doSSE,
+		// и чтение пакетной переменной из неё — гонка с тестовым швом.
+		limit := sseStallTimeout
+		interval := limit / 4
+		if interval <= 0 {
+			interval = time.Millisecond
+		}
+		go func() {
+			tick := time.NewTicker(interval)
+			defer tick.Stop()
+			for {
+				select {
+				case <-sctx.Done():
+					return
+				case <-tick.C:
+					last := time.Unix(0, lastActivity.Load())
+					if time.Since(last) >= limit {
+						scancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
@@ -342,6 +394,7 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 	}
 
 	for sc.Scan() {
+		touch()
 		line := strings.TrimSuffix(sc.Text(), "\r")
 		if line == "" {
 			if err := dispatch(); err != nil {
@@ -367,6 +420,16 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 		dataLines = append(dataLines, strings.TrimSpace(value))
 	}
 	if err := sc.Err(); err != nil {
+		// Обрыв тишины от watchdog: родительский контекст жив — человек
+		// отмены не делал. До первого события поток ещё можно повторить
+		// (агент делает до трёх попыток), после — финальная ошибка:
+		// часть ответа уже доставлена, и повтор продублировал бы её.
+		if sctx.Err() != nil && ctx.Err() == nil {
+			if !gotAny {
+				return &retryErr{fmt.Errorf("поток молчал %v до первого события — соединение оборвано", sseStallTimeout)}
+			}
+			return fmt.Errorf("поток молчал %v и оборвался посреди ответа", sseStallTimeout)
+		}
 		if !gotAny {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
