@@ -136,6 +136,9 @@ type mcpConn struct {
 	// stopOnce — Wait вызывается ровно один раз, даже если читатель уже
 	// успел заметить EOF и выставить closed.
 	stopOnce sync.Once
+	// reaped — закрыт после cmd.Wait() в stop(): единственная точка,
+	// где можно без гонки читать cmd.ProcessState (тесты, статус).
+	reaped chan struct{}
 }
 
 // mcpResponse — ответ сервера (result или error).
@@ -197,6 +200,7 @@ func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (
 		cmd:     cmd,
 		stdin:   make(chan string, 8),
 		done:    make(chan struct{}),
+		reaped:  make(chan struct{}),
 		scanner: bufio.NewScanner(stdoutPipe),
 	}
 	c.scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
@@ -227,7 +231,10 @@ func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (
 				}
 			}
 		}
-		c.closed.Store(true)
+		// stdout закрылся — сервер умер или вышел сам. stop() (идемпотентен)
+		// закрывает done и дожинает процесс: иначе горутина-писатель навсегда
+		// виснет на select по stdin/done, а дочерний процесс остаётся зомби.
+		c.stop()
 	}()
 
 	// Писатель: сериализуем записи в stdin.
@@ -337,7 +344,10 @@ func (c *mcpConn) stop() {
 		_ = c.cmd.Process.Kill()
 		// Wait обязателен даже если читатель уже увидел EOF: иначе процесс
 		// остаётся зомби, а на Windows не освобождаются его дескрипторы.
+		// Единственный Wait в проекте — здесь: параллельный Wait из чужой
+		// горутины гонял бы за внутренние поля exec.Cmd.
 		_ = c.cmd.Wait()
+		close(c.reaped)
 	})
 }
 
@@ -497,6 +507,11 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 		if existing != nil && existing.alive() {
 			conn = existing
 		} else {
+			if existing != nil {
+				// Подменяем мёртвый конн — сначала добиваем его процесс
+				// и горутины, чтобы не копились с каждым ретраем.
+				existing.stop()
+			}
 			var err error
 			conn, err = mcpStart(context.Background(), name, srv, version)
 			if err != nil {
@@ -716,6 +731,10 @@ func (r *Registry) MCPReload() (int, []string) {
 	r.muMCP.Lock()
 	for name, c := range r.mcpConns {
 		if !c.alive() {
+			// Мёртвый конн добиваем до удаления: stop() идемпотентен, будит
+			// писателя и зовёт cmd.Wait() — без этого каждый цикл «сервер
+			// умер + /mcp reload» оставлял по горутине и зомби-процессу.
+			c.stop()
 			delete(r.mcpConns, name)
 			dead = append(dead, name)
 		}

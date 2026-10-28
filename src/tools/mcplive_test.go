@@ -259,7 +259,9 @@ func TestMCPReloadRevives(t *testing.T) {
 		t.Fatal("соединение не создано")
 	}
 	_ = conn.cmd.Process.Kill()
-	_ = conn.cmd.Wait()
+	// Wait только через stop(): параллельный cmd.Wait() из другой
+	// горутины гонял бы за внутренние поля exec.Cmd (ловил -race).
+	conn.stop()
 
 	if _, err := r.Get("mcp__fake__echo").Handler(context.Background(),
 		map[string]any{"text": "x"}); err == nil {
