@@ -89,13 +89,30 @@ type app struct {
 	// очередью TUI, поэтому барьер общий для всех путей запуска хода.
 	sessSwap sync.RWMutex
 
+	// turnMu — сериализация ходов. Ход запускается не только из читателя
+	// ввода, но и из фоновых горутин (cron, watch), а REPL-цикл и TUI
+	// принимают ввод, пока чужой ход идёт: cronTick, проскочивший между
+	// проверкой running и её установкой в turn, запускал бы второй ход
+	// параллельно первому — два агента писали бы в один поток, затирали
+	// a.cancel (Ctrl+C отменял бы только последнего) и дважды сохранили
+	// бы сессию. Замок внешний: под ним sessSwap, sessMu, a.mu; обратного
+	// пути нет.
+	turnMu sync.Mutex
+
 	stream *ui.Stream
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
-	notes   []string
-	quiet   bool
+	// turnInteractive — текущий ход запущен из читателя ввода (REPL, TUI),
+	// а не из фоновой горутины (cron). Только интерактивному ходу можно
+	// задавать вопросы поверх stdin (readAns, ask_user, askTrustCode):
+	// второй Scan украл бы строку у REPL-цикла, а вопрос без человека
+	// висел бы до его возвращения. Под a.mu вместе с running: ходы
+	// сериализованы turnMu, поле пишется только в начале хода.
+	turnInteractive bool
+	notes           []string
+	quiet           bool
 
 	// lastTurnFailed — предыдущий ход завершился ошибкой: на второй
 	// ошибке подряд кот не хандрит, а сердится.
@@ -1440,8 +1457,35 @@ func (a *app) turnActive() bool {
 	return a.running
 }
 
-// turn — один ход: пользовательский ввод → агентный цикл.
+// turn — один ход из читателя ввода (REPL-цикл, TUI): подтверждения и
+// вопросы можно задавать человеку у терминала.
 func (a *app) turn(text string) error {
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+	return a.turnLocked(text, true)
+}
+
+// cronTurn — ход из cron-горутины. Пока cron ждал turnMu, пользователь
+// мог вернуться и что-то ввести: под замком перепроверяем активность,
+// иначе итерация била бы сразу после хода человека, хотя тот уже не
+// молчит. Заодно перепроверяем /cron off, пока ждём очереди. turnLocked
+// идёт под тем же замком: параллельных ходов нет по построению.
+func (a *app) cronTurn(text string) error {
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+	a.cronMu.Lock()
+	enabled, lastActive, interval := a.cronEnabled, a.cronLastActive, a.cronInterval
+	a.cronMu.Unlock()
+	if !enabled || time.Since(lastActive) < interval {
+		return nil
+	}
+	return a.turnLocked(text, false)
+}
+
+// turnLocked — тело хода под turnMu. interactive говорит, можно ли ходу
+// спрашивать человека у терминала (см. turnInteractive): ход из читателя
+// ввода — да, фоновый из cron — нет.
+func (a *app) turnLocked(text string, interactive bool) error {
 	// Ход держит барьер на подмену сессии: без него /fork или /clear,
 	// выполненные в TUI во время cron-хода, подменяли бы a.sess прямо
 	// под ногами агента.
@@ -1472,6 +1516,7 @@ func (a *app) turn(text string) error {
 	a.mu.Lock()
 	a.cancel = cancel
 	a.running = true
+	a.turnInteractive = interactive
 	a.mu.Unlock()
 	// Ход пошёл: таймер сессии тикает только пока агент работает.
 	a.agentActiveBegin()
@@ -1492,6 +1537,7 @@ func (a *app) turn(text string) error {
 		a.mu.Lock()
 		a.running = false
 		a.cancel = nil
+		a.turnInteractive = false
 		a.mu.Unlock()
 		cancel()
 		a.saveSession()
@@ -1592,7 +1638,7 @@ func (a *app) cronTick() {
 	// Время пришло: поставить задачу и обновить метку активности, чтобы
 	// не бить в такт, пока пользователь молчит.
 	a.cronTouch()
-	if err := a.turn(cronUniversalPrompt()); err != nil && !a.quiet {
+	if err := a.cronTurn(cronUniversalPrompt()); err != nil && !a.quiet {
 		a.ui.Err("cron-iteration: " + err.Error())
 	}
 }
