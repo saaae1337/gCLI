@@ -30,6 +30,10 @@ func (s tuiSink) ToolEnd(tc ui.ToolCall)   { s.app.ToolEnd(toolInfo(tc)) }
 func (s tuiSink) SetMetrics(m ui.Metrics)  { s.app.SetMetrics(tuiMetrics(m)) }
 func (s tuiSink) Clear()                   { s.app.Clear() }
 
+// Raw — управляющие последовательности (OSC52) в терминал напрямую:
+// в кадре TUI им делать нечего, стриптер ANSI их уничтожает.
+func (s tuiSink) Raw(t string) { s.app.Raw(t) }
+
 // toolInfo — карточка инструмента в терминах TUI.
 func toolInfo(tc ui.ToolCall) tui.ToolInfo {
 	return tui.ToolInfo{

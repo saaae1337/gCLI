@@ -332,6 +332,11 @@ type Renderer struct {
 	shown  bool
 	last   Style
 	ready  bool
+	// wrote — в Draw что-то писалось: курсор мог уехать физически, и
+	// следующему Cursor() нельзя пропускать перемещение, даже если
+	// логическая позиция не менялась. Лишние CUP — источник дрожания
+	// курсора в кадрах анимации.
+	wrote bool
 }
 
 // NewRenderer — создать рендерер.
@@ -452,8 +457,8 @@ func (r *Renderer) Draw(s *Screen) {
 	}
 	if b.Len() > 0 {
 		_, _ = io.WriteString(r.w, b.String())
+		r.wrote = true
 	}
-	r.curX, r.curY = -1, -1
 }
 
 // moveTo — поставить курсор (1-based в ANSI).
@@ -472,7 +477,10 @@ func (r *Renderer) Cursor(x, y int) {
 	if !r.ready {
 		return
 	}
-	if x == r.curX && y == r.curY && r.shown {
+	if x == r.curX && y == r.curY && r.shown && !r.wrote {
+		// Позиция та же и с прошлого раза ничего не писалось:
+		// перемещение не нужно — иначе анимация дёргает курсор
+		// девять раз в секунду без всякой пользы.
 		return
 	}
 	var b strings.Builder
@@ -487,6 +495,7 @@ func (r *Renderer) Cursor(x, y int) {
 	}
 	_, _ = io.WriteString(r.w, b.String())
 	r.curX, r.curY = x, y
+	r.wrote = false
 }
 
 // HideCursor — спрятать курсор.
@@ -499,6 +508,21 @@ func (r *Renderer) HideCursor() {
 	_, _ = io.WriteString(r.w, "\x1b[?25l")
 	r.shown = false
 	r.curX, r.curY = -1, -1
+	r.wrote = false
+}
+
+// Raw — пропустить управляющую последовательность в терминал мимо кадра.
+//
+// Служит для OSC52 (копирование в системный буфер): последовательность
+// не рисует ничего, её нельзя пропускать через Screen — клетки хранят
+// только видимые символы, и стриптер ANSI её уничтожил бы.
+func (r *Renderer) Raw(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.ready {
+		return
+	}
+	_, _ = io.WriteString(r.w, s)
 }
 
 // sgr — escape-последовательность стиля.

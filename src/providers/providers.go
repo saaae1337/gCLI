@@ -505,7 +505,11 @@ func ResolveModel(p *Provider, flagModel, cfgModel string) string {
 	return p.DefaultModel
 }
 
-// CtxLimit — лимит контекста модели (с запасом на ответ).
+// CtxLimit — лимит контекста модели по умолчанию (с запасом на ответ).
+//
+// Для конкретной модели используйте CtxLimitFor: окно зависит от модели,
+// а не от провайдера — «всегда 128k» у OpenRouter обманывал и пользователей,
+// и авто-сжатие.
 func (p *Provider) CtxLimit() int {
 	if p == nil || p.ContextLimit <= 0 {
 		return 128_000
@@ -545,3 +549,7 @@ func anthropicOfficial(base string) bool {
 func (p *Provider) CtxSoftLimit() int {
 	return p.CtxLimit() * 85 / 100
 }
+
+// CtxSoftLimitModel — безопасный порог авто-сжатия для конкретной модели.
+// Обёртка над CtxSoftLimitFor: короткое имя для старых вызовов.
+func (p *Provider) CtxSoftLimitModel(model string) int { return p.CtxSoftLimitFor(model) }

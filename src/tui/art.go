@@ -115,6 +115,8 @@ const (
 	MascotHappy
 	MascotThink
 	MascotSleep
+	MascotWork // занят: глаза в фокусе, искра крутится
+	MascotDone // ход завершён: довольная морда и салют
 )
 
 // mascot — портрет Искры: угольный кот с искрой над головой.
@@ -132,8 +134,13 @@ func mascot(state MascotState) (*pixmap, map[byte]Color) {
 		p.bloom(12, 1, 1, 's')
 		p.set(9, 1, 's')
 		p.set(15, 1, 's')
-	case MascotHappy:
+	case MascotHappy, MascotDone:
 		p.bloom(12, 1, 2, 's')
+	case MascotWork:
+		// Искра летает по дуге: кадр анимируется снаружи сдвигом.
+		p.bloom(12, 1, 1, 's')
+		p.set(8, 2, 's')
+		p.set(16, 2, 's')
 	default:
 		p.bloom(12, 1, 1, 's')
 	}
@@ -157,7 +164,7 @@ func mascot(state MascotState) (*pixmap, map[byte]Color) {
 	case MascotBlink, MascotSleep:
 		p.rect(7, 12, 10, 12, 'o')
 		p.rect(14, 12, 17, 12, 'o')
-	case MascotHappy:
+	case MascotHappy, MascotDone:
 		// Довольные дуги: ^ ^
 		p.set(7, 13, 'o')
 		p.set(8, 12, 'o')
@@ -167,6 +174,19 @@ func mascot(state MascotState) (*pixmap, map[byte]Color) {
 		p.set(15, 12, 'o')
 		p.set(16, 12, 'o')
 		p.set(17, 13, 'o')
+	case MascotWork:
+		// Глаза в фокусе: чуть уже и ниже, зрачки к центру —
+		// кот смотрит на задачу, а не в пространство.
+		p.rect(8, 12, 10, 14, 'e')
+		p.rect(14, 12, 16, 14, 'e')
+		p.rect(9, 13, 10, 13, 'k')
+		p.rect(14, 13, 15, 13, 'k')
+	case MascotThink:
+		// Взгляд вверх: зрачки у бровей.
+		p.rect(7, 11, 10, 14, 'e')
+		p.rect(14, 11, 17, 14, 'e')
+		p.rect(8, 11, 9, 12, 'k')
+		p.rect(15, 11, 16, 12, 'k')
 	default:
 		p.rect(7, 11, 10, 14, 'e')
 		p.rect(14, 11, 17, 14, 'e')
@@ -197,8 +217,15 @@ func mascot(state MascotState) (*pixmap, map[byte]Color) {
 		'n': Hex("#E48A8A"),
 		's': Hex("#FFD37A"),
 	}
-	if state == MascotThink {
+	switch state {
+	case MascotThink:
 		pal['e'] = Hex("#7DC4E8")
+	case MascotWork:
+		// При работе искра горячее: состояние должно читаться
+		// периферийным зрением, без чтения текста.
+		pal['s'] = Hex("#FFB347")
+	case MascotDone:
+		pal['s'] = Hex("#9EE493")
 	}
 	return p, pal
 }
@@ -232,4 +259,113 @@ func spinner(tick int) string {
 		tick = 0
 	}
 	return spinnerFrames[tick%len(spinnerFrames)]
+}
+
+// ---------- Мини-Искра у поля ввода ----------
+//
+// Большой портрет живёт на заставке. В ленте коту выделяется узкая колонка
+// слева от поля ввода: 5 клеток на 3 строки. Мало для деталей — достаточно
+// для читаемого настроения: уши, глаза, искра. Состояния те же, что у
+// большого, плюс анимация хвостом по краю.
+
+// miniMascot — маленький портрет: сетка 10×6 пикселей (5×3 клетки).
+//
+// Символы те же, что у большого: o контур, f шерсть, e глаза, k зрачки,
+// s искра, l светлая шерсть.
+func miniMascot(state MascotState, phase int) (*pixmap, map[byte]Color) {
+	p := newPixmap(10, 6)
+
+	// Искра между ушей: мигает и перемещается — живой кот, а не логотип.
+	switch state {
+	case MascotWork, MascotThink:
+		// Искра ходит по дуге: позиция зависит от фазы кадра.
+		switch phase % 3 {
+		case 0:
+			p.set(4, 0, 's')
+		case 1:
+			p.set(5, 0, 's')
+		default:
+			p.set(5, 1, 's')
+		}
+	case MascotDone, MascotHappy:
+		p.set(4, 0, 's')
+		p.set(5, 0, 's')
+	case MascotBlink:
+		// Моргает — искра спокойная.
+		p.set(4, 0, 's')
+	default:
+		if phase%2 == 0 {
+			p.set(4, 0, 's')
+		} else {
+			p.set(5, 0, 's')
+		}
+	}
+
+	// Уши.
+	p.set(1, 0, 'o')
+	p.set(1, 1, 'f')
+	p.set(7, 0, 'o')
+	p.set(7, 1, 'f')
+
+	// Голова: контур по краям, шерсть внутри.
+	p.rect(0, 2, 9, 5, 'o')
+	p.rect(1, 3, 8, 5, 'f')
+	p.set(1, 2, 'o')
+	p.set(8, 2, 'o')
+	// Хвост слева: качается фазой.
+	if phase%2 == 0 {
+		p.set(0, 5, 'o')
+	} else {
+		p.set(0, 4, 'o')
+	}
+
+	// Глаза и мордочка.
+	switch state {
+	case MascotBlink, MascotSleep:
+		p.set(3, 3, 'o')
+		p.set(6, 3, 'o')
+	case MascotHappy, MascotDone:
+		// ^ ^
+		p.set(2, 3, 'o')
+		p.set(3, 2, 'o')
+		p.set(4, 3, 'o')
+		p.set(5, 3, 'o')
+		p.set(6, 2, 'o')
+		p.set(7, 3, 'o')
+	case MascotWork, MascotThink:
+		p.rect(2, 3, 4, 4, 'e')
+		p.rect(5, 3, 7, 4, 'e')
+		p.set(3, 4, 'k')
+		p.set(6, 4, 'k')
+	default:
+		p.rect(2, 3, 4, 4, 'e')
+		p.rect(5, 3, 7, 4, 'e')
+		p.set(3, 3, 'k')
+		p.set(6, 3, 'k')
+		p.set(4, 5, 'n')
+	}
+	pal := map[byte]Color{
+		'o': Hex("#2B2118"),
+		'f': Hex("#D08A3E"),
+		'l': Hex("#EFC08A"),
+		'e': Hex("#1A1410"),
+		'k': Hex("#120E0A"),
+		'n': Hex("#E48A8A"),
+		's': Hex("#FFD37A"),
+	}
+	switch state {
+	case MascotThink:
+		pal['e'] = Hex("#7DC4E8")
+	case MascotWork:
+		pal['s'] = Hex("#FFB347")
+	case MascotDone, MascotHappy:
+		pal['s'] = Hex("#9EE493")
+	}
+	return p, pal
+}
+
+// drawMiniMascot — мини-кот: (x,y) — левый верхний угол области 5×3 клетки.
+func drawMiniMascot(s *Screen, x, y int, state MascotState, phase int, bg Color) {
+	p, pal := miniMascot(state, phase)
+	drawPixmap(s, x, y, p, pal, bg)
 }

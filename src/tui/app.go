@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -147,6 +149,22 @@ type App struct {
 	cacheVer  int
 	cacheW    int
 	cacheSpin string
+
+	// dirty — кадр устарел, но ещё не перерисован. Все асинхронные
+	// события (текст из горутин агента, метрики, инструменты) только
+	// ставят флаг: кадр собирает один цикл Run. Раньше каждый метод
+	// рисовал сам, и параллельные отрисовки из разных горутин
+	// перемешивались в один терминал — это и было «мигание».
+	dirty bool
+	// activity — чем занят агент прямо сейчас («bash ls -la»);
+	// показывается в рамке поля ввода вместо безликого «работаю».
+	activity string
+	// doneAt — когда закончился последний ход: кот празднёт пару секунд.
+	doneAt time.Time
+	// files — кэш списка файлов для @-дополнения, filesAt — когда собран.
+	files    []string
+	filesAt  time.Time
+	fileHide string // @-токен, для которого список закрыли по Esc
 }
 
 // modalKind — вид окна поверх ленты.
@@ -333,7 +351,8 @@ func (a *App) onTick() {
 		return
 	}
 	a.tick++
-	redraw := false
+	redraw := a.dirty
+	a.dirty = false
 	if a.opt.Size != nil && time.Since(a.lastSize) > 200*time.Millisecond {
 		a.lastSize = time.Now()
 		if w, h := a.opt.Size(); w > 0 && h > 0 {
@@ -349,7 +368,7 @@ func (a *App) onTick() {
 		a.toast = ""
 		redraw = true
 	}
-	if a.busy || a.modal != nil {
+	if a.busy || a.modal != nil || a.paletteOpen() || a.filePaletteOpen() {
 		redraw = true
 	} else if a.tick%8 == 0 {
 		// Маскот моргает и на простое: редкие кадры почти ничего не пишут.
@@ -367,6 +386,7 @@ func (a *App) handleEvent(ev Event) {
 		a.mu.Unlock()
 		return
 	}
+	a.dirty = false
 	if ev.Wheel != 0 {
 		// Колесо вверх приходит как -1; лента листается положительным.
 		a.scrollBy(-ev.Wheel * 3)
@@ -390,6 +410,10 @@ func (a *App) keyLocked(ev Event) {
 	if ev.Paste {
 		a.comp.Insert(ev.Text)
 		a.palSel = 0
+		n := strings.Count(ev.Text, "\n") + 1
+		if n > 1 {
+			a.toastLocked(fmt.Sprintf("вставлено строк: %d", n))
+		}
 		return
 	}
 	if ev.Key == KeyRune {
@@ -409,6 +433,14 @@ func (a *App) keyLocked(ev Event) {
 			return
 		case ev.Ctrl && ev.R == 'o':
 			a.toggleThinkLocked()
+			return
+		case ev.Ctrl && ev.R == 'y':
+			// Скопировать последний ответ в буфер обмена (OSC52):
+			// терминалы с поддержкой забирают его сами, а привычный
+			// Ctrl+Shift+C работает только там, где выделение не
+			// перехвачено мышью.
+			a.comp.SetText("/copy")
+			a.submitLocked()
 			return
 		case ev.Ctrl && ev.R == 'l':
 			a.rend.Invalidate()
@@ -444,6 +476,7 @@ func (a *App) keyLocked(ev Event) {
 		return
 	}
 	palOpen := a.paletteOpen()
+	fileOpen := a.filePaletteOpen()
 	switch ev.Key {
 	case KeyEnter:
 		if ev.Shift || ev.Alt {
@@ -461,8 +494,17 @@ func (a *App) keyLocked(ev Event) {
 				return
 			}
 		}
+		if fileOpen {
+			if a.completeFileLocked() {
+				return
+			}
+		}
 		a.submitLocked()
 	case KeyTab:
+		if fileOpen {
+			a.completeFileLocked()
+			return
+		}
 		if palOpen {
 			a.completePaletteLocked()
 		}
@@ -489,13 +531,17 @@ func (a *App) keyLocked(ev Event) {
 		}
 		a.comp.End()
 	case KeyUp:
-		if palOpen {
+		if fileOpen {
+			a.moveFilePalette(-1)
+		} else if palOpen {
 			a.movePalette(-1)
 		} else {
 			a.comp.Up(a.composerInner())
 		}
 	case KeyDown:
-		if palOpen {
+		if fileOpen {
+			a.moveFilePalette(1)
+		} else if palOpen {
 			a.movePalette(1)
 		} else {
 			a.comp.Down(a.composerInner())
@@ -505,6 +551,12 @@ func (a *App) keyLocked(ev Event) {
 	case KeyPgDn:
 		a.scrollBy(-a.bodyHeight())
 	case KeyEsc:
+		if fileOpen {
+			if tok, ok := a.atToken(); ok {
+				a.fileHide = tok
+			}
+			return
+		}
 		if palOpen {
 			a.comp.Clear()
 			return
@@ -606,11 +658,14 @@ func (a *App) Busy(on bool) {
 	if on {
 		a.busy = true
 		a.scroll = 0
+		a.dirty = false
 		a.drawLocked()
 		a.mu.Unlock()
 		return
 	}
 	a.busy = false
+	a.activity = ""
+	a.doneAt = time.Now()
 	var next string
 	if len(a.queue) > 0 {
 		next = a.queue[0]
@@ -629,6 +684,14 @@ func (a *App) Busy(on bool) {
 }
 
 // ---------- Приём вывода ----------
+//
+// Все методы ниже вызываются из чужих горутин (агент, инструменты,
+// cron). Они только обновляют состояние и ставят dirty: рисует один
+// цикл Run. До 0.9.0 каждый метод рисовал сам — параллельные кадры
+// из разных горутин и создавали мерцание.
+
+// markDirty — кадр устарел; отрисовка произойдёт в ближайшем тике.
+func (a *App) markDirty() { a.dirty = true }
 
 // Text — добавить текст (ANSI-строки из старых панелей).
 func (a *App) Text(s string) {
@@ -638,7 +701,7 @@ func (a *App) Text(s string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.Text(s)
-	a.drawLocked()
+	a.markDirty()
 }
 
 // BeginStream — начался ответ модели.
@@ -646,23 +709,21 @@ func (a *App) BeginStream() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.BeginStream()
-	// Прокрутку не сбрасываем: если человек читает выше, новый ответ не
-	// должен выдёргивать его вниз. На дне лента и так липнет к низу.
-	a.drawLocked()
+	a.activity = "пишу ответ"
+	a.markDirty()
 }
 
 // StreamText — кусок ответа.
 //
-// Рисуем не на каждый токен: полный кадр на каждую порцию съедал бы
-// процессор быстрее, чем модель печатает. Тик интерфейса всё равно
-// подхватит хвост через 0.1 с.
+// На каждый токен рисовать нельзя: полный кадр на каждую порцию съедал
+// бы процессор быстрее, чем модель печатает. Ставим dirty — тик
+// интерфейса подхватит хвост через 0.1 с, заодно собрав в один кадр
+// всё, что пришло от других горутин.
 func (a *App) StreamText(s string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.StreamText(s)
-	if time.Since(a.lastDraw) >= 30*time.Millisecond {
-		a.drawLocked()
-	}
+	a.markDirty()
 }
 
 // EndStream — ответ закончился.
@@ -670,7 +731,8 @@ func (a *App) EndStream() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.EndStream()
-	a.drawLocked()
+	a.activity = ""
+	a.markDirty()
 }
 
 // SetMeta — подпись под ответом (время, токены).
@@ -678,7 +740,7 @@ func (a *App) SetMeta(s string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.SetMeta(s)
-	a.drawLocked()
+	a.markDirty()
 }
 
 // BeginThink — начались размышления.
@@ -686,7 +748,8 @@ func (a *App) BeginThink() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.BeginThink()
-	a.drawLocked()
+	a.activity = "думаю"
+	a.markDirty()
 }
 
 // ThinkText — кусок размышлений.
@@ -694,7 +757,7 @@ func (a *App) ThinkText(s string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.ThinkText(s)
-	a.drawLocked()
+	a.markDirty()
 }
 
 // EndThink — размышления закончились.
@@ -702,7 +765,8 @@ func (a *App) EndThink() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.EndThink()
-	a.drawLocked()
+	a.activity = ""
+	a.markDirty()
 }
 
 // ToolStart — инструмент начал работу.
@@ -710,7 +774,8 @@ func (a *App) ToolStart(t ToolInfo) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.ToolStart(t)
-	a.drawLocked()
+	a.activity = toolActivity(t)
+	a.markDirty()
 }
 
 // ToolEnd — инструмент закончил.
@@ -718,7 +783,24 @@ func (a *App) ToolEnd(t ToolInfo) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.doc.ToolEnd(t)
-	a.drawLocked()
+	a.activity = ""
+	a.markDirty()
+}
+
+// toolActivity — чем занят инструмент, человеческим языком:
+// «read src/main.go» вместо безымянной карточки в рамке поля ввода.
+func toolActivity(t ToolInfo) string {
+	arg := t.Args
+	if arg == "" {
+		return t.Name
+	}
+	if i := strings.IndexAny(arg, "\r\n"); i >= 0 {
+		arg = arg[:i]
+	}
+	if len(arg) > 42 {
+		arg = arg[:42] + "…"
+	}
+	return t.Name + " " + arg
 }
 
 // SetMetrics — обновить нижнюю панель.
@@ -732,23 +814,28 @@ func (a *App) SetMetrics(m Metrics) {
 	if m.Provider != "" {
 		a.opt.Provider = m.Provider
 	}
-	a.drawLocked()
+	a.markDirty()
 }
 
 // Toast — короткая реплика в углу подсказок.
 func (a *App) Toast(s string) {
 	a.mu.Lock()
 	a.toastLocked(s)
-	a.drawLocked()
 	a.mu.Unlock()
+	a.markDirty()
+}
+
+// Raw — управляющая последовательность в терминал мимо кадра (OSC52).
+func (a *App) Raw(s string) {
+	a.rend.Raw(s)
 }
 
 // SetMascot — показать или спрятать Искру на заставке.
 func (a *App) SetMascot(on bool) {
 	a.mu.Lock()
 	a.opt.HideMascot = !on
-	a.drawLocked()
 	a.mu.Unlock()
+	a.markDirty()
 }
 
 // SetCronEnabled — показать или скрыть бейдж автономных итераций в строке
@@ -756,8 +843,8 @@ func (a *App) SetMascot(on bool) {
 func (a *App) SetCronEnabled(on bool) {
 	a.mu.Lock()
 	a.opt.CronEnabled = on
-	a.drawLocked()
 	a.mu.Unlock()
+	a.markDirty()
 }
 
 // Clear — очистить ленту.
@@ -766,7 +853,7 @@ func (a *App) Clear() {
 	defer a.mu.Unlock()
 	a.doc.Clear()
 	a.scroll = 0
-	a.drawLocked()
+	a.markDirty()
 }
 
 // ToggleThink — развернуть или свернуть размышления (Ctrl+O).
@@ -774,7 +861,7 @@ func (a *App) ToggleThink() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toggleThinkLocked()
-	a.drawLocked()
+	a.markDirty()
 }
 
 // toggleThinkLocked — переключение мыслей под уже взятым мьютексом.
@@ -791,7 +878,7 @@ func (a *App) Flash(s string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toastLocked(s)
-	a.drawLocked()
+	a.markDirty()
 }
 
 func (a *App) toastLocked(s string) {
@@ -1075,9 +1162,29 @@ func (a *App) composerTop() int {
 	return top
 }
 
+// composerX — левая граница поля ввода.
+//
+// На широком терминале слева от поля живёт колонка мини-Искры (8 клеток):
+// кот всегда на экране и меняет позу вместе с состоянием агента. На узком
+// колонка исчезает — важнее место для текста.
+func (a *App) composerX() int {
+	if a.railWidth() > 0 {
+		return a.railWidth() + 1
+	}
+	return 1
+}
+
+// railWidth — ширина колонки маскота: 0 — колонки нет.
+func (a *App) railWidth() int {
+	if a.opt.HideMascot || a.w < 66 {
+		return 0
+	}
+	return 7
+}
+
 // composerInner — ширина текста внутри поля ввода.
 func (a *App) composerInner() int {
-	w := a.w - 8 // рамка (2) + поля (2) + приглашение (2)
+	w := a.w - a.composerX() - 6 // рамка (2) + поля (2) + приглашение (2)
 	if w < 8 {
 		w = 8
 	}
@@ -1136,6 +1243,158 @@ func (a *App) completePaletteLocked() {
 	a.palSel = 0
 }
 
+// ---------- Палитра файлов (@дополнение) ----------
+//
+// Прикрепить файл к запросу — «@» и кусок имени: список файлов проекта
+// подсказывает пути, Tab/Enter подставляет. На отправке mention разворачивается
+// в содержимое файла (tools.ApplyMentions) — раньше это работало, но об
+// этом никто не знал: подсказки не было, а список файлов нельзя было
+// подсмотреть, не выходя из поля ввода.
+
+// atToken — токен после «@» перед курсором: «прочитай @sr» → «sr».
+func (a *App) atToken() (string, bool) {
+	t := a.comp.Text()
+	cur := a.comp.Cursor()
+	if cur > len(t) || a.comp.Len() > 400 {
+		return "", false
+	}
+	head := t[:cur]
+	start := strings.LastIndexAny(head, " \n\t") + 1
+	tok := head[start:]
+	if !strings.HasPrefix(tok, "@") || len(tok) > 100 {
+		return "", false
+	}
+	return tok[1:], true
+}
+
+// collectFiles — файлы проекта для подсказки. Плоский список относительных
+// путей: без каталогов-мусора, с разумным потолком, чтобы сборка не съела
+// клавиатурную задержку на больших репозиториях.
+func collectFiles(root string) []string {
+	if root == "" {
+		root = "."
+	}
+	skip := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true,
+		".gcli": true, "__pycache__": true, ".venv": true,
+		"venv": true, "dist": true, "build": true, "target": true,
+		".idea": true, ".vscode": true,
+	}
+	var out []string
+	depth := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != root && (skip[name] || strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			depth++
+			if depth > 6 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if len(out) >= 4000 {
+			return filepath.SkipAll
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil || rel == "." {
+			return nil
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	return out
+}
+
+// fileItems — подходящие пути для текущего @-токена: сначала префикс,
+// затем подстрока — «main» находит и src/main.go, и README.md c «main» внутри.
+func (a *App) fileItems() []string {
+	base, ok := a.atToken()
+	if !ok {
+		return nil
+	}
+	if time.Since(a.filesAt) > 10*time.Second || a.files == nil {
+		a.files = collectFiles(a.opt.WorkDir)
+		a.filesAt = time.Now()
+	}
+	base = strings.ToLower(base)
+	var pref, substr []string
+	for _, f := range a.files {
+		lf := strings.ToLower(f)
+		if base == "" || strings.HasPrefix(lf, base) {
+			pref = append(pref, f)
+		} else if strings.Contains(lf, base) {
+			substr = append(substr, f)
+		}
+		if len(pref) >= 12 {
+			break
+		}
+	}
+	out := pref
+	for len(out) < 12 && len(substr) > 0 {
+		out = append(out, substr[0])
+		substr = substr[1:]
+	}
+	if len(out) > 12 {
+		out = out[:12]
+	}
+	if a.palSel >= len(out) {
+		a.palSel = 0
+	}
+	return out
+}
+
+// filePaletteOpen — открыт ли список файлов.
+func (a *App) filePaletteOpen() bool {
+	tok, ok := a.atToken()
+	if !ok {
+		a.fileHide = ""
+		return false
+	}
+	if tok == a.fileHide {
+		return false
+	}
+	return len(a.fileItems()) > 0
+}
+
+// moveFilePalette — сдвинуть выбор в списке файлов.
+func (a *App) moveFilePalette(d int) {
+	n := len(a.fileItems())
+	if n == 0 {
+		return
+	}
+	a.palSel = (a.palSel + d + n) % n
+}
+
+// completeFileLocked — подставить выбранный файл вместо @-токена.
+// true — подставили (Enter не отправляет запрос, а доделывает путь).
+func (a *App) completeFileLocked() bool {
+	items := a.fileItems()
+	if len(items) == 0 {
+		return false
+	}
+	if a.palSel >= len(items) {
+		a.palSel = 0
+	}
+	path := items[a.palSel]
+	t := a.comp.Text()
+	cur := a.comp.Cursor()
+	head := t[:cur]
+	start := strings.LastIndexAny(head, " \n\t") + 1
+	if !strings.HasPrefix(head[start:], "@") {
+		return false
+	}
+	next := head[:start] + "@" + path + " " + t[cur:]
+	a.comp.SetText(next)
+	a.palSel = 0
+	a.fileHide = ""
+	return true
+}
+
 // ---------- Отрисовка ----------
 
 // drawLocked — собрать кадр и вывести его. Вызывается под a.mu.
@@ -1174,6 +1433,8 @@ func (a *App) buildLocked() *Screen {
 	a.drawFooter(s, bodyTop+bodyH)
 	if a.paletteOpen() {
 		a.drawPalette(s)
+	} else if a.filePaletteOpen() {
+		a.drawFilePalette(s)
 	}
 	if a.modal != nil {
 		a.drawModal(s)
@@ -1475,11 +1736,34 @@ func (a *App) welcomeLines() []Line {
 //
 // Кадр заставки перерисовывается раз в ~0.9 с, поэтому окно мигания шире
 // одного кадра: иначе кот «моргал» бы так быстро, что этого не заметить.
+// Настроение повторяет работу: работает, думает, празднует завершение.
 func (a *App) mascotState() MascotState {
+	if a.busy {
+		if a.activity == "думаю" {
+			return MascotThink
+		}
+		return MascotWork
+	}
+	if !a.doneAt.IsZero() && time.Since(a.doneAt) < 3*time.Second {
+		return MascotDone
+	}
 	if a.tick%60 >= 8 && a.tick%60 < 16 {
 		return MascotBlink
 	}
 	return MascotIdle
+}
+
+// miniMascotState — поза мини-котa у поля ввода. Как у заставки, но
+// blink реже: тут каждое движение перерисовывает кадр целиком.
+func (a *App) miniMascotState() MascotState {
+	st := a.mascotState()
+	if st == MascotBlink && a.tick%60 < 12 {
+		return st
+	}
+	if st == MascotBlink {
+		return MascotIdle
+	}
+	return st
 }
 
 // wordmarkOn — имя продукта на заданном фоне.
@@ -1578,6 +1862,72 @@ func (a *App) drawPalette(s *Screen) {
 	}
 }
 
+// drawFilePalette — подсказка файлов для @-дополнения. Тот же dropdown,
+// что у команд: друг только список и заголовок.
+func (a *App) drawFilePalette(s *Screen) {
+	items := a.fileItems()
+	if len(items) == 0 {
+		return
+	}
+	t := a.th
+	boxW := 56
+	if boxW > a.w-4 {
+		boxW = a.w - 4
+	}
+	if boxW < 16 {
+		return
+	}
+	maxItems := a.composerTop() - 4
+	if maxItems > 8 {
+		maxItems = 8
+	}
+	if maxItems < 3 {
+		return
+	}
+	start := 0
+	if a.palSel >= maxItems {
+		start = a.palSel - maxItems + 1
+	}
+	if start > len(items)-maxItems {
+		start = len(items) - maxItems
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxItems
+	if end > len(items) {
+		end = len(items)
+	}
+	shown := items[start:end]
+	boxH := len(shown) + 2
+	y := a.composerTop() - boxH
+	if y < 2 {
+		y = 2
+	}
+	x := 3
+	s.Fill(x, y, boxW, boxH, Style{BG: t.Panel})
+	s.Box(x, y, boxW, boxH, a.corners, Style{FG: t.Border, BG: t.Panel})
+	title := " файлы: tab — подставить "
+	if len(items) > maxItems {
+		title = fmt.Sprintf(" файлы %d–%d из %d ", start+1, end, len(items))
+	}
+	s.Text(x+2, y, title, Style{FG: t.Dim, BG: t.Panel})
+	for i, f := range shown {
+		sel := start+i == a.palSel
+		st := Style{FG: t.Text, BG: t.Panel}
+		if sel {
+			s.Fill(x+1, y+1+i, boxW-2, 1, Style{BG: t.Panel2})
+			st = Style{FG: t.Gold, BG: t.Panel2, Bold: true}
+		}
+		mark := "◧ "
+		if sel {
+			mark = "› ◧ "
+		}
+		s.Text(x+2, y+1+i, mark, Style{FG: t.Accent2, BG: st.BG})
+		s.Text(x+2+StringWidth(mark), y+1+i, Truncate(f, boxW-StringWidth(mark)-4), st)
+	}
+}
+
 // drawFooter — поле ввода, подсказки и статус.
 func (a *App) drawFooter(s *Screen, top int) {
 	t := a.th
@@ -1605,20 +1955,29 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		border = Mix(t.Border, t.Accent2, 0.45)
 	}
 	st := Style{FG: border, BG: t.Panel}
-	boxW := a.w - 2
+	boxX := a.composerX()
+	boxW := a.w - boxX - 1
 	// Рамка.
-	s.Fill(1, top, boxW, h, Style{BG: t.Panel})
-	s.Box(1, top, boxW, h, a.corners, st)
-	// Метка в верхней рамке: состояние.
+	s.Fill(boxX, top, boxW, h, Style{BG: t.Panel})
+	s.Box(boxX, top, boxW, h, a.corners, st)
+	// Метка в верхней рамке: что делает агент прямо сейчас. Без активности —
+	// привычное «работаю»/очередь; с активностью — конкретика: «read src/main.go».
 	label := ""
 	if a.busy {
-		label = " " + spinner(a.tick/2) + " работаю "
+		act := spinner(a.tick/2) + " работаю"
+		if a.activity != "" {
+			room := boxW - 24
+			if room > 8 {
+				act = spinner(a.tick/2) + " " + Truncate(a.activity, room)
+			}
+		}
+		label = " " + act + " "
 	} else if len(a.queue) > 0 {
 		label = fmt.Sprintf(" в очереди: %d ", len(a.queue))
 	}
 	if label != "" {
 		lx := a.w - StringWidth(label) - 6
-		if lx > 3 {
+		if lx > boxX+3 {
 			s.Text(lx, top, label, Style{FG: t.Accent2, BG: t.Panel, Bold: true})
 		}
 	}
@@ -1646,12 +2005,17 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 			prompt = "❯ "
 			pst = Style{FG: t.Accent, BG: t.Panel, Bold: true}
 		}
-		s.Text(3, y, prompt, pst)
+		s.Text(boxX+2, y, prompt, pst)
 		if idx == 0 && a.comp.Empty() {
-			s.Text(5, y, "спроси что-нибудь…", Style{FG: t.Dim, BG: t.Panel})
+			s.Text(boxX+4, y, "спроси что-нибудь… @файл — приложить", Style{FG: t.Dim, BG: t.Panel})
 			continue
 		}
-		s.Text(5, y, lines[idx], Style{FG: t.Text, BG: t.Panel})
+		s.Text(boxX+4, y, lines[idx], Style{FG: t.Text, BG: t.Panel})
+	}
+	// Мини-Искра в левой колонке: 5×3 клеток по высоте рамки поля.
+	if rail := a.railWidth(); rail > 0 {
+		ph := a.tick / 2
+		drawMiniMascot(s, 2, top, a.miniMascotState(), ph, t.Bg)
 	}
 }
 
@@ -1662,9 +2026,12 @@ func (a *App) drawHints(s *Screen, y int) {
 	}
 	t := a.th
 	s.FillLine(y, Style{BG: t.Bg})
-	left := " enter отправить · ctrl+j перенос · / команды · esc очистить"
+	left := " enter отправить · ctrl+j перенос · @файл приложить · ctrl+y копировать · / команды"
 	if a.paletteOpen() {
 		left = " ↑↓ выбор · tab вставить · esc закрыть"
+	}
+	if a.filePaletteOpen() {
+		left = " ↑↓ файл · tab/enter подставить · esc закрыть"
 	}
 	if a.busy {
 		left = " enter в очередь · esc остановить · pgup/pgdn прокрутка"
@@ -2020,7 +2387,7 @@ func (a *App) composerCursorLocked() (int, int, bool) {
 		start = cy - maxLines + 1
 	}
 	row := cy - start
-	return 5 + cx, boxTop + 1 + row, true
+	return a.composerX() + 4 + cx, boxTop + 1 + row, true
 }
 
 // askCursorLocked — курсор в поле вопроса.

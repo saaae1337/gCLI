@@ -144,6 +144,14 @@ type app struct {
 	// sessionStart — когда началась сессия. В панели метрик видно, сколько
 	// времени агент работает: «сессия 4м 12с».
 	sessionStart time.Time
+	// activeTotal — суммарное время работы агента (ходы целиком: запросы,
+	// инструменты, субагенты), activeSince — старт текущего незавершённого
+	// хода. Счётчик времени сессии раньше тикал по настенным часам с момента
+	// запуска: пока человек читал, думал или обедал, время росло. Теперь
+	// считается только время, когда агент действительно занят.
+	activeTotal time.Duration
+	activeSince time.Time
+	activeMu    sync.Mutex // защищает счётчики выше (turn зовётся из горутин TUI и cron)
 	// lastRate — токенов в секунду по последнему запросу, lastElapsed —
 	// его длительность. Обновляются в onUsage, читаются в панели метрик.
 	lastRate    float64
@@ -1369,6 +1377,9 @@ func (a *app) turn(text string) error {
 	a.cancel = cancel
 	a.running = true
 	a.mu.Unlock()
+	// Ход пошёл: таймер сессии тикает только пока агент работает.
+	a.agentActiveBegin()
+	defer a.agentActiveEnd()
 	// Размышления нового хода начинаются с чистого листа; включённость
 	// показа (Ctrl+O) при этом сохраняется — она настройка пользователя,
 	// а не состояние хода.
@@ -1609,7 +1620,7 @@ func (a *app) autoCompactLimit() int {
 		return a.repo.Cfg.AutoCompact
 	}
 	// По умолчанию — 70% мягкого лимита контекста модели.
-	return a.prov.CtxSoftLimit()
+	return a.prov.CtxSoftLimitFor(a.model)
 }
 
 // onProgress — живой прогресс пакетных операций (multi_*, spawn_agents).
@@ -1882,7 +1893,9 @@ func (a *app) metrics() ui.Metrics {
 	provID := ""
 	if a.prov != nil {
 		m.Provider = a.prov.Label
-		m.ContextMax = a.prov.CtxLimit()
+		// Окно контекста — свойство модели, а не провайдера: glm-4.6
+		// и gpt-4.1 живут у одного провайдера с разными лимитами.
+		m.ContextMax = a.prov.CtxLimitFor(a.model)
 		provID = a.prov.ID
 	}
 	sessMu.Lock()
@@ -1906,9 +1919,43 @@ func (a *app) metrics() ui.Metrics {
 	a.mu.Unlock()
 
 	if !a.sessionStart.IsZero() {
-		m.Session = time.Since(a.sessionStart)
+		m.Session = a.agentActiveTime()
 	}
 	return m
+}
+
+// agentActiveTime — сколько времени агент был занят реальной работой:
+// завершённые ходы плюс текущий незакрытый. Ожидание пользователя,
+// чтение ответа и простой в счёт не идут: раньше таймер тикал по
+// настенным часам, и «сессия 2ч» означала «я открыл терминал два часа
+// назад», а не «агент работал два часа».
+func (a *app) agentActiveTime() time.Duration {
+	a.activeMu.Lock()
+	defer a.activeMu.Unlock()
+	d := a.activeTotal
+	if !a.activeSince.IsZero() {
+		d += time.Since(a.activeSince)
+	}
+	return d
+}
+
+// agentActiveBegin — отметить начало хода.
+func (a *app) agentActiveBegin() {
+	a.activeMu.Lock()
+	if a.activeSince.IsZero() {
+		a.activeSince = time.Now()
+	}
+	a.activeMu.Unlock()
+}
+
+// agentActiveEnd — закрыть ход и добавить его длительность к счётчику.
+func (a *app) agentActiveEnd() {
+	a.activeMu.Lock()
+	if !a.activeSince.IsZero() {
+		a.activeTotal += time.Since(a.activeSince)
+		a.activeSince = time.Time{}
+	}
+	a.activeMu.Unlock()
 }
 
 // statusItems — элементы нижней строки состояния (стиль Claude Code).
