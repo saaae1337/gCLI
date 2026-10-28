@@ -446,9 +446,9 @@ func main() {
 	a.sess = a.loadInitialSession(*flagResume, *flagContinue)
 	switch *flagAgent {
 	case "on":
-		a.sess.AgentMode = true
+		a.setAgentMode(true)
 	case "off":
-		a.sess.AgentMode = false
+		a.setAgentMode(false)
 	}
 	if *flagYolo {
 		a.sess.Perms.BashAll = true
@@ -1658,7 +1658,7 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 		},
 		OnUsage: a.onUsage,
 	}, a.workDir)
-	ag.WithAgentMode(a.sess.AgentMode)
+	ag.WithAgentMode(a.agentMode())
 	ag.Notes = a.notesText()
 	ag.OnNote = a.onNote
 	ag.OnExtend = a.onExtend

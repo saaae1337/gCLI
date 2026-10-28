@@ -249,3 +249,39 @@ func TestSessionCountersRace(t *testing.T) {
 		t.Errorf("журнал субагентов = %d записей, ожидалось 40 (потолок)", got)
 	}
 }
+
+// TestAgentModeRace — /agent переключает режим из очереди ввода, а
+// newAgent читает его при сборке агента из хода (cron, watch, миссии).
+// Писатели в конце каждого цикла пишут false, поэтому после барьера
+// финальное значение предсказуемо.
+func TestAgentModeRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	a.setAgentMode(true)
+
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				a.setAgentMode(i%2 == 0)
+				_ = a.agentMode()
+			}
+		}()
+	}
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 25; i++ {
+				_ = a.agentMode()
+				a.cmdStatus()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if a.agentMode() {
+		t.Error("последняя запись в каждом цикле — false, но флаг оказался true")
+	}
+}

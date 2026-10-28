@@ -35,7 +35,7 @@ func (a *app) cmdContext() {
 
 	// Системный промпт: база + надстройки (план, заметки).
 	sysText := agent.MainSystemBase()
-	if !a.sess.AgentMode {
+	if !a.agentMode() {
 		sysText = agent.ChatSystemBase()
 	}
 	if a.repo.Cfg.PlanMode {

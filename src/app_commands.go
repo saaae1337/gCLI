@@ -220,7 +220,7 @@ func (a *app) cmdStatus() {
 		{"Провайдер", a.prov.Label + "  (" + a.prov.ID + ")"},
 		{"Модель", a.model},
 		{"Ключ", keyStatus(a.prov)},
-		{"Режим", modeStatus(a.sess.AgentMode) + " · инструментов: " + strconv.Itoa(a.tools.Count()) +
+		{"Режим", modeStatus(a.agentMode()) + " · инструментов: " + strconv.Itoa(a.tools.Count()) +
 			" · расширений: " + strconv.Itoa(a.tools.ExtCount()) +
 			" · MCP: " + strconv.Itoa(a.tools.MCPToolCount())},
 		{"Субагенты", agentsStatus(a)},
@@ -1490,18 +1490,18 @@ func (a *app) cmdTools() {
 func (a *app) cmdAgent(arg string) {
 	switch strings.ToLower(arg) {
 	case "on", "вкл":
-		a.sess.AgentMode = true
+		a.setAgentMode(true)
 		a.repo.Cfg.Agent = true
 	case "off", "выкл":
-		a.sess.AgentMode = false
+		a.setAgentMode(false)
 		a.repo.Cfg.Agent = false
 	default:
-		a.sess.AgentMode = !a.sess.AgentMode
-		a.repo.Cfg.Agent = a.sess.AgentMode
+		a.setAgentMode(!a.agentMode())
+		a.repo.Cfg.Agent = a.agentMode()
 	}
 	a.saveConfig()
 	a.saveSession()
-	if a.sess.AgentMode {
+	if a.agentMode() {
 		a.ui.Ok(fmt.Sprintf("агентный режим включён · инструментов: %d", a.tools.Count()))
 	} else {
 		a.ui.Ok("агентный режим выключен — обычный чат без инструментов")

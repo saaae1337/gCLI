@@ -155,6 +155,22 @@ func (a *app) subagentRunCount() int {
 	return len(a.sess.SubagentRuns)
 }
 
+// agentMode — флаг агентного режима под sessMu: newAgent собирает агента
+// из хода (в том числе cron-хода), а /agent переключает его из очереди
+// ввода. Без лока — гонка bool между горутинами.
+func (a *app) agentMode() bool {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.AgentMode
+}
+
+// setAgentMode — переключить агентный режим под sessMu.
+func (a *app) setAgentMode(on bool) {
+	sessMu.Lock()
+	a.sess.AgentMode = on
+	sessMu.Unlock()
+}
+
 // ---------- Подтверждения ----------
 
 // permDecision — что говорят правила разрешений об этом действии.
