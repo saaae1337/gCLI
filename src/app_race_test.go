@@ -16,6 +16,8 @@ import (
 
 	"gcli/core"
 	"gcli/providers"
+	"gcli/subagents"
+	"gcli/tools"
 )
 
 // TestSnapErrRace — запись snapErr из «cron-хода» против чтения в /snapshots.
@@ -414,5 +416,67 @@ func TestCfgRace(t *testing.T) {
 	// Финальное состояние согласовано: Think из корректного набора.
 	if s := providers.ThinkState(a.cfgSnap()); s != "on" && s != "off" && s != "auto" {
 		t.Errorf("итоговое Think = %q", s)
+	}
+}
+
+// TestSharedObjectsRace — /agents par|depth подменяет a.pool, а buildTools
+// (/sandbox, /perms reset, /ext trust) подменяет a.tools из очереди ввода;
+// ход и субагенты в это время берут те же объекты (спавн, self_report,
+// agent_status, колбэки скиллов, ограниченный реестр субагента). Гонка не
+// на содержимом объектов (они сами синхронизированы), а на указателе поля:
+// без svcMu «go test -race» ловит чтение поля против записи.
+func TestSharedObjectsRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	// Два разных реестра и два пула — как их делают /sandbox и /agents par.
+	a.buildTools()
+	r1 := a.toolsReg()
+	a.buildTools()
+	r2 := a.toolsReg()
+	if r1 == r2 {
+		t.Fatal("ожидались два разных реестра после двух buildTools")
+	}
+	p1, p2 := a.newPool(), a.newPool()
+	if p1 == p2 {
+		t.Fatal("ожидались два разных пула после двух newPool")
+	}
+
+	regs := []*tools.Registry{r1, r2}
+	pools := []*subagents.Pool{p1, p2}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			a.setToolsReg(regs[i%2])
+			a.setAgentsPool(pools[i%2])
+		}
+	}()
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 60; i++ {
+				if pool := a.agentsPool(); pool == nil {
+					t.Error("пул не может быть nil")
+				} else {
+					_ = pool.Enabled()
+					_ = pool.Summary()
+				}
+				if reg := a.toolsReg(); reg == nil {
+					t.Error("реестр не может быть nil")
+				} else {
+					_ = reg.Count()
+					_ = reg.SkillsPromptBlockFor("как прочитать файл")
+					if sub := a.registryForSubagent(false, []string{"read_file"}, nil); sub == nil {
+						t.Error("ограниченный реестр субагента не может быть nil")
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if a.agentsPool() == nil || a.toolsReg() == nil {
+		t.Error("после подмен объекты должны остаться на месте")
 	}
 }

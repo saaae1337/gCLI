@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gcli/core"
+	"gcli/subagents"
 	"gcli/tools"
 	"gcli/tui"
 	"gcli/ui"
@@ -221,6 +222,49 @@ func (a *app) cfgPlanMode() bool {
 	cfgMu.RLock()
 	defer cfgMu.RUnlock()
 	return a.repo.Cfg.PlanMode
+}
+
+// svcMu — защита свопаемых сервис-объектов a.tools и a.pool.
+//
+// Писатели меняют объекты ЦЕЛИКОМ из очереди ввода: buildTools() собирает
+// новый реестр (/sandbox, /perms reset, /ext trust), /agents par|depth
+// собирает новый пул. Читатели — ход и субагенты: агент держит реестр,
+// снятый при сборке, но колбэки скиллов, registryForSubagent, self_report
+// и agent_status берут актуальный объект по ходу дела. Гонка не на
+// содержимом (Registry и Pool сами внутренне синхронизированы), а на
+// самом указателе поля.
+//
+// Правило вложенности: svcMu чистый — под ним не берётся ни один другой
+// лок, и наоборот; чтение под a.mu (registryForSubagent) берёт svcMu
+// после, обратного пути нет — deadlock невозможен.
+var svcMu sync.RWMutex
+
+// toolsReg — актуальный реестр инструментов.
+func (a *app) toolsReg() *tools.Registry {
+	svcMu.RLock()
+	defer svcMu.RUnlock()
+	return a.tools
+}
+
+// setToolsReg — подменить реестр целиком (buildTools).
+func (a *app) setToolsReg(r *tools.Registry) {
+	svcMu.Lock()
+	a.tools = r
+	svcMu.Unlock()
+}
+
+// agentsPool — актуальный пул субагентов.
+func (a *app) agentsPool() *subagents.Pool {
+	svcMu.RLock()
+	defer svcMu.RUnlock()
+	return a.pool
+}
+
+// setAgentsPool — подменить пул целиком (/agents par|depth).
+func (a *app) setAgentsPool(p *subagents.Pool) {
+	svcMu.Lock()
+	a.pool = p
+	svcMu.Unlock()
 }
 
 // ---------- Разрешения под sessMu ----------

@@ -58,7 +58,7 @@ func (a *app) selfReport() tools.SelfReport {
 	}
 
 	rep.Notes = a.notesCopy()
-	rep.ReadFiles = a.tools.CountRead()
+	rep.ReadFiles = a.toolsReg().CountRead()
 
 	// Прогон под a.mu не держим: он меняется на каждой итерации, а
 	// self_status зовут из инструмента, то есть изнутри хода агента.
@@ -69,8 +69,8 @@ func (a *app) selfReport() tools.SelfReport {
 		a.mu.Unlock()
 	}
 
-	if a.pool != nil {
-		rep.Agents = a.pool.Summary()
+	if pool := a.agentsPool(); pool != nil {
+		rep.Agents = pool.Summary()
 	}
 	return rep
 }

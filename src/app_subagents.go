@@ -30,7 +30,11 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	// очереди ввода, не дожидаясь конца хода. Один снимок на весь спавн:
 	// решение о модели и журналы должны быть согласованы между собой.
 	cfg := a.cfgSnap()
-	if !a.pool.Enabled() {
+	// Один пул на весь спавн: решение о модели, ожидание и журнал
+	// должны относиться к одному и тому же пулу, даже если /agents par
+	// подменит его посреди ожидания — прежний пул доест своих.
+	pool := a.agentsPool()
+	if !pool.Enabled() {
 		return tools.SpawnResult{}, fmt.Errorf("субагенты отключены — включи: /agents on")
 	}
 	// Имена пользовательских агентов читаются один раз: список нужен и для
@@ -127,7 +131,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	before := a.pool.Running()
+	before := pool.Running()
 	name := spec.Name
 	if name == "" {
 		name = t.Label()
@@ -148,9 +152,9 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		}
 		a.ui.Println(line)
 	}
-	out, err := a.pool.Spawn(sctx, spec)
+	out, err := pool.Spawn(sctx, spec)
 	runName := name
-	if runs := a.pool.Get(name); len(runs) > 0 {
+	if runs := pool.Get(name); len(runs) > 0 {
 		runName = runs[0].Name
 	}
 	a.recordSubagent(core.SubagentRecord{
@@ -220,7 +224,7 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 		WorkDir:   a.workDir,
 		Think:     providers.ThinkState(cfg),
 		Memory:    a.memory.Collect,
-		Skills:    func(query string) string { return a.tools.SkillsPromptBlockFor(query) },
+		Skills:    func(query string) string { return a.toolsReg().SkillsPromptBlockFor(query) },
 		MaxIters:  core.Clamp(cfg.SubMaxTurns, 1, 60),
 		OnEvent: func(kind, detail string) {
 			if kind == "tool" && !a.quiet {
@@ -240,22 +244,27 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 func (a *app) registryForSubagent(readOnly bool, allow, deny []string) *tools.Registry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	base := a.tools.Base()
+	// svcMu берётся уже под a.mu: обратного пути (svcMu → a.mu) нет.
+	base := a.toolsReg().Base()
 	return base.Restrict(allow, deny)
 }
 
 // agentsInfo — сводка по субагентам для agent_status.
 func (a *app) agentsInfo(action, name string) string {
+	// Один снимок пула на весь вызов: сводка и детали не должны
+	// собираться из двух разных пулов, если /agents par подменит его
+	// посреди чтения.
+	pool := a.agentsPool()
 	switch action {
 	case "result":
 		if name == "" {
-			return a.pool.Summary()
+			return pool.Summary()
 		}
-		return a.pool.Details(name)
+		return pool.Details(name)
 	case "list":
-		return a.pool.Summary()
+		return pool.Summary()
 	default:
-		return a.pool.Summary()
+		return pool.Summary()
 	}
 }
 

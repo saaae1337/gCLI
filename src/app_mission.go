@@ -520,10 +520,11 @@ func (a *app) attachMission(ag *agent.Agent) {
 // показал, где прогон остановился). Ошибка возвращается наружу: вызов��щий
 // решает, кричать ли об этом в модель.
 func (a *app) saveMissionState(summary string) error {
-	if a.tools == nil {
+	reg := a.toolsReg()
+	if reg == nil {
 		return nil
 	}
-	if _, err := a.tools.AutoHandoff(summary); err != nil {
+	if _, err := reg.AutoHandoff(summary); err != nil {
 		return err
 	}
 	st := core.MissionState{

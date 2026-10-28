@@ -51,7 +51,7 @@ func (a *app) cmdAgents(rest string) {
 		a.repo.Cfg.SubMaxPar = n
 		cfgMu.Unlock()
 		a.saveConfig()
-		a.pool = a.newPool()
+		a.setAgentsPool(a.newPool())
 		a.ui.Ok(fmt.Sprintf("параллельность субагентов: %d", n))
 	case "depth", "глубина":
 		if len(parts) < 2 {
@@ -67,7 +67,7 @@ func (a *app) cmdAgents(rest string) {
 		a.repo.Cfg.SubMaxDepth = n
 		cfgMu.Unlock()
 		a.saveConfig()
-		a.pool = a.newPool()
+		a.setAgentsPool(a.newPool())
 		a.ui.Ok(fmt.Sprintf("глубина вложенности: %d", n))
 	case "model":
 		if len(parts) < 2 {

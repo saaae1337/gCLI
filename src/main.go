@@ -815,20 +815,24 @@ func (a *app) buildTools() {
 		Trust: tools.NewTrustStore(a.store.Root),
 		LSP:   a.lsp,
 	}
-	a.tools = tools.New(env)
-	a.tools.RegisterSkills()
-	a.tools.RegisterVision()
+	// Сборка в локальную переменную: реестр появляется в a.tools одним
+	// свопом под svcMu — читатели хода не видят полусобранный реестр
+	// (без скиллов и расширений) посреди перестройки.
+	reg := tools.New(env)
+	reg.RegisterSkills()
+	reg.RegisterVision()
 	if a.repo.Cfg.Subagents {
-		a.tools.RegisterSubagentTools()
+		reg.RegisterSubagentTools()
 	}
-	a.tools.RegisterExtTools()
-	n, warns := a.tools.RegisterMCP()
+	reg.RegisterExtTools()
+	n, warns := reg.RegisterMCP()
 	if n > 0 && !a.quiet {
 		a.setupNotes = append(a.setupNotes, fmt.Sprintf("MCP: подключено инструментов — %d", n))
 	}
 	// Одно подключённое расширение не должно прятать предупреждения
 	// о соседних: раньше они терялись, если n > 0.
 	a.setupNotes = append(a.setupNotes, warns...)
+	a.setToolsReg(reg)
 	a.reportPendingCode()
 }
 
@@ -964,12 +968,12 @@ func (a *app) buildPool() {
 		}
 		runner = subagents.Wrap(runner, rs)
 	}
-	a.pool = subagents.NewPool(runner, subagents.PoolOptions{
+	a.setAgentsPool(subagents.NewPool(runner, subagents.PoolOptions{
 		MaxParallel: core.Clamp(a.repo.Cfg.SubMaxPar, 1, 8),
 		MaxDepth:    core.Clamp(a.repo.Cfg.SubMaxDepth, 1, 3),
 		Enabled:     a.repo.Cfg.Subagents,
 		WorkDir:     a.workDir,
-	})
+	}))
 }
 
 // installSignalHandler — Ctrl+C: прервать генерацию, повторное — выход.
@@ -1624,13 +1628,15 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 	ag := agent.New(agent.Deps{
 		Providers: a.client,
 		Provider:  prov,
-		Registry:  a.tools,
+		Registry:  a.toolsReg(),
 		Session:   a,
 		Model:     mdl,
 		Think:     providers.ThinkState(cfg),
 		Memory:    a.memory.Collect,
 		SkillsPrompt: func(query string) string {
-			return a.tools.SkillsPromptBlockFor(query)
+			// Актуальный реестр на каждый запрос: перестройка (/ext trust,
+			// /sandbox) меняет набор скиллов для следующих обращений.
+			return a.toolsReg().SkillsPromptBlockFor(query)
 		},
 		MaxIters:    a.maxIters(),
 		MaxItersAbs: a.maxItersAbs(),
