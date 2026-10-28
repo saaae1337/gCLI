@@ -25,6 +25,11 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	// Снимок пары под provMu: spawn зовут из хода, а /model меняет пару
 	// из очереди ввода.
 	_, mdl := a.providerModel()
+	// Снимок конфига под cfgMu: спавн живёт в горутине хода/пула, а
+	// /agents model|route|budget|turns|timeout меняют те же поля из
+	// очереди ввода, не дожидаясь конца хода. Один снимок на весь спавн:
+	// решение о модели и журналы должны быть согласованы между собой.
+	cfg := a.cfgSnap()
 	if !a.pool.Enabled() {
 		return tools.SpawnResult{}, fmt.Errorf("субагенты отключены — включи: /agents on")
 	}
@@ -81,7 +86,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Depth:    args.Depth,
 		Summary:  a.taskSummary(),
 		Notes:    a.notesText(),
-		MaxTurns: core.Clamp(a.repo.Cfg.SubMaxTurns, 1, 60),
+		MaxTurns: core.Clamp(cfg.SubMaxTurns, 1, 60),
 	}
 	if hint != "" {
 		spec.Notes = strings.TrimSpace(spec.Notes + "\n\n[Подбор роли] " + hint)
@@ -105,20 +110,20 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	// считаются явными и не трогаются: это указание человека, а не дефолт.
 	if spec.Model == "" {
 		spec.Model, spec.ModelWhy = a.routeModelFor(t)
-	} else if a.repo.Cfg.SubRoute {
+	} else if cfg.SubRoute {
 		spec.ModelWhy = "модель указана явно — не меняю"
 	}
 	// Ходы урезаются по бюджету на том же пределе, что и модель: потеря хода
 	// бьёт по качеству сильнее смены модели, поэтому включается позже.
-	spec.MaxTurns = subagents.TurnsForBudget(core.Clamp(a.repo.Cfg.SubMaxTurns, 1, 60),
+	spec.MaxTurns = subagents.TurnsForBudget(core.Clamp(cfg.SubMaxTurns, 1, 60),
 		subagents.RouteOptions{
-			Budget:  subagents.Budget{Spent: a.sessionSpent(), Limit: a.repo.Cfg.SubBudget},
-			Enabled: a.repo.Cfg.SubRoute,
+			Budget:  subagents.Budget{Spent: a.sessionSpent(), Limit: cfg.SubBudget},
+			Enabled: cfg.SubRoute,
 		})
 	// Жёсткий потолок времени на одного субагента. Без него 12 итераций по
 	// 10 минут на модель дают до 2 часов на субагента, а пул из 3 таких —
 	// это очередь, в которой главный агент просто зависает.
-	timeout := time.Duration(core.Clamp(a.repo.Cfg.SubTimeoutMin, 1, 60)) * time.Minute
+	timeout := time.Duration(core.Clamp(cfg.SubTimeoutMin, 1, 60)) * time.Minute
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -153,7 +158,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Name:     runName,
 		Type:     string(t),
 		Task:     spec.Task,
-		Model:    core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, mdl),
+		Model:    core.FirstNonEmpty(spec.Model, cfg.SubModel, mdl),
 		ModelWhy: spec.ModelWhy,
 		Status:   string(statusOf(err)),
 		Depth:    spec.Depth,
@@ -174,7 +179,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Dispatched: args.Type == "",
 		Reuse:      string(out.Reuse),
 		ReusedFrom: out.ReusedFrom,
-		Model:      core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, mdl),
+		Model:      core.FirstNonEmpty(spec.Model, cfg.SubModel, mdl),
 		ModelWhy:   spec.ModelWhy,
 		Summary:    out.Summary,
 		Full:       out.Full,
@@ -203,17 +208,20 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 	// Снимок пары под provMu: субагент целиком живёт на одном провайдере
 	// и модели, а /model меняет пару из очереди ввода посреди хода.
 	prov, mdl := a.providerModel()
+	// Снимок конфига под cfgMu: цикл субагента живёт в горутине пула, а
+	// /think и /agents меняют Think/SubModel/SubMaxTurns из очереди ввода.
+	cfg := a.cfgSnap()
 	d := agent.SubagentDeps{
 		Provider:  prov,
 		Providers: a.client,
 		Registry:  a.registryForSubagent,
 		Model:     mdl,
-		SubModel:  a.repo.Cfg.SubModel,
+		SubModel:  cfg.SubModel,
 		WorkDir:   a.workDir,
-		Think:     providers.ThinkState(a.repo.Cfg),
+		Think:     providers.ThinkState(cfg),
 		Memory:    a.memory.Collect,
 		Skills:    func(query string) string { return a.tools.SkillsPromptBlockFor(query) },
-		MaxIters:  core.Clamp(a.repo.Cfg.SubMaxTurns, 1, 60),
+		MaxIters:  core.Clamp(cfg.SubMaxTurns, 1, 60),
 		OnEvent: func(kind, detail string) {
 			if kind == "tool" && !a.quiet {
 				a.ui.Println("    " + a.ui.Gray("└ "+detail))
@@ -269,13 +277,16 @@ func (a *app) sessionSpent() int {
 // бы как «явно указано», и подмена вернулась бы незаметно.
 func (a *app) routeModelFor(role subagents.Type) (string, string) {
 	prov, mdl := a.providerModel()
-	cur := core.FirstNonEmpty(a.repo.Cfg.SubModel, mdl)
+	// Снимок под cfgMu: решение о модели и бюджет — связная пара, а /agents
+	// route|budget|model меняют их из очереди ввода во время хода.
+	cfg := a.cfgSnap()
+	cur := core.FirstNonEmpty(cfg.SubModel, mdl)
 	v := subagents.RouteModel(role, subagents.RouteOptions{
 		Current:    cur,
 		ProviderID: prov.ID,
 		Available:  prov.Models,
-		Budget:     subagents.Budget{Spent: a.sessionSpent(), Limit: a.repo.Cfg.SubBudget},
-		Enabled:    a.repo.Cfg.SubRoute,
+		Budget:     subagents.Budget{Spent: a.sessionSpent(), Limit: cfg.SubBudget},
+		Enabled:    cfg.SubRoute,
 	})
 	if v.Model == "" {
 		return "", v.Why

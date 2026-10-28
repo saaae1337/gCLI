@@ -1497,7 +1497,7 @@ func (a *app) turn(text string) error {
 	if !a.quiet {
 		a.ui.MascotIdleStop()
 		state, word := ui.MascotThink, "thinking..."
-		if a.repo.Cfg.PlanMode {
+		if a.cfgPlanMode() {
 			state, word = ui.MascotPensive, "planning..."
 		}
 		// В полноэкранном режиме запрос уже стоит в ленте: печатать эхо
@@ -1615,6 +1615,11 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 	// и модели, а turn() зовётся и из cron-горутины — /model из очереди
 	// ввода не должен подменять их посреди сборки агента.
 	prov, mdl := a.providerModel()
+	// Снимок конфига под cfgMu: Deps копирует ThinkState-ом весь Config,
+	// а команды ввода (/think, /agents, /plan…) пишут его без очереди busy
+	// пока cron-ход собирает агента. Budget остаётся живым чтением: лимит
+	// может измениться посреди хода, и это нормально.
+	cfg := a.cfgSnap()
 
 	ag := agent.New(agent.Deps{
 		Providers: a.client,
@@ -1622,7 +1627,7 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 		Registry:  a.tools,
 		Session:   a,
 		Model:     mdl,
-		Think:     providers.ThinkState(a.repo.Cfg),
+		Think:     providers.ThinkState(cfg),
 		Memory:    a.memory.Collect,
 		SkillsPrompt: func(query string) string {
 			return a.tools.SkillsPromptBlockFor(query)
@@ -1634,9 +1639,9 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 		// Расход сессии нужен агенту дважды: чтобы решить, можно ли ещё
 		// продлевать ход, и чтобы self_status показал честную картину.
 		// Отдаём функцию, а не числа: расход меняется на каждой итерации.
-		Budget:      func() (spent, limit int) { return a.sessionSpent(), a.repo.Cfg.SubBudget },
+		Budget:      func() (spent, limit int) { return a.sessionSpent(), a.cfgSubBudget() },
 		AutoCompact: a.autoCompactLimit(),
-		Parallel:    a.repo.Cfg.ParallelTools,
+		Parallel:    cfg.ParallelTools,
 		Quiet:       quiet || a.quiet,
 		OnDelta: func(s string) {
 			// Первый кусок ответа — маскот умолкает и уступает место тексту.

@@ -119,8 +119,10 @@ func (a *app) runSetup() {
 	// Сохранение.
 	pc := a.repo.EnsureProviderCfg(p.ID)
 	pc.Model = model
+	cfgMu.Lock()
 	a.repo.Cfg.Provider = p.ID
 	a.repo.Cfg.Model = model
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.registry = a.registry.Rebuild(a.repo.Cfg)
 	if np := a.registry.Find(p.ID); np != nil {

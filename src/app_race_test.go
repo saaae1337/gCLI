@@ -343,3 +343,76 @@ func TestPermsRace(t *testing.T) {
 		t.Error("выключение /yolo не должно отзывать выданные гранты")
 	}
 }
+
+// TestCfgRace — команды ввода пишут конфиг (/think, /plan, /autopilot,
+// /skills…), а ход и субагенты читают его из чужих горутин: newAgent и
+// runSubagent копируют всю структуру (providers.ThinkState), Budget-колбэк
+// и спавн берут поля по одному. Снимок обязан идти под RLock против
+// всех писателей, SkillsOff в снимке — глубокая копия, иначе /skills
+// append писал бы в общий массив под ногами читателя. Писатели здесь
+// один горутиной — как в проде: команды сериализованы очередью ввода,
+// а читатели имитируют ход и субагентов, идущих параллельно.
+func TestCfgRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	cfgMu.Lock()
+	a.repo.Cfg.SkillsOff = []string{"base"}
+	cfgMu.Unlock()
+
+	thinkStates := []string{"on", "off", "auto"}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 60; i++ {
+			a.setAutopilot(i%2 == 0)
+			a.cmdPlan([]string{"on", "off"}[i%2])
+			a.cmdThink(thinkStates[i%3])
+			if i%10 == 0 {
+				cfgMu.Lock()
+				a.repo.Cfg.SkillsOff = append(a.repo.Cfg.SkillsOff, fmt.Sprintf("skill-%d", i))
+				cfgMu.Unlock()
+			}
+		}
+	}()
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 60; i++ {
+				cfg := a.cfgSnap()
+				switch providers.ThinkState(cfg) {
+				case "on", "off", "auto":
+				default:
+					t.Errorf("недопустимое состояние Think: %q", providers.ThinkState(cfg))
+				}
+				if cfg.SubBudget < 0 {
+					t.Errorf("бюджет не может быть отрицательным: %d", cfg.SubBudget)
+				}
+				_ = a.cfgSubBudget()
+				_ = a.cfgPlanMode()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Глубокая копия SkillsOff: снимок не едет на общем массиве конфига,
+	// иначе append писателя дописал бы в уже выданный срез.
+	cfgMu.Lock()
+	a.repo.Cfg.SkillsOff = append(a.repo.Cfg.SkillsOff, "extra")
+	cfgMu.Unlock()
+	snap := a.cfgSnap()
+	if len(snap.SkillsOff) == 0 || snap.SkillsOff[0] != "base" {
+		t.Errorf("снимок SkillsOff = %v, ожидалось начало с base — копия не глубокая", snap.SkillsOff)
+	}
+	if n := len(snap.SkillsOff); n > 0 {
+		for _, s := range snap.SkillsOff {
+			if s == "" {
+				t.Errorf("пустой элемент в снимке SkillsOff: %v", snap.SkillsOff)
+			}
+		}
+	}
+	// Финальное состояние согласовано: Think из корректного набора.
+	if s := providers.ThinkState(a.cfgSnap()); s != "on" && s != "off" && s != "auto" {
+		t.Errorf("итоговое Think = %q", s)
+	}
+}

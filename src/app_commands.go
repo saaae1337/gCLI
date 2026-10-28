@@ -684,7 +684,9 @@ func (a *app) switchProvider(p *providers.Provider) {
 	}
 	a.setProviderModel(p, next)
 	a.bindKeyRotate(p)
+	cfgMu.Lock()
 	a.repo.Cfg.Provider = p.ID
+	cfgMu.Unlock()
 	a.sess.Provider = p.ID
 	a.sess.Model = next
 	a.saveConfig()
@@ -741,7 +743,9 @@ func (a *app) setModel(m string) {
 	provMu.Lock()
 	a.model = m
 	provMu.Unlock()
+	cfgMu.Lock()
 	a.repo.Cfg.Model = m
+	cfgMu.Unlock()
 	a.sess.Model = m
 	a.saveConfig()
 	a.saveSession()
@@ -795,17 +799,21 @@ func (a *app) cmdModels(filter string) {
 }
 
 func (a *app) cmdThink(arg string) {
+	var v string
 	switch strings.ToLower(arg) {
 	case "on", "вкл":
-		a.repo.Cfg.Think = "on"
+		v = "on"
 	case "off", "выкл":
-		a.repo.Cfg.Think = "off"
+		v = "off"
 	case "auto", "авто", "":
-		a.repo.Cfg.Think = "auto"
+		v = "auto"
 	default:
 		a.ui.Warn("формат: /think on|off|auto (сейчас: " + providers.ThinkState(a.repo.Cfg) + ")")
 		return
 	}
+	cfgMu.Lock()
+	a.repo.Cfg.Think = v
+	cfgMu.Unlock()
 	a.saveConfig()
 	switch providers.ThinkState(a.repo.Cfg) {
 	case "on":
@@ -902,7 +910,9 @@ func (a *app) cmdResume(arg string) {
 		nm = providers.ResolveModel(np, "", a.repo.Cfg.Model)
 	}
 	a.setProviderModel(np, nm)
+	cfgMu.Lock()
 	a.repo.Cfg.Provider = np.ID
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.saveSession()
 	a.syncMetrics()
@@ -1296,8 +1306,10 @@ func (a *app) cmdPerms(rest string) {
 	}
 	if strings.TrimSpace(rest) == "reset" {
 		a.sess.Perms = core.Perms{BashExact: map[string]bool{}}
+		cfgMu.Lock()
 		a.repo.Cfg.Autopilot = false
 		a.repo.Cfg.AutopilotAll = false
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.saveSession()
 		// Согласия на код — тоже разрешение: сброс должен их убрать. Иначе
@@ -1372,13 +1384,17 @@ func (a *app) cmdSandbox(rest string) {
 	}
 	if mode == core.SandboxOff {
 		a.sandbox = nil
+		cfgMu.Lock()
 		a.repo.Cfg.Sandbox = core.SandboxOff
+		cfgMu.Unlock()
 	} else {
 		a.sandbox = tools.NewSandbox(a.workDir).WithDeny(tools.DefaultDeny()...)
 		if home := a.store.Root; home != "" {
 			a.sandbox.WithDeny(home)
 		}
+		cfgMu.Lock()
 		a.repo.Cfg.Sandbox = core.SandboxOn
+		cfgMu.Unlock()
 	}
 	a.saveConfig()
 	a.buildTools()
@@ -1440,8 +1456,11 @@ func (a *app) cmdCron(rest string) {
 		}
 		a.cronInterval = cronNextInterval()
 		a.cronLastActive = time.Now()
-		a.repo.Cfg.Cron = true
 		a.cronMu.Unlock()
+		// Cfg.Cron — вне cronMu: cfgMu не вкладывается в cronMu.
+		cfgMu.Lock()
+		a.repo.Cfg.Cron = true
+		cfgMu.Unlock()
 		a.saveConfig()
 		if t := a.tuiApp(); t != nil {
 			t.SetCronEnabled(true)
@@ -1459,8 +1478,10 @@ func (a *app) cmdCron(rest string) {
 			close(a.cronDone)
 			a.cronDone = nil
 		}
-		a.repo.Cfg.Cron = false
 		a.cronMu.Unlock()
+		cfgMu.Lock()
+		a.repo.Cfg.Cron = false
+		cfgMu.Unlock()
 		a.saveConfig()
 		if t := a.tuiApp(); t != nil {
 			t.SetCronEnabled(false)
@@ -1492,17 +1513,23 @@ func (a *app) cmdTools() {
 }
 
 func (a *app) cmdAgent(arg string) {
+	var on bool
 	switch strings.ToLower(arg) {
 	case "on", "вкл":
+		on = true
 		a.setAgentMode(true)
-		a.repo.Cfg.Agent = true
 	case "off", "выкл":
+		on = false
 		a.setAgentMode(false)
-		a.repo.Cfg.Agent = false
 	default:
-		a.setAgentMode(!a.agentMode())
-		a.repo.Cfg.Agent = a.agentMode()
+		on = !a.agentMode()
+		a.setAgentMode(on)
 	}
+	// Cfg.Agent — отдельно от sessMu: сессия и конфиг лочатся по очереди,
+	// не вкладываясь друг в друга.
+	cfgMu.Lock()
+	a.repo.Cfg.Agent = on
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.saveSession()
 	if a.agentMode() {

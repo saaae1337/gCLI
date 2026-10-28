@@ -47,7 +47,9 @@ func (a *app) cmdAgents(rest string) {
 			a.ui.Err("значение: 1..8")
 			return
 		}
+		cfgMu.Lock()
 		a.repo.Cfg.SubMaxPar = n
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.pool = a.newPool()
 		a.ui.Ok(fmt.Sprintf("параллельность субагентов: %d", n))
@@ -61,7 +63,9 @@ func (a *app) cmdAgents(rest string) {
 			a.ui.Err("значение: 1..3")
 			return
 		}
+		cfgMu.Lock()
 		a.repo.Cfg.SubMaxDepth = n
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.pool = a.newPool()
 		a.ui.Ok(fmt.Sprintf("глубина вложенности: %d", n))
@@ -71,10 +75,14 @@ func (a *app) cmdAgents(rest string) {
 			return
 		}
 		if strings.ToLower(parts[1]) == "same" || strings.ToLower(parts[1]) == "главная" {
+			cfgMu.Lock()
 			a.repo.Cfg.SubModel = ""
+			cfgMu.Unlock()
 			a.ui.Ok("субагенты используют модель главного агента")
 		} else {
+			cfgMu.Lock()
 			a.repo.Cfg.SubModel = parts[1]
+			cfgMu.Unlock()
 			a.ui.Ok("модель субагентов: " + parts[1])
 		}
 		a.saveConfig()
@@ -92,7 +100,9 @@ func (a *app) cmdAgents(rest string) {
 			a.ui.Err("значение: 1..60 (минут)")
 			return
 		}
+		cfgMu.Lock()
 		a.repo.Cfg.SubTimeoutMin = n
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.ui.Ok(fmt.Sprintf("таймаут субагента: %d мин", n))
 	case "types":
@@ -118,7 +128,9 @@ func (a *app) newPool() *subagents.Pool {
 }
 
 func (a *app) setSubagents(on bool) {
+	cfgMu.Lock()
 	a.repo.Cfg.Subagents = on
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.pool.SetEnabled(on)
 	if on {
@@ -155,14 +167,18 @@ func (a *app) setSubRoute(parts []string) {
 	}
 	switch strings.ToLower(parts[1]) {
 	case "on", "вкл", "1", "true", "да":
+		cfgMu.Lock()
 		a.repo.Cfg.SubRoute = true
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.ui.Ok("маршрутизация включена — простые роли поедут на дешёвую модель")
 		if a.repo.Cfg.SubBudget <= 0 {
 			a.ui.Hint("бюджет сессии не задан, поэтому понижение по нему не сработает: /agents budget 500000")
 		}
 	case "off", "выкл", "0", "false", "нет":
+		cfgMu.Lock()
 		a.repo.Cfg.SubRoute = false
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.ui.Ok("маршрутизация выключена — субагенты едут на модели " +
 			core.FirstNonEmpty(a.repo.Cfg.SubModel, a.model))
@@ -197,7 +213,9 @@ func (a *app) setSubBudget(parts []string) {
 	raw := strings.TrimSpace(parts[1])
 	switch strings.ToLower(raw) {
 	case "off", "выкл", "0", "нет", "none":
+		cfgMu.Lock()
 		a.repo.Cfg.SubBudget = 0
+		cfgMu.Unlock()
 		a.saveConfig()
 		a.ui.Ok("бюджет сессии снят — маршрутизация понижает только по роли")
 		return
@@ -209,7 +227,9 @@ func (a *app) setSubBudget(parts []string) {
 		a.ui.Err("значение: токены от 50000 до 20000000 (или off)")
 		return
 	}
+	cfgMu.Lock()
 	a.repo.Cfg.SubBudget = n
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.ui.Ok(fmt.Sprintf("бюджет сессии: %s токенов — на 70%% и 90%% маршрутизация понизит модель", core.Kfmt(n)))
 	if !a.repo.Cfg.SubRoute {
@@ -453,7 +473,9 @@ func (a *app) cmdSkills(rest string) {
 				kept = append(kept, n)
 			}
 		}
+		cfgMu.Lock()
 		a.repo.Cfg.SkillsOff = kept
+		cfgMu.Unlock()
 		a.tools.SetSkillsOff(kept)
 		a.saveConfig()
 		a.ui.Ok("навык «" + name + "» включён")
@@ -461,7 +483,13 @@ func (a *app) cmdSkills(rest string) {
 	case parts[0] == "off" && len(parts) > 1:
 		name := parts[1]
 		if !a.tools.SkillOff(name) {
+			cfgMu.Lock()
+			// Append может дописать в общий массив поверх живого
+			// слайса: снимки хода держат копию, но запись всё равно
+			// под cfgMu — она конкурирует и с RLock снимка, и с
+			// другими писателями.
 			a.repo.Cfg.SkillsOff = append(a.repo.Cfg.SkillsOff, name)
+			cfgMu.Unlock()
 			a.tools.SetSkillsOff(a.repo.Cfg.SkillsOff)
 			a.saveConfig()
 		}

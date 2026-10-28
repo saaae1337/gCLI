@@ -56,9 +56,13 @@ func (a *app) abAsk(ctx context.Context, model, prompt string) abResult {
 		Messages:  []core.Message{{Role: core.RoleUser, Content: prompt}},
 		MaxTokens: 8192,
 	}
+	// ThinkState копирует весь Config — снимаем под cfgMu в вызывающей
+	// горутине: стримы /ab живут дольше команды, и копия изнутри
+	// горутины гоняла бы с /think и /agents из очереди ввода.
+	think := providers.ThinkState(a.cfgSnap())
 	go func() {
 		defer close(out)
-		done <- providers.Stream(ctx, a.client, a.prov, creq, providers.ThinkState(a.repo.Cfg), out)
+		done <- providers.Stream(ctx, a.client, a.prov, creq, think, out)
 	}()
 	for d := range out {
 		if d.Usage != nil {

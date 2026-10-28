@@ -145,7 +145,9 @@ func (a *app) mascotDemo() {
 
 // setMascot — включить/выключить маскота и сохранить настройку.
 func (a *app) setMascot(on bool) {
+	cfgMu.Lock()
 	a.repo.Cfg.Mascot = &on
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.applyMascot()
 	// Заставка TUI — единственное место, где кот виден в полноэкранном
@@ -219,6 +221,7 @@ func (a *app) mascotResult(ok bool) {
 // составляет план и ждёт одобрения; файлы не меняет и не запускает
 // опасные команды, пока пользователь не скажет «ок» / «делай».
 func (a *app) cmdPlan(arg string) {
+	cfgMu.Lock()
 	switch strings.ToLower(strings.TrimSpace(arg)) {
 	case "on", "вкл":
 		a.repo.Cfg.PlanMode = true
@@ -227,6 +230,7 @@ func (a *app) cmdPlan(arg string) {
 	default:
 		a.repo.Cfg.PlanMode = !a.repo.Cfg.PlanMode
 	}
+	cfgMu.Unlock()
 	a.saveConfig()
 	if a.repo.Cfg.PlanMode {
 		a.ui.Ok("режим планирования: агент сначала предложит план (/plan off — выключить)")

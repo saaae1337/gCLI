@@ -22,6 +22,16 @@ import (
 // Без блокировки это гонка данных.
 var sessMu sync.Mutex
 
+// cfgMu — защита a.repo.Cfg (config.json в памяти).
+//
+// Писатели — команды ввода: /think, /agents, /plan, /model, /provider,
+// /sandbox, /autopilot, /agent, /skills, /mascot, /cron, /setup. Читатели —
+// ход (в том числе cron-горутина) и горутины субагентов: newAgent копирует
+// весь конфиг в providers.ThinkState, колбэк Budget читает SubBudget на
+// каждой итерации, спавн субагентов берёт SubModel/SubRoute/SubBudget.
+// Команды не блокируются busy-очередью, поэтому без лока это гонки данных.
+var cfgMu sync.RWMutex
+
 // Messages — история диалога.
 //
 // Отдаёт КОПИЮ под sessMu, а не сам слайц. Снаружи сессии историю читают из
@@ -170,6 +180,47 @@ func (a *app) setAgentMode(on bool) {
 	sessMu.Lock()
 	a.sess.AgentMode = on
 	sessMu.Unlock()
+}
+
+// ---------- Конфиг под cfgMu ----------
+//
+// Читатели хода и субагентов берут снимок; писатели-команды меняют поля
+// только под cfgMu. Правило порядка: cfgMu не вкладывается в sessMu,
+// provMu и cronMu — сначала снимается чужой лок, потом берётся этот.
+
+// cfgSnap — снимок конфига для хода и горутин субагентов.
+//
+// providers.ThinkState копирует структуру Config целиком, поэтому копия
+// обязана идти под RLock: поле за полем она читает всё, включая те поля,
+// у которых нет своих «горутинных» читателей. SkillsOff копируется глубоко:
+// /skills append пишет в слайс из очереди ввода, и чтение заголовка без
+// копии оставило бы снимок на общем массиве — append вырос бы в запись
+// прямо под ногами читателя.
+func (a *app) cfgSnap() core.Config {
+	cfgMu.RLock()
+	defer cfgMu.RUnlock()
+	c := a.repo.Cfg
+	if n := len(a.repo.Cfg.SkillsOff); n > 0 {
+		c.SkillsOff = append([]string(nil), a.repo.Cfg.SkillsOff...)
+	}
+	return c
+}
+
+// cfgSubBudget — потолок бюджета сессии для маршрутизации субагентов.
+// Читается колбэком Budget на каждой итерации хода: живое чтение, чтобы
+// /agents budget посреди хода влиял на решения дальше, а не только в
+// следующих ходах.
+func (a *app) cfgSubBudget() int {
+	cfgMu.RLock()
+	defer cfgMu.RUnlock()
+	return a.repo.Cfg.SubBudget
+}
+
+// cfgPlanMode — режим планирования для шапки хода.
+func (a *app) cfgPlanMode() bool {
+	cfgMu.RLock()
+	defer cfgMu.RUnlock()
+	return a.repo.Cfg.PlanMode
 }
 
 // ---------- Разрешения под sessMu ----------
@@ -584,10 +635,14 @@ func (a *app) setAutopilot(on bool) {
 		a.sess.Perms.AutopilotAll = false
 	}
 	sessMu.Unlock()
+	// Cfg — под cfgMu: чтение конфига из хода и субагентов идёт параллельно
+	// с этой записью. sessMu и cfgMu никогда не вложены друг в друга.
+	cfgMu.Lock()
 	if !on {
 		a.repo.Cfg.AutopilotAll = false
 	}
 	a.repo.Cfg.Autopilot = on
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.saveSession()
 }
@@ -600,8 +655,10 @@ func (a *app) setAutopilotAll(on bool) {
 	a.sess.Perms.AutopilotAll = on
 	a.sess.Perms.Autopilot = on
 	sessMu.Unlock()
+	cfgMu.Lock()
 	a.repo.Cfg.AutopilotAll = on
 	a.repo.Cfg.Autopilot = on
+	cfgMu.Unlock()
 	a.saveConfig()
 	a.saveSession()
 }
