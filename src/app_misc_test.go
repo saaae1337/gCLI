@@ -419,6 +419,7 @@ func TestTrustCodeAcceptedConnects(t *testing.T) {
 	a.buildTools()
 	extFixture(t, a.workDir, "deploy")
 	a.stdin = testStdin("y")
+	setBgTurn(a, false) // интерактивный ход: «y» отвечает человек
 
 	a.trustCode("ext", []string{"trust", "deploy"})
 	got := out(buf)
@@ -442,6 +443,7 @@ func TestTrustCodeRefusedKeepsOff(t *testing.T) {
 	a.buildTools()
 	extFixture(t, a.workDir, "deploy")
 	a.stdin = testStdin("n")
+	setBgTurn(a, false) // интерактивный ход: «n» отвечает человек
 
 	a.trustCode("ext", []string{"trust", "deploy"})
 	if got := out(buf); !strings.Contains(got, "не подтверждено") {

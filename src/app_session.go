@@ -434,6 +434,11 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		}
 	}
 
+	// Фоновому ходу спрашивать терминал нельзя: readAns украл бы строку
+	// у REPL-цикла. TUI-диалог доступен всегда, поэтому askable решает
+	// только судьбу запасного пути readAns в каждой ветке ниже.
+	askable := a.canAskTerminal()
+
 	switch req.Kind {
 	case tools.ConfirmWrite:
 		if a.permFileWrite() {
@@ -455,6 +460,10 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 				a.saveSession()
 				return true
 			}
+			return false
+		}
+		if !askable {
+			a.denyBackground(req)
 			return false
 		}
 		a.showWritePreview(req)
@@ -495,6 +504,10 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 				a.saveSession()
 				return true
 			}
+			return false
+		}
+		if !askable {
+			a.denyBackground(req)
 			return false
 		}
 		a.ui.Println("")
@@ -540,6 +553,10 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 				a.saveSession()
 				return true
 			}
+			return false
+		}
+		if !askable {
+			a.denyBackground(req)
 			return false
 		}
 		a.ui.Println("")
@@ -609,6 +626,28 @@ func (a *app) announceDeny(req tools.ConfirmReq, rule core.Rule) {
 	}
 	a.ui.Warn("запрещено правилом: " + rule.Label())
 	a.ui.Hint("изменить правило: " + rule.Tool + "(" + rule.Pattern + ") в gcli.json или ~/.gcli/config.json")
+}
+
+// denyBackground — видимый отказ фонового хода: подтверждение понадобилось,
+// а человека у терминала нет. Молчаливое «нет» выглядело бы зависшим
+// агентом: инструмент позван, ответ пуст, модель пробует снова. Отказ
+// безопасен по умолчанию: незаказанная запись и команда не выполняются,
+// а модель видит причину и перестраивается.
+func (a *app) denyBackground(req tools.ConfirmReq) {
+	if a.quiet {
+		return
+	}
+	a.ui.Println("")
+	switch req.Kind {
+	case tools.ConfirmExec:
+		a.ui.Println("  " + a.ui.Yellow("$ ") + req.Detail)
+	case tools.ConfirmWrite:
+		a.ui.Println("  " + a.ui.Yellow("✎ ") + core.RelToWD(a.workDir, req.Path))
+	case tools.ConfirmNet:
+		a.ui.Println("  " + a.ui.Blue("⇩ ") + core.Truncate(req.Detail, 80))
+	}
+	a.ui.Warn("фоновой ход запросил подтверждение — отклонено: человека нет у терминала")
+	a.ui.Hint("автономные прогоны без вопросов: /autopilot on (или /cron off)")
 }
 
 // autoApprove — можно ли одобрить операцию без участия пользователя.
@@ -793,6 +832,13 @@ func (a *app) askUser(question string, options []string) (string, error) {
 	if ans, ok := a.tuiAskUser(question, options); ok {
 		return strings.TrimSpace(ans), nil
 	} else if t := a.tuiApp(); t != nil && t.Running() {
+		return "", nil
+	}
+	// Фоновый ход не читает stdin: строка предназначена REPL-циклу, а не
+	// этому вопросу. Пустой ответ — как в тихом режиме: модель видит,
+	// что ответа не будет, и решает сама.
+	if !a.canAskTerminal() {
+		a.ui.Info("фоновой ход: ask_user без человека у терминала — ответа не будет, решай сам")
 		return "", nil
 	}
 	a.ui.Println("")

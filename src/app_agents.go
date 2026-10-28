@@ -714,6 +714,12 @@ func (a *app) askTrustCode(w tools.ProjectCodeWarning) bool {
 		// некому ответить, а «молча доверять» — ровно то, от чего мы защищаем.
 		return false
 	}
+	// Фоновый ход (cron) доверять чужой код не может: подтверждения нет,
+	// а второй Scan украл бы строку у REPL-цикла. Расширение остаётся
+	// неподключённым до явного /ext trust человеком.
+	if !a.canAskTerminal() {
+		return false
+	}
 	a.ui.Prompt2(fmt.Sprintf("Доверять и подключить (%s)?", kindWord), "[y]да [n]нет: ")
 	return a.readAns(false, false) == confirmYes
 }

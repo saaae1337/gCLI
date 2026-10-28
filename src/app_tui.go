@@ -318,6 +318,21 @@ func (a *app) tuiConfirm(c tui.Confirm) (tui.Choice, bool) {
 	return t.Confirm(c), true
 }
 
+// canAskTerminal — можно ли текущему ходу задать человеку вопрос у
+// терминала поверх stdin. В TUI вопрос уходит в диалог (stdin не
+// трогается) — да; ход из читателя ввода — да; фоновый ход (cron) без
+// TUI — нет: readAns устроил бы второй Scan поверх REPL-цикла, украл бы
+// его строку и висел бы до возвращения человека. Фоновый ход отказывает
+// сам себе (denyBackground) — это честнее молчаливого ожидания.
+func (a *app) canAskTerminal() bool {
+	if t := a.tuiApp(); t != nil && t.Running() {
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnInteractive
+}
+
 // relPath — путь для окна подтверждения: короче и без рабочего каталога.
 func (a *app) relPath(p string) string {
 	return core.RelToWD(a.workDir, p)
