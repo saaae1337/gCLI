@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -97,6 +98,11 @@ func watchRunCommand(dir, command string, timeout time.Duration) (string, int, b
 	defer cancel()
 	cmd := exec.CommandContext(ctx, shell, args...)
 	cmd.Dir = dir
+	// Как в tools.hBash: своя группа + KillTree по таймауту, WaitDelay
+	// против вечного ожидания вывода, который держит фоновый потомок.
+	tools.PGroup(cmd)
+	cmd.Cancel = func() error { return tools.KillTree(cmd) }
+	cmd.WaitDelay = 2 * time.Second
 	// Capture вместо CombinedOutput: проверка может светить гигабайтным
 	// логом (рекурсивная сборка, бесконечный тест), а агенту нужна лишь
 	// вершина и хвост.
@@ -104,6 +110,11 @@ func watchRunCommand(dir, command string, timeout time.Duration) (string, int, b
 	cmd.Stdout = captured
 	cmd.Stderr = captured
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// Команда завершилась, фоновый потомок держит вывод: проверка
+		// считается прошедшей, а не «код 1».
+		err = nil
+	}
 	code := 0
 	timedOut := false
 	if err != nil {

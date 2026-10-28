@@ -613,6 +613,12 @@ func (r *Registry) runVerifyCmd(ctx context.Context, cmd, dir string, timeout in
 	ce := exec.CommandContext(cctx, shell, sargs...)
 	ce.Dir = dir
 	ce.Env = append(os.Environ(), "GCLI=1", "CI=1")
+	// Своя группа + KillTree: таймаут добивает всё дерево, а не только шелл.
+	// WaitDelay подрезает ожидание, если фоновый потомок держит вывод:
+	// «go test ./... &» с живым процессом не подвешивает проверку навечно.
+	PGroup(ce)
+	ce.Cancel = func() error { return KillTree(ce) }
+	ce.WaitDelay = 2 * time.Second
 	t0 := time.Now()
 	// Capture вместо CombinedOutput: go test с горящими тестами может
 	// выдать сотни мегабайт, и verify уложил бы процесс по памяти.
@@ -636,6 +642,12 @@ func (r *Registry) runVerifyCmd(ctx context.Context, cmd, dir string, timeout in
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			out.exit = ee.ExitCode()
+			return out, nil
+		}
+		if errors.Is(err, exec.ErrWaitDelay) {
+			// Оболочка завершилась, фоновый потомок держит вывод открытым:
+			// проверка сама отработала — не заваливаем её из-за чужого процесса.
+			out.text += "\n[фоновый потомок удерживает вывод: ожидание прекращено]"
 			return out, nil
 		}
 		return out, err

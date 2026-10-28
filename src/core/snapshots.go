@@ -103,6 +103,10 @@ func runGit(workDir string, timeout time.Duration, args ...string) (string, erro
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = workDir
+	// Хук или подпроцесс может оставить фонового потомка, держащего вывод:
+	// без WaitDelay CombinedOutput ждал бы его вечно поверх уже истёкшего
+	// таймаута. Теперь ожидание подрезано.
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,

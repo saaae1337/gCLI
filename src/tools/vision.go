@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -234,6 +235,11 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	defer cancel()
 	cmd := exec.CommandContext(cctx, browser, args...)
 	cmd.Env = append(os.Environ(), "HOME="+os.TempDir())
+	// Браузер уходит в свою группу: по таймауту добиваем всё дерево
+	// (дети Chromium переживают бы прямой Kill).
+	PGroup(cmd)
+	cmd.Cancel = func() error { return KillTree(cmd) }
+	cmd.WaitDelay = 2 * time.Second
 	// Лог браузера — через Capture: с --v=1 Chromium на тяжёлой странице
 	// выдаёт десятки мегабайт. Окно большое (по 1 МБ), чтобы ошибки
 	// консоли страницы не потерялись в середине.
@@ -241,6 +247,11 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	cmd.Stdout = logCap
 	cmd.Stderr = logCap
 	err = cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// Браузер вышел, а фоновый потомок держит вывод открытым:
+		// скриншот уже записан — не заваливаем результат.
+		err = nil
+	}
 	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
 			return Result{}, fmt.Errorf("браузер не успел за 60 с — страница, вероятно, слишком тяжёлая")

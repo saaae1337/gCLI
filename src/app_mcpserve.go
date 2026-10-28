@@ -290,6 +290,9 @@ func mcpSrvPrompt(workdir, prompt string, timeout time.Duration) (string, error)
 	}
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = workdir
+	// Дочерний агент может запустить фоновый процесс, держащий вывод:
+	// без WaitDelay CombinedOutput ждал бы его вечно поверх таймаута.
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))

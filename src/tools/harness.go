@@ -411,10 +411,15 @@ func startJob(cmd, dir string, timeout int) *Job {
 	ce := exec.CommandContext(ctx, shell, sargs...)
 	ce.Dir = dir
 	ce.Env = append(os.Environ(), "GCLI=1")
+	// Своя группа: Stop и таймаут добивают всё дерево задач, а не только
+	// оболочку — иначе фоновые потомки переживали бы остановку и продолжали
+	// писать в лог закрытой задачи.
+	PGroup(ce)
+	ce.Cancel = func() error { return KillTree(ce) }
 	ce.Stdout, ce.Stderr = f, f
 
 	j.mu.Lock()
-	j.stop = func() { _ = ce.Process.Kill() }
+	j.stop = func() { _ = KillTree(ce) }
 	j.mu.Unlock()
 
 	if err := ce.Start(); err != nil {

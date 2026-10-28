@@ -283,6 +283,11 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		shell, sargs := ShellCommand(cmdStr)
 		cmdEx := exec.CommandContext(cctx, shell, sargs...)
 		cmdEx.Dir = workdir
+		// Как в hBash: своя группа + KillTree по таймауту, WaitDelay против
+		// вечного ожидания вывода, который держит фоновый потомок.
+		PGroup(cmdEx)
+		cmdEx.Cancel = func() error { return KillTree(cmdEx) }
+		cmdEx.WaitDelay = 2 * time.Second
 		// Вход едет и в переменную окружения, и в stdin: переменная нужна
 		// командам вида «echo "$GCLI_INPUT"», stdin — тем, кто читает построчно.
 		cmdEx.Env = append(os.Environ(), envName+"="+input, "GCLI=1")
@@ -310,6 +315,10 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 				}, nil
 			} else if errors.As(err, &ee) {
 				out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
+			} else if errors.Is(err, exec.ErrWaitDelay) {
+				// Оболочка завершилась, фоновый потомок держит вывод: расширение
+				// отработало, отдаём накопленное с пометкой вместо ошибки.
+				out += "\n[фоновый потомок удерживает вывод: ожидание прекращено]"
 			} else {
 				return Result{}, fmt.Errorf("%v", err)
 			}

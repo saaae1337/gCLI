@@ -140,6 +140,16 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 	cmdEx := exec.CommandContext(cctx, shell, sargs...)
 	cmdEx.Dir = workdir
 	cmdEx.Env = append(os.Environ(), "GCLI=1")
+	// Потомок уходит в свою группу: по таймауту добиваем всё дерево,
+	// а не только оболочку (фоновые задачи наследуют вывод и без этого
+	// переживают бы kill).
+	PGroup(cmdEx)
+	cmdEx.Cancel = func() error { return KillTree(cmdEx) }
+	// Фоновый потомок («cmd &»), унаследовавший stdout/stderr, держит вывод
+	// открытым после смерти оболочки: без WaitDelay такой вызов висел бы
+	// вечно — таймаут тут бессилен, убит уже только шелл. Максимум через
+	// 2 с после завершения оболочки Run вернётся с ErrWaitDelay.
+	cmdEx.WaitDelay = 2 * time.Second
 
 	// Вывод — через Capture: первые и последние 64 КБ, середина
 	// выбрасывается. Иначе `yes` или слепая рекурсия логов уложили бы
@@ -166,6 +176,11 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 			out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
 		case ctx.Err() != nil:
 			return Result{Error: "команда прервана"}, nil
+		case errors.Is(err, exec.ErrWaitDelay):
+			// Оболочка завершилась штатно, но фоновый потомок держит вывод
+			// открытым — Wait вернулся по WaitDelay. Сама команда отработала:
+			// отдаём накопленное с пометкой, а не ошибку.
+			out += "\n[фоновый потомок удерживает вывод: ожидание прекращено]"
 		default:
 			return Result{}, fmt.Errorf("%v", err)
 		}
