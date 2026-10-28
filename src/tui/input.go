@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"io"
 	"strconv"
 	"strings"
@@ -112,9 +113,47 @@ func (r *Reader) loop() {
 			return false
 		}
 	}
+	// Вставка: от ESC[200~ до ESC[201~ всё — текст. Вставка длиннее
+	// одного чтения приходит кусками; пауза между ними — не повод
+	// рубить её на Esc: спорный Esc прерывал текущий ход, а остаток
+	// вставки печатался в поле ввода посимвольно, включая хвост [201~.
+	pasteStart := []byte("\x1b[200~")
+	pasteEnd := []byte("\x1b[201~")
+	pasteOpen := false
+	emitPaste := func(text []byte) bool {
+		t := strings.ReplaceAll(string(text), "\r\n", "\n")
+		t = strings.ReplaceAll(t, "\r", "\n")
+		return emit(Event{Paste: true, Text: t})
+	}
 	for {
 		// Пока в буфере есть полные события — отдаём их без задержки.
 		for len(pending) > 0 {
+			if pasteOpen {
+				// Внутри вставки разбираем только закрывающий маркер.
+				if end := bytes.Index(pending, pasteEnd); end >= 0 {
+					if !emitPaste(pending[:end]) {
+						return
+					}
+					pending = pending[end+len(pasteEnd):]
+					pasteOpen = false
+					continue
+				}
+				break // ждём продолжение вставки
+			}
+			if bytes.HasPrefix(pending, pasteStart) {
+				rest := pending[len(pasteStart):]
+				if end := bytes.Index(rest, pasteEnd); end >= 0 {
+					if !emitPaste(rest[:end]) {
+						return
+					}
+					pending = rest[end+len(pasteEnd):]
+				} else {
+					pending = rest
+					pasteOpen = true
+					break
+				}
+				continue
+			}
 			ev, n, need := parseKey(pending, false)
 			if n > 0 {
 				if !emit(ev) {
@@ -134,10 +173,28 @@ func (r *Reader) loop() {
 		if len(pending) > 0 {
 			// Неполная последовательность: ждём продолжение недолго —
 			// одиночный Esc должен срабатывать сразу, а не после Enter.
-			timer := time.NewTimer(35 * time.Millisecond)
+			// Вставке ждём дольше: её куски следуют друг за другом, и
+			// пауза между ними — не признак одиночного Esc.
+			wait := 35 * time.Millisecond
+			if pasteOpen {
+				wait = 250 * time.Millisecond
+			}
+			timer := time.NewTimer(wait)
 			select {
 			case chunk, ok = <-raw:
 			case <-timer.C:
+				if pasteOpen {
+					// Хвост вставки не спешит: отдаём накопленное как
+					// вставку и продолжаем ждать закрытие — закрывающий
+					// маркер, когда придёт, поглотит ветка pasteOpen.
+					if !emitPaste(pending) {
+						timer.Stop()
+						return
+					}
+					pending = pending[:0]
+					timer.Stop()
+					continue
+				}
 				ev, n, _ := parseKey(pending, true)
 				if n > 0 {
 					if !emit(ev) {
@@ -162,7 +219,14 @@ func (r *Reader) loop() {
 			}
 		}
 		if !ok {
-			// Поток кончился: ESC без продолжения — клавиша Esc.
+			// Поток кончился: ESC без продолжения — клавиша Esc,
+			// незакрытая вставка — вставка без закрывающего маркера.
+			if pasteOpen {
+				if len(pending) > 0 {
+					emitPaste(pending)
+				}
+				return
+			}
 			if len(pending) > 0 {
 				ev, n, _ := parseKey(pending, true)
 				if n > 0 {
