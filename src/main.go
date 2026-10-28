@@ -143,6 +143,15 @@ type app struct {
 	// два одинаковых «остановлен» читались бы как две разные причины.
 	missionJournalEnd bool
 
+	// msnMu — защита задания прогона и журнального состояния (mission,
+	// missionResume*, missionJournal вместе с handle). Писатели —
+	// /mission start|stop и chainRun из очереди ввода, в serve-режиме —
+	// HTTP-горутина, из хода — Stopped движка и Checkpoint. Читатели —
+	// attachMission и missionDeps в ходе из cron/цепочки. Порядок: msnMu
+	// внешний — под ним берутся a.mu (трекер), provMu (пара), svcMu
+	// (toolsReg в saveMissionState); пути наоборот нет.
+	msnMu sync.Mutex
+
 	// setupNotes — замечания при старте, показываются под баннером одной
 	// группой. Снимок startupNotes на момент последней сборки реестра.
 	setupNotes []string

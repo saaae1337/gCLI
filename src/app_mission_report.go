@@ -219,7 +219,7 @@ func (a *app) missionReport() {
 	st, hasState, _ := core.LoadMissionState(core.MissionStatePath(a.workDir))
 
 	rep := buildMissionReport(missionReportData{
-		Mission:  a.mission,
+		Mission:  a.missionJob(),
 		Tracker:  a.currentMissionTr(),
 		State:    st,
 		HasState: hasState,

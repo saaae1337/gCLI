@@ -222,6 +222,10 @@ func parseTokenNum(s string) (int, error) {
 // плодить трекер с нулевыми потолками — он бы каждую итерацию спрашивал
 // «не пора ли остановиться» и получал «нет».
 func (a *app) startTracker() bool {
+	// Задание и resume-флаги читает-пишет ход (attachMission, Checkpoint
+	// движка) параллельно с /mission start и chainRun.
+	a.msnMu.Lock()
+	defer a.msnMu.Unlock()
 	m := a.mission.Apply()
 	if !m.Long() && !m.HasAcceptance() && !m.Budgeted() {
 		a.setMissionTr(nil)
@@ -270,6 +274,24 @@ func (a *app) currentMissionTr() *core.Tracker {
 	return a.missionTr
 }
 
+// missionJob — задание прогона снимком под msnMu: /mission start
+// пишет его из очереди ввода и из HTTP-горутины, attachMission читает
+// в ходе из cron/цепочки. Mission — структура значением, но со срезом
+// Acceptance внутри: писатели заменяют её целиком через Apply, читатели
+// копию не меняют, поэтому глубокой копии не нужно.
+func (a *app) missionJob() core.Mission {
+	a.msnMu.Lock()
+	defer a.msnMu.Unlock()
+	return a.mission
+}
+
+// setMissionJob — заменить задание прогона под msnMu.
+func (a *app) setMissionJob(m core.Mission) {
+	a.msnMu.Lock()
+	a.mission = m
+	a.msnMu.Unlock()
+}
+
 // sessionCost — расход сессии в долларах (для поправки бюджета миссии).
 func (a *app) sessionCost() float64 {
 	// Снимок пары под provMu: бюджет миссии проверяется из хода, а /model
@@ -289,6 +311,8 @@ func (a *app) sessionCost() float64 {
 
 // missionDeps — собрать зависимости движка прогона для агента.
 func (a *app) missionDeps() agent.MissionDeps {
+	// Читает resume-снимок и handle журнала: зовётся только из
+	// attachMission, который держит msnMu.
 	// Снимок пары под provMu: зависимости движка прогона собираются для
 	// хода из cron/цепочки, а /model меняет пару из очереди ввода.
 	prov, mdl := a.providerModel()
@@ -326,6 +350,8 @@ func (a *app) missionDeps() agent.MissionDeps {
 // Ошибка открытия не валит запуск: журнал — страховка, а не условие
 // работы. Человек узнает о ней один раз за подсказкой и продолжает.
 func (a *app) openMissionJournal() {
+	// Вызывается только из startTracker, который держит msnMu: отдельный
+	// лок здесь не берётся.
 	if a.missionJournal != nil {
 		return
 	}
@@ -360,13 +386,15 @@ func (a *app) openMissionJournal() {
 // от трекера и «остановлен: исчерпан потолок вызовов» отсюда, — а
 // append-only журнал такие повторы не прощает.
 func (a *app) closeMissionJournal() {
+	a.msnMu.Lock()
+	defer a.msnMu.Unlock()
 	if a.missionJournal == nil {
 		return
 	}
 	// Прогон, остановленный по потолку, закрыт как оконченный: журнал не
 	// должен предлагать продолжение после исчерпанного бюджета.
 	if tr := a.currentMissionTr(); tr != nil && tr.Done() {
-		a.missionJournalStop(tr.Stopped())
+		a.missionJournalStopLocked(tr.Stopped())
 	} else if a.missionJournal.Wrote() {
 		_ = a.missionJournal.CloseRecord("сеанс закрыт, прогон не окончен: "+a.missionStatusLine(), a.currentMissionTr())
 	}
@@ -382,6 +410,15 @@ func (a *app) closeMissionJournal() {
 // дописал бы то же самое ещё раз. В append-only журнале два одинаковых
 // «остановлен» читаются как две разные причины, а это враньё.
 func (a *app) missionJournalStop(reason string) {
+	a.msnMu.Lock()
+	defer a.msnMu.Unlock()
+	a.missionJournalStopLocked(reason)
+}
+
+// missionJournalStopLocked — тело missionJournalStop под msnMu. Публичный
+// вариант зовут Stopped движка, /mission stop и chainRun; Locked-вариант —
+// closeMissionJournal, который держит msnMu сам.
+func (a *app) missionJournalStopLocked(reason string) {
 	if a.missionJournal == nil || a.missionJournalEnd {
 		return
 	}
@@ -402,6 +439,7 @@ func (a *app) missionJournalStop(reason string) {
 // навсегда, и в журнале не останется ни одной записи о том, что
 // продолжать было от чего.
 func (a *app) noteMissionResumed() {
+	// Зовётся только из attachMission под msnMu: отдельный лок не берётся.
 	if a.missionJournal == nil || a.missionResumeJournalled {
 		return
 	}
@@ -424,7 +462,8 @@ const resumeWindow = 24 * time.Hour
 // обрыва должен увидеть, что работа не начинается с нуля. Ничего не
 // нашлось — это норма, и тогда в статусе просто нет строки о прошлом прогоне.
 func (a *app) loadMissionResume() {
-	if a.mission.Objective == "" && !a.mission.Long() && !a.mission.Budgeted() {
+	job := a.missionJob()
+	if job.Objective == "" && !job.Long() && !job.Budgeted() {
 		// Прогона в этом запуске нет — подхватывать нечего.
 		return
 	}
@@ -526,9 +565,10 @@ func (a *app) saveMissionState(summary string) error {
 	if _, err := reg.AutoHandoff(summary); err != nil {
 		return err
 	}
+	job := a.missionJob()
 	st := core.MissionState{
-		Objective: a.mission.Objective,
-		Mode:      string(a.mission.Mode),
+		Objective: job.Objective,
+		Mode:      string(job.Mode),
 		Summary:   summary,
 		Updated:   time.Now().Format(time.RFC3339),
 		Status:    a.missionStatusLine(),
@@ -633,7 +673,7 @@ func (a *app) missionStart(args string) error {
 // доехать до него ответом, иначе отказ выглядит как успех.
 func (a *app) startMission(m core.Mission) error {
 	if m.Objective == "" {
-		m.Objective = a.mission.Objective
+		m.Objective = a.missionJob().Objective
 	}
 	if m.Mode == core.MissionNormal && !m.Budgeted() && m.Deadline <= 0 && len(m.Acceptance) == 0 {
 		err := errors.New("нечего запускать: задай режим, срок или бюджет — " +
@@ -641,7 +681,7 @@ func (a *app) startMission(m core.Mission) error {
 		a.ui.Err(err.Error())
 		return err
 	}
-	a.mission = m.Apply()
+	a.setMissionJob(m.Apply())
 	if !a.startTracker() {
 		err := errors.New("задание не задаёт ни одного потолка — прогон вёл бы себя как обычный ход")
 		a.ui.Err(err.Error())
@@ -649,10 +689,10 @@ func (a *app) startMission(m core.Mission) error {
 	}
 	// Состояние пишется сразу: человек уйдёт через минуту, и прогон
 	// должен пережить перезапуск, а не начинаться заново.
-	if err := a.saveMissionState("прогон запущен: " + a.mission.Summary()); err != nil {
+	if err := a.saveMissionState("прогон запущен: " + a.missionJob().Summary()); err != nil {
 		a.ui.Warn("состояние прогона не сохранено: " + err.Error())
 	}
-	a.ui.Info("прогон запущен: " + a.mission.Summary())
+	a.ui.Info("прогон запущен: " + a.missionJob().Summary())
 	if tr := a.currentMissionTr(); tr != nil {
 		a.ui.Println("  " + tr.Status())
 	}

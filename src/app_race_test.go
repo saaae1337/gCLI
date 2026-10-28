@@ -477,6 +477,44 @@ func TestStatusBarsRace(t *testing.T) {
 	}
 }
 
+// TestMissionRace — /mission start пишет задание из очереди ввода и
+// из HTTP-горутины, chainRun — из цикла цепочки, а attachMission и
+// missionDeps читают то же самое в ходе из cron-горутины; Stopped
+// движка и /mission stop пишут missionJournalEnd. Без msnMu «go test
+// -race» ловит гонку структуры Mission и флагов журнала.
+func TestMissionRace(t *testing.T) {
+	a, _ := cmdApp(t)
+
+	var wg sync.WaitGroup
+	for w := 0; w < 2; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				m := core.Mission{Objective: fmt.Sprintf("цель-%d-%d", w, i), TokenBudget: 1000}
+				a.setMissionJob(m.Apply())
+				a.startTracker()
+			}
+		}(w)
+	}
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				job := a.missionJob()
+				_ = job.Summary()
+				a.missionJournalStop(core.StopCancelled)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if job := a.missionJob(); job.Objective == "" {
+		t.Error("после 100 записей задание не может быть пустым")
+	}
+}
+
 // TestSharedObjectsRace — /agents par|depth подменяет a.pool, а buildTools
 // (/sandbox, /perms reset, /ext trust) подменяет a.tools из очереди ввода;
 // ход и субагенты в это время берут те же объекты (спавн, self_report,

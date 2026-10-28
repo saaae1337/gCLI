@@ -112,7 +112,7 @@ func (a *app) chainRun() {
 		// Раньше индекс писался на диск до хода — упавший шаг значился
 		// «готово», и его цель терялась без предупреждения.
 		stepNo := a.missionChain.Index + 1
-		a.mission = next.Apply()
+		a.setMissionJob(next.Apply())
 		if !a.startTracker() {
 			a.ui.Warn("шаг " + strconv.Itoa(stepNo) + " не задаёт потолков — пропущен")
 			a.missionChain.Index++
