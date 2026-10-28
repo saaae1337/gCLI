@@ -203,3 +203,49 @@ func TestProviderModelPairRace(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// TestSessionCountersRace — /status и /cost читают счётчики из очереди
+// ввода, пока «cron-ход» и горутины субагентов пишут usage, экономию и
+// журнал запусков. Команды зовутся целиком: снимки внутри них — часть
+// контракта, и гонка в собранной панели ловится так же, как в accessors.
+func TestSessionCountersRace(t *testing.T) {
+	a, _ := cmdApp(t)
+
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				a.AddUsage(core.Usage{PromptTokens: 2, CompletionTokens: 3})
+				a.RecordEconomy(core.EconomyStats{Requests: 1})
+				a.recordSubagent(core.SubagentRecord{ID: "s", Name: "исследователь", Status: "done"})
+			}
+		}()
+	}
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 25; i++ {
+				a.cmdStatus()
+				a.cmdUsage()
+				_ = a.sessionUsage()
+				_ = a.sessionEconomy()
+				_, _, _ = a.sessionCounters()
+				_ = a.subagentRunCount()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got, want := a.sessionUsage().Total(), 4*50*5; got != want {
+		t.Errorf("итог usage = %d, ожидалось %d — часть обновлений потеряна", got, want)
+	}
+	if got := a.sessionEconomy().Requests; got != 200 {
+		t.Errorf("запросов в экономии = %d, ожидалось 200", got)
+	}
+	if got := a.subagentRunCount(); got != 40 {
+		t.Errorf("журнал субагентов = %d записей, ожидалось 40 (потолок)", got)
+	}
+}

@@ -209,6 +209,12 @@ func (a *app) cmdHelp() {
 }
 
 func (a *app) cmdStatus() {
+	// Снимки под sessMu: панель собирается в очереди ввода, а счётчики
+	// (usage, чекпоинты, история) пишут ход и горутины субагентов
+	// параллельно, в том числе из cron-хода.
+	msgs := a.Messages()
+	id, _, turnsN := a.sessionCounters()
+	u := a.sessionUsage()
 	a.ui.Println("")
 	a.ui.KVPairs([][2]string{
 		{"Провайдер", a.prov.Label + "  (" + a.prov.ID + ")"},
@@ -220,9 +226,9 @@ func (a *app) cmdStatus() {
 		{"Субагенты", agentsStatus(a)},
 		{"Автопилот", autopilotStatus(a) + " · " + autopilotHint(a)},
 		{"Размышления", a.repo.Cfg.Think},
-		{"Сессия", a.sess.ID + " · сообщений: " + strconv.Itoa(len(a.sess.Messages)) + " · ходов: " + strconv.Itoa(a.sess.Turns)},
-		{"Контекст", "~" + core.Kfmt(core.EstimateContext(a.sess.Messages)) + " ток. / порог " + core.Kfmt(a.autoCompactLimit())},
-		{"Токены", "↑" + core.Kfmt(a.sess.Usage.PromptTokens) + " ↓" + core.Kfmt(a.sess.Usage.CompletionTokens)},
+		{"Сессия", id + " · сообщений: " + strconv.Itoa(len(msgs)) + " · ходов: " + strconv.Itoa(turnsN)},
+		{"Контекст", "~" + core.Kfmt(core.EstimateContext(msgs)) + " ток. / порог " + core.Kfmt(a.autoCompactLimit())},
+		{"Токены", "↑" + core.Kfmt(u.PromptTokens) + " ↓" + core.Kfmt(u.CompletionTokens)},
 		{"Скиллы", strconv.Itoa(len(a.tools.LoadSkills()))},
 		{"Цвет", a.ui.ColorLevel().String() +
 			" · оболочка: " + tools.ShellName()},
@@ -253,7 +259,7 @@ func agentsStatus(a *app) string {
 		return "выключены (/agents on)"
 	}
 	return fmt.Sprintf("включены · параллельно: %d · глубина: %d · запусков: %d",
-		a.repo.Cfg.SubMaxPar, a.repo.Cfg.SubMaxDepth, len(a.sess.SubagentRuns))
+		a.repo.Cfg.SubMaxPar, a.repo.Cfg.SubMaxDepth, a.subagentRunCount())
 }
 
 // autopilotStatus — состояние автопилота одной строкой.
@@ -925,18 +931,23 @@ func (a *app) cmdClear() {
 }
 
 func (a *app) cmdUsage() {
-	est := core.EstimateContext(a.sess.Messages)
+	// Снимки под sessMu: usage и чекпоинты пишут ход и горутины субагентов
+	// параллельно с этой панелью (в том числе из cron-хода).
+	msgs := a.Messages()
+	est := core.EstimateContext(msgs)
+	_, ckptN, _ := a.sessionCounters()
+	u := a.sessionUsage()
 	limit := a.autoCompactLimit()
 	bar := a.ui.Bar(est, limit, 20)
 	a.ui.Println("")
 	a.ui.Println("  " + a.ui.Head("Токены (по данным API)"))
 	a.ui.KVPanel("Расход", [][2]string{
-		{"вход", a.ui.Accent("↑ " + core.Kfmt(a.sess.Usage.PromptTokens))},
-		{"выход", a.ui.Accent("↓ " + core.Kfmt(a.sess.Usage.CompletionTokens))},
-		{"всего", a.ui.Bold(core.Kfmt(a.sess.Usage.Total()))},
+		{"вход", a.ui.Accent("↑ " + core.Kfmt(u.PromptTokens))},
+		{"выход", a.ui.Accent("↓ " + core.Kfmt(u.CompletionTokens))},
+		{"всего", a.ui.Bold(core.Kfmt(u.Total()))},
 		{"контекст", bar + "  " + core.Kfmt(est) + " / " + core.Kfmt(limit)},
 		{"модель", a.model + " · лимит " + core.Kfmt(a.prov.CtxLimit())},
-		{"сообщений", fmt.Sprintf("%d · чекпоинтов: %d", len(a.sess.Messages), len(a.sess.Checkpoints))},
+		{"сообщений", fmt.Sprintf("%d · чекпоинтов: %d", len(msgs), ckptN)},
 	})
 	a.printEconomy()
 	if est >= limit {
@@ -951,19 +962,23 @@ func (a *app) cmdUsage() {
 // среднем, 18 тысяч срезано подрезкой» — это уже картина расхода, по
 // которой видно, что именно стоит поправить.
 func (a *app) printEconomy() {
-	e := a.sess.Economy
+	// Глубокий снимок под sessMu: TopTool ниже идёт по карте ToolTokens,
+	// а AddCall пишет в неё из горутин субагентов — живая карта здесь
+	// падала бы фатально на итерации против записи.
+	e := a.sessionEconomy()
 	if e.Requests == 0 && e.PrunedTokens == 0 && e.CacheHits == 0 {
 		return
 	}
+	u := a.sessionUsage()
 	a.ui.Println("")
 	a.ui.Println("  " + a.ui.Head("Экономия"))
 	rows := [][2]string{
 		{"запросов к модели", core.Kfmt(e.Requests)},
 	}
-	if e.Requests > 0 && a.sess.Usage.Total() > 0 {
+	if e.Requests > 0 && u.Total() > 0 {
 		rows = append(rows, [2]string{
 			"в среднем на запрос",
-			core.Kfmt(a.sess.Usage.Total()/e.Requests) + " ток.",
+			core.Kfmt(u.Total()/e.Requests) + " ток.",
 		})
 	}
 	if e.PrunedTokens > 0 {

@@ -96,6 +96,65 @@ func (a *app) AddRequest(u core.Usage, d time.Duration) {
 // Turns — число ходов.
 func (a *app) Turns() int { return a.sess.Turns }
 
+// sessionUsage — снимок счётчиков токенов под sessMu.
+//
+// Пишут ход и горутины субагентов (AddUsage, AddRequest), а читают панели
+// /status и /cost из очереди ввода, пока cron-ход идёт в фоне. Без снимка
+// это гонка на числах.
+func (a *app) sessionUsage() core.Usage {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Usage
+}
+
+// sessionEconomy — глубокий снимок счётчиков экономии под sessMu.
+//
+// Копия обязана быть глубокой: ToolCalls и ToolTokens — карты, RecordEconomy
+// и AddCall пишут в них из горутин субагентов, а /cost зовёт TopTool,
+// который идёт по карте. Мелкая копия делит карту с писателем — итерация
+// против записи падает фатально («concurrent map iteration and map write»),
+// а не просто ловится гонкой.
+func (a *app) sessionEconomy() core.EconomyStats {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	e := a.sess.Economy
+	if n := len(e.ToolCalls); n > 0 {
+		tc := make(map[string]int, n)
+		for k, v := range e.ToolCalls {
+			tc[k] = v
+		}
+		e.ToolCalls = tc
+	}
+	if n := len(e.ToolTokens); n > 0 {
+		tt := make(map[string]int, n)
+		for k, v := range e.ToolTokens {
+			tt[k] = v
+		}
+		e.ToolTokens = tt
+	}
+	return e
+}
+
+// sessionCounters — ID, число чекпоинтов и ходов одним снимком под sessMu.
+//
+// Чекпоинты дописывает ход (снапшоты миссий), а /status и /cost читают
+// числа из очереди ввода. Длину живого слайса без блокировки читать
+// нельзя — append пишет заголовок.
+func (a *app) sessionCounters() (id string, checkpoints, turns int) {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.ID, len(a.sess.Checkpoints), a.sess.Turns
+}
+
+// subagentRunCount — число запусков субагентов под sessMu: журнал
+// пополняют горутины субагентов (recordSubagent), /status читает из
+// очереди ввода.
+func (a *app) subagentRunCount() int {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return len(a.sess.SubagentRuns)
+}
+
 // ---------- Подтверждения ----------
 
 // permDecision — что говорят правила разрешений об этом действии.
