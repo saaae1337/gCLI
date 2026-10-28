@@ -1312,7 +1312,6 @@ func collectFiles(root string) []string {
 		".idea": true, ".vscode": true,
 	}
 	var out []string
-	depth := 0
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -1322,8 +1321,16 @@ func collectFiles(root string) []string {
 			if path != root && (skip[name] || strings.HasPrefix(name, ".")) {
 				return filepath.SkipDir
 			}
-			depth++
-			if depth > 6 {
+			// Глубина — по пути, а не счётчиком: счётчик рос на входе в
+			// каталог и никогда не убывал, так что «глубиной» было число
+			// уже обойдённых каталогов. Корень съедал единицу, и в проекте
+			// с шестью каталогами хвост верхнеуровневых (в самом gCLI —
+			// tui/, ui/ и wcwidth/) молча выпадал из @-подсказки файлов.
+			rel, rerr := filepath.Rel(root, path)
+			if rerr != nil {
+				return filepath.SkipDir
+			}
+			if rel != "." && strings.Count(rel, string(filepath.Separator))+1 > 6 {
 				return filepath.SkipDir
 			}
 			return nil
