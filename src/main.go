@@ -82,6 +82,13 @@ type app struct {
 
 	sess *core.Session
 
+	// sessSwap — барьер между ходом и подменой сессии. Ход держит RLock
+	// всё время работы; /fork, /resume и /clear берут Lock на подмену
+	// a.sess. Менять указатель под ногами идущего хода нельзя: история и
+	// usage уйдут в чужую сессию, а ход из cron/watch не прикрыт busy-
+	// очередью TUI, поэтому барьер общий для всех путей запуска хода.
+	sessSwap sync.RWMutex
+
 	stream *ui.Stream
 
 	mu      sync.Mutex
@@ -1383,8 +1390,23 @@ func (w *keyWatcher) stopWatcher() {
 	<-w.done
 }
 
+// turnActive — идёт ли сейчас ход. Команды, подменяющие сессию (/fork,
+// /resume, /clear), проверяют это до Lock в sessSwap: предупреждение
+// честнее молчаливого ожидания, а Lock после проверки закрывает окно,
+// в котором cron-ход мог начаться между проверкой и подменой.
+func (a *app) turnActive() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.running
+}
+
 // turn — один ход: пользовательский ввод → агентный цикл.
 func (a *app) turn(text string) error {
+	// Ход держит барьер на подмену сессии: без него /fork или /clear,
+	// выполненные в TUI во время cron-хода, подменяли бы a.sess прямо
+	// под ногами агента.
+	a.sessSwap.RLock()
+	defer a.sessSwap.RUnlock()
 	if os.Getenv("GCLI_DEBUG_BODY") != "" {
 		fmt.Fprintf(os.Stderr, "TURN IN: %q (len=%d)\n", text, len(text))
 	}

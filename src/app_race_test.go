@@ -9,8 +9,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"gcli/core"
 )
 
 // TestSnapErrRace — запись snapErr из «cron-хода» против чтения в /snapshots.
@@ -86,5 +90,68 @@ func TestSnapErrOverwrittenKeepsLast(t *testing.T) {
 	a.setSnapErr(errors.New("вторая"))
 	if got := a.lastSnapErr().Error(); got != "вторая" {
 		t.Errorf("snapErr = %q, ожидалось %q", got, "вторая")
+	}
+}
+
+// TestSessionSwapRefusedDuringTurn — /fork, /clear и /resume во время хода
+// отказывают с предупреждением и не трогают сессию: подменять a.sess под
+// ногами идущего хода — потерянная история и usage в чужой сессии.
+// Ход из cron/watch не прикрыт busy-очередью TUI, поэтому проверка нужна
+// самой команде, а не только очереди ввода.
+func TestSessionSwapRefusedDuringTurn(t *testing.T) {
+	a, buf := cmdApp(t)
+	a.mu.Lock()
+	a.running = true
+	a.mu.Unlock()
+	old := a.sess.ID
+
+	for _, cmd := range []struct {
+		name string
+		run  func()
+	}{
+		{"/fork", func() { a.cmdFork("") }},
+		{"/clear", func() { a.cmdClear() }},
+		{"/resume", func() { a.cmdResume("1") }},
+	} {
+		buf.Reset()
+		cmd.run()
+		if !strings.Contains(out(buf), "ход ещё идёт") {
+			t.Errorf("%s во время хода обязан предупреждать, вывод:\n%s", cmd.name, out(buf))
+		}
+	}
+	if a.sess.ID != old {
+		t.Error("подмена сессии прошла, хотя ход ещё идёт")
+	}
+}
+
+// TestForkWaitsForTurnBarrier — жёсткий барьер: между проверкой running и
+// Lock мог начаться cron-ход, поэтому /fork обязан не подменять сессию,
+// пока ход держит RLock, и выполнить подмену сразу после его снятия.
+func TestForkWaitsForTurnBarrier(t *testing.T) {
+	a, buf := cmdApp(t)
+	a.sess.Messages = msgsOf(core.RoleUser, core.RoleAssistant)
+	old := a.sess.ID
+
+	a.sessSwap.RLock() // имитируем ход, удерживающий барьер
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.cmdFork("")
+	}()
+	time.Sleep(50 * time.Millisecond) // /fork обязан висеть на Lock
+	if a.sess.ID != old {
+		t.Fatal("подмена сессии произошла, пока ход держит барьер")
+	}
+	a.sessSwap.RUnlock()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("/fork не выполнился после снятия барьера")
+	}
+	if a.sess.ID == old {
+		t.Fatal("после снятия барьера форк должен был состояться")
+	}
+	if !strings.Contains(out(buf), "форк создан") {
+		t.Errorf("форк обязан отчитаться, вывод:\n%s", out(buf))
 	}
 }

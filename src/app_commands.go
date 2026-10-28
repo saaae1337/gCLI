@@ -841,6 +841,10 @@ func (a *app) cmdSessions() {
 }
 
 func (a *app) cmdResume(arg string) {
+	if a.turnActive() {
+		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /resume подменяет сессию под ногами хода")
+		return
+	}
 	ss := a.repo.ListSessionInfos()
 	if len(ss) == 0 {
 		a.ui.Info("сохранённых сессий нет")
@@ -865,6 +869,10 @@ func (a *app) cmdResume(arg string) {
 		}
 		idx = n - 1
 	}
+	// Барьер подмены: номер могли спрашивать долго — за это время мог
+	// начаться ход (cron, watch). Lock дождётся его конца.
+	a.sessSwap.Lock()
+	defer a.sessSwap.Unlock()
 	loaded, err := a.repo.LoadSession(ss[idx].ID)
 	if err != nil {
 		a.ui.Err("не удалось загрузить: " + err.Error())
@@ -890,8 +898,16 @@ func (a *app) cmdResume(arg string) {
 }
 
 func (a *app) cmdClear() {
+	if a.turnActive() {
+		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /clear подменяет сессию под ногами хода")
+		return
+	}
 	// Экран чистим до сообщения о новой сессии: иначе в ленте остался бы
 	// старый диалог, к которому эта сессия уже не относится.
+	// Барьер подмены берём до сохранения старой сессии: между проверкой
+	// выше и этой точкой мог начаться ход (cron, watch).
+	a.sessSwap.Lock()
+	defer a.sessSwap.Unlock()
 	a.ui.ClearScreen()
 	a.saveSession()
 	a.sess = a.repo.NewSession(a.prov.ID, a.model, a.workDir)
