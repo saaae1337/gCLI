@@ -1681,7 +1681,7 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 	a.mu.Lock()
 	a.lastAgent = ag
 	a.mu.Unlock()
-	if a.repo.Cfg.PlanMode {
+	if a.cfgPlanMode() {
 		ag.System = planModeSystem
 	}
 	return ag
@@ -1897,7 +1897,7 @@ func (a *app) repl() {
 				// Блок размышлений уже напечатан: обычная усадка нарисовала бы
 				// второго кота и вторую строку состояния подряд. Повторно
 				// Ctrl+O оставляет в том же режиме — пока не напечатано новое.
-				a.ui.Prompt(a.sess.AgentMode)
+				a.ui.Prompt(a.agentMode())
 				a.clearReasonPast()
 				a.ui.MascotIdleStart()
 			case header:
@@ -1912,14 +1912,14 @@ func (a *app) repl() {
 				header = false
 				// Якорь анимации — только после усадки: курсор стоит на
 				// строке приглашения, и перерисовка знает, где кот.
-				a.ui.Prompt(a.sess.AgentMode)
+				a.ui.Prompt(a.agentMode())
 				a.ui.MascotIdleStart()
 			default:
 				// Перепечатка приглашения после Enter: курсор уехал на
 				// строку ниже, старая привязка устарела — кот замирает
 				// до следующей усадки. Иначе «слепой» прыжок курсора
 				// вверх попадал по строке состояния.
-				a.ui.Prompt(a.sess.AgentMode)
+				a.ui.Prompt(a.agentMode())
 			}
 		}
 		if !a.stdin.Scan() {
@@ -2009,6 +2009,9 @@ func (a *app) metrics() ui.Metrics {
 		m.ContextMax = prov.CtxLimitFor(mdl)
 		provID = prov.ID
 	}
+	// План под cfgMu и ДО sessMu: правило порядка запрещает вкладывать
+	// cfgMu в sessMu — сначала чужой лок снимается, потом берётся этот.
+	plan := a.cfgPlanMode()
 	sessMu.Lock()
 	if a.sess != nil {
 		m.Context = core.EstimateContext(a.sess.Messages)
@@ -2020,7 +2023,7 @@ func (a *app) metrics() ui.Metrics {
 			m.CostKnown = true
 		}
 		m.Autopilot = a.sess.Perms.Autopilot || a.sess.Perms.AutopilotAll
-		m.Plan = a.repo.Cfg.PlanMode
+		m.Plan = plan
 	}
 	sessMu.Unlock()
 
@@ -2072,36 +2075,54 @@ func (a *app) agentActiveEnd() {
 // statusItems — элементы нижней строки состояния (стиль Claude Code).
 // Порядок повторяет референс: модель · состояние · контекст · режимы.
 func (a *app) statusItems() []ui.StatusItem {
+	// Пара под provMu: /model может прийти из очереди ввода, пока REPL
+	// собирает строку состояния после хода.
+	prov, mdl := a.providerModel()
 	items := []ui.StatusItem{
-		{Text: a.model, Kind: ui.StatusMuted},
+		{Text: mdl, Kind: ui.StatusMuted},
 		{Text: "idle", Kind: ui.StatusAccent},
 	}
+	// Поля сессии — снимком под sessMu: счётчики и AgentMode пишет ход
+	// из cron-горутины, не прикрытой busy-очередью REPL, а Perms —
+	// confirm в ходе против /yolo и /autopilot.
+	sessMu.Lock()
+	reqs, agentOn, auto, autoAll, bashAll := 0, false, false, false, false
+	if a.sess != nil {
+		reqs = a.sess.Economy.Requests
+		agentOn = a.sess.AgentMode
+		auto = a.sess.Perms.Autopilot
+		autoAll = a.sess.Perms.AutopilotAll
+		bashAll = a.sess.Perms.BashAll
+	}
+	sessMu.Unlock()
 	// Сколько запросов стоила сессия: цифра рядом с моделью отвечает на
 	// вопрос «сколько это заняло» раньше, чем человек спросит.
-	if n := a.sess.Economy.Requests; n > 0 {
-		items = append(items, ui.StatusItem{Text: fmt.Sprintf("%d запр.", n), Kind: ui.StatusMuted})
+	if reqs > 0 {
+		items = append(items, ui.StatusItem{Text: fmt.Sprintf("%d запр.", reqs), Kind: ui.StatusMuted})
 	}
 	// Каким ключом идёт запрос: при пуле из нескольких ключей это видно
 	// сразу, иначе расход по ключам не свести.
-	if n := a.prov.CurrentKeyIndex(); n > 1 {
-		items = append(items, ui.StatusItem{Text: fmt.Sprintf("ключ #%d", n), Kind: ui.StatusMuted})
+	if prov != nil {
+		if n := prov.CurrentKeyIndex(); n > 1 {
+			items = append(items, ui.StatusItem{Text: fmt.Sprintf("ключ #%d", n), Kind: ui.StatusMuted})
+		}
 	}
-	if a.sess.AgentMode {
+	if agentOn {
 		items = append(items, ui.StatusItem{Text: "agent", Kind: ui.StatusAccent})
 	} else {
 		items = append(items, ui.StatusItem{Text: "chat", Kind: ui.StatusMuted})
 	}
-	if a.repo.Cfg.PlanMode {
+	if a.cfgPlanMode() {
 		items = append(items, ui.StatusItem{Text: "plan", Kind: ui.StatusWarn})
 	}
-	if a.sess.Perms.AutopilotAll {
+	if autoAll {
 		items = append(items, ui.StatusItem{Text: "autopilot: all", Kind: ui.StatusErr})
-	} else if a.sess.Perms.Autopilot {
+	} else if auto {
 		items = append(items, ui.StatusItem{Text: "autopilot", Kind: ui.StatusAccent})
-	} else if a.sess.Perms.BashAll {
+	} else if bashAll {
 		items = append(items, ui.StatusItem{Text: "yolo", Kind: ui.StatusWarn})
 	}
-	if !a.prov.HasKey() {
+	if prov == nil || !prov.HasKey() {
 		items = append(items, ui.StatusItem{Text: "нет ключа — /setup", Kind: ui.StatusErr})
 	}
 	return items

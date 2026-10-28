@@ -419,6 +419,64 @@ func TestCfgRace(t *testing.T) {
 	}
 }
 
+// TestStatusBarsRace — нижняя строка состояния и панель метрик читают
+// сессию, провайдера и конфиг вчистую, а писать их может кто угодно:
+// счётчики и AgentMode — ход из cron-горутины, Perms — confirm в ходе
+// против /yolo, пару провайдер+модель — /model, план — /plan. REPL
+// вызывает statusItems/metrics после хода из своей горутины и не
+// прикрыт busy-очередью TUI, поэтому без снимков под sessMu/provMu/
+// cfgMu «go test -race» ловит чтение против записи.
+func TestStatusBarsRace(t *testing.T) {
+	a, _ := cmdApp(t)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Имитация хода из cron-горутины: счётчики, режим, гранты.
+		for i := 0; i < 80; i++ {
+			a.AddUsage(core.Usage{PromptTokens: 2, CompletionTokens: 3})
+			a.RecordEconomy(core.EconomyStats{Requests: 1})
+			a.setAgentMode(i%2 == 0)
+			a.grantBashAll()
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Имитация очереди ввода: /plan меняет план под cfgMu.
+		for i := 0; i < 40; i++ {
+			a.cmdPlan([]string{"on", "off"}[i%2])
+		}
+	}()
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				items := a.statusItems()
+				if len(items) < 2 {
+					t.Errorf("строка состояния пуста: %d элементов", len(items))
+				}
+				m := a.metrics()
+				if m.Context < 0 {
+					t.Errorf("оценка контекста не может быть отрицательной: %d", m.Context)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Грант yolo, выданный «в ходе», обязан дожить до конца: статусная
+	// строка его только читает, писать не имеет права.
+	if !a.permBashAll() {
+		t.Error("грант BashAll потерялся против чтений статусной строки")
+	}
+	if got := a.sessionEconomy().Requests; got != 80 {
+		t.Errorf("запросов в экономии = %d, ожидалось 80", got)
+	}
+}
+
 // TestSharedObjectsRace — /agents par|depth подменяет a.pool, а buildTools
 // (/sandbox, /perms reset, /ext trust) подменяет a.tools из очереди ввода;
 // ход и субагенты в это время берут те же объекты (спавн, self_report,
