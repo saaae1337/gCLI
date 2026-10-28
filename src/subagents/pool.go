@@ -322,6 +322,7 @@ func (p *Pool) Spawn(ctx context.Context, spec Spec) (out Outcome, err error) {
 	run.cancel = cancel
 	p.runs[run.ID] = run
 	p.order = append(p.order, run.ID)
+	p.trimRunsLocked()
 	p.mu.Unlock()
 
 	// runner выполняется БЕЗ mu: он работает минуты, а mu нужен UI
@@ -400,6 +401,7 @@ func (p *Pool) reuse(spec Spec, out Outcome, kind Reuse, from string, at time.Ti
 	p.mu.Lock()
 	p.runs[r.ID] = r
 	p.order = append(p.order, r.ID)
+	p.trimRunsLocked()
 	p.mu.Unlock()
 	return out, nil
 }
@@ -477,6 +479,35 @@ func (p *Pool) autoName(t Type) string {
 	// получали бы один и тот же номер.
 	p.nameSeq[t]++
 	return fmt.Sprintf("%s-%d", base, p.nameSeq[t])
+}
+
+// maxRunsHistory — потолок истории запусков субагентов.
+const maxRunsHistory = 128
+
+// trimRunsLocked — вытеснить старейшие завершённые запуски сверх потолка.
+//
+// Вызывается под p.mu после добавления запуска. Run хранит полный отчёт
+// (Full) для agent_status — без вытеснения долгая сессия с активным
+// делегированием копила бы сотни отчётов без границ (кэш переиспользования
+// при этом ограничен, а журнал запусков — нет). Идущие запуски не
+// трогаем: их держат UI и Cancel; они вытеснятся следующими проходами,
+// когда завершатся.
+func (p *Pool) trimRunsLocked() {
+	excess := len(p.order) - maxRunsHistory
+	if excess <= 0 {
+		return
+	}
+	kept := make([]string, 0, len(p.order))
+	for _, id := range p.order {
+		r := p.runs[id]
+		if excess > 0 && r != nil && r.Status != StatusRunning {
+			delete(p.runs, id)
+			excess--
+			continue
+		}
+		kept = append(kept, id)
+	}
+	p.order = kept
 }
 
 // All — все запуски (новые первыми).
