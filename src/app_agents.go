@@ -728,7 +728,7 @@ func (a *app) cmdExport() {
 	p := filepath.Join(dir, "gcli-"+a.sess.ID+".md")
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Диалог gcli · %s\n\n", a.sess.Title)
+	fmt.Fprintf(&b, "# Диалог gcli · %s\n\n", a.sessionTitle())
 	fmt.Fprintf(&b, "- Сессия: `%s`\n- Создана: %s\n- Провайдер: %s (%s)\n- Модель: %s\n",
 		a.sess.ID, a.sess.Created.Format("02.01.2006 15:04"), a.prov.Label, a.prov.ID, a.model)
 

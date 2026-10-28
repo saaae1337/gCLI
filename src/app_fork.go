@@ -90,13 +90,17 @@ func (a *app) cmdFork(rest string) {
 		a.ui.Warn("в этом месте истории резать нельзя (открытые вызовы инструментов) — возьми другой номер")
 		return
 	}
+	// Снимок сессии под sessMu: ход (в т.ч. из cron-горутины) может дописывать
+	// заголовок, usage и план прямо во время /fork — без лока копия вышла бы рваной.
+	sessMu.Lock()
 	cp := *a.sess
+	sessMu.Unlock()
 	cp.ID = time.Now().Format("20060102-150405") + "-" + core.RandID(4)
-	cp.Title = "fork: " + core.Truncate(core.OneLine(a.sess.Title), 46)
+	cp.Title = "fork: " + core.Truncate(core.OneLine(cp.Title), 46)
 	cp.Created = time.Now()
 	cp.Updated = time.Now()
 	cp.Messages = append([]core.Message(nil), msgs[:cut]...)
-	cp.Todos = append([]core.Todo(nil), a.sess.Todos...)
+	cp.Todos = append([]core.Todo(nil), cp.Todos...)
 	cp.Turns = 0
 	cp.Usage = core.Usage{}
 	cp.Stats = core.Stats{}

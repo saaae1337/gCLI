@@ -64,7 +64,7 @@ func (a *app) handleCommand(line string) bool {
 	case "/mission":
 		a.cmdMission(rest)
 	case "/todos":
-		a.ui.RenderTodos(a.sess.Todos)
+		a.ui.RenderTodos(a.sessionTodos())
 		a.ui.Println("")
 	case "/compact":
 		a.cmdCompact()
@@ -1732,8 +1732,8 @@ func (a *app) cmdSnapshots() {
 		a.ui.Warn("git не найден в PATH — снимки недоступны")
 		return
 	}
-	if a.snapErr != nil {
-		a.ui.Warn("последняя ошибка снимков: " + a.snapErr.Error())
+	if err := a.lastSnapErr(); err != nil {
+		a.ui.Warn("последняя ошибка снимков: " + err.Error())
 	}
 	snaps, err := core.ListSnapshots(a.workDir)
 	if err != nil {

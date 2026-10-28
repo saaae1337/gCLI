@@ -237,6 +237,23 @@ type app struct {
 	snapErr error
 }
 
+// setSnapErr/lastSnapErr — запись и чтение snapErr под мьютексом.
+//
+// Писатель — turn(): он зовётся не только из горутины ввода, но и из cron,
+// watch и цепочки миссий; читатель — /snapshots из другой горутины.
+// Без лока это была бы гонка на интерфейсе error.
+func (a *app) setSnapErr(err error) {
+	a.mu.Lock()
+	a.snapErr = err
+	a.mu.Unlock()
+}
+
+func (a *app) lastSnapErr() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.snapErr
+}
+
 // reasonHint — подсказка на строке ожидания.
 const reasonHint = "(Ctrl+O — показать размышления)"
 
@@ -990,6 +1007,14 @@ func (a *app) sessionTodos() []core.Todo {
 	return out
 }
 
+// sessionTitle — заголовок сессии для UI-потока: его пишет turn()
+// (в том числе из cron-горутины), а читают команды другого потока.
+func (a *app) sessionTitle() string {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return a.sess.Title
+}
+
 func (a *app) onTodos(todos []tools.TodoItem) {
 	if a.quiet {
 		return
@@ -1364,16 +1389,20 @@ func (a *app) turn(text string) error {
 		fmt.Fprintf(os.Stderr, "TURN IN: %q (len=%d)\n", text, len(text))
 	}
 	text = tools.ApplyMentions(a.workDir, text)
+	// Заголовок — под sessMu: turn() зовётся и из cron/watch/цепочки,
+	// а /export и /fork читают его из другой горутины.
+	sessMu.Lock()
 	if a.sess.Title == "" {
 		a.sess.Title = core.Truncate(core.OneLine(text), 60)
 	}
+	sessMu.Unlock()
 
 	// Снимок проекта до начала хода: /revert должен уметь откатить и
 	// «плохой» ход целиком — включая правки, сделанные bash-командами,
 	// мимо чекпоинтов /undo. Ошибка не ломает ход: снапшоты — страховка.
 	if a.repo.Cfg.SnapshotsEnabled() {
 		if _, _, err := core.TakeSnapshot(a.workDir, text); err != nil {
-			a.snapErr = err
+			a.setSnapErr(err)
 		}
 	}
 

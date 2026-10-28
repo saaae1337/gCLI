@@ -958,7 +958,7 @@ func TestCmdSnapshotsEmptyAndError(t *testing.T) {
 	}
 
 	buf.Reset()
-	a.snapErr = errors.New("диск переполнен")
+	a.setSnapErr(errors.New("диск переполнен"))
 	a.cmdSnapshots()
 	if got := out(buf); !strings.Contains(got, "диск переполнен") {
 		t.Errorf("прошлая ошибка снимков обязана быть видна: %q", got)
