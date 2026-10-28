@@ -67,6 +67,37 @@ type Doc struct {
 	// карточку ответа, а размышления вставали бы после неё.
 	armed   bool
 	version int
+	// Кэш отрисовки по блокам. Раньше Layout перерисовывал ВСЕ блоки
+	// ленты на каждый изменённый кадр: при busy спиннер менял ключ кэша
+	// каждые два тика, и многочасовая сессия перевёрстывалась целиком
+	// каждые ~220 мс — O(всей сессии) мусора и процессора на каждый кадр.
+	// Теперь отрисовка каждого блока переживает между кадрами: ключ —
+	// отпечаток состояния блока (см. layKey), меняется только он —
+	// перерисовывается только тронутый блок.
+	lay  map[*block]layEntry
+	layW int
+}
+
+// layKey — отпечаток состояния блока: если совпал с прошлым кадром,
+// раскладка блока не менялась и её можно переиспользовать. Поля покрывают
+// все места мутаций: addLine растит lines, SetMeta меняет meta,
+// ToggleThink — collapsed, ToolEnd — tool/done, размышления растут через
+// pending (pend), незакрытая карточка инструмента анимируется (spin).
+type layKey struct {
+	kind      blockKind
+	n         int // len(b.lines)
+	done      bool
+	collapsed bool
+	meta      string
+	tool      ToolInfo
+	pend      int    // хвост размышлений открытого блока
+	spin      string // кадр спиннера незакрытой карточки
+}
+
+type layEntry struct {
+	w    int
+	key  layKey
+	line []Line
 }
 
 // Version — номер версии ленты (для кэша раскладки).
@@ -82,6 +113,7 @@ func (d *Doc) Clear() {
 	d.stream = nil
 	d.think = nil
 	d.armed = false
+	d.lay = nil // иначе карта держала бы строки удалённых блоков
 	d.touch()
 }
 
@@ -369,10 +401,32 @@ type LayoutOpts struct {
 	Spinner string
 }
 
+// layKey — отпечаток состояния блока для кэша раскладки: все места мутаций
+// блока меняют хоть одно поле (см. layKey).
+func (d *Doc) layKey(b *block, o LayoutOpts) layKey {
+	k := layKey{kind: b.kind, n: len(b.lines), done: b.done, collapsed: b.collapsed, meta: b.meta}
+	switch b.kind {
+	case blockTool:
+		k.tool = b.tool
+		if !b.done {
+			k.spin = o.Spinner // карточка ещё работает — анимация
+		}
+	case blockThink:
+		if b == d.think {
+			k.pend = len(d.pending) // хвост печатается в открытый блок
+		}
+	}
+	return k
+}
+
 // Layout — разложить ленту в строки экрана.
 //
 // Возвращает все строки ленты: видимую часть выбирает вызывающий. Так
 // проще считать прокрутку и «прилипание» к низу.
+//
+// Отрисовка блоков кэшируется (d.lay): на каждом кадре заново рисуются
+// только блоки, чей отпечаток состояния изменился, — при стриминге в
+// длинной сессии это один-два хвостовых блока, а не вся лента.
 func (d *Doc) Layout(o LayoutOpts) []Line {
 	w := o.Width
 	if w < 10 {
@@ -385,6 +439,10 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 	if d.Empty() {
 		return nil
 	}
+	if w != d.layW {
+		d.layW = w
+		d.lay = nil // смена ширины — перерисовываем всё
+	}
 	for i, b := range d.blocks {
 		if i > 0 && b.kind != blockRule && d.blocks[i-1].kind != blockRule {
 			// Между соседними карточками инструментов пустой строки нет:
@@ -393,11 +451,16 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 				add(Line{})
 			}
 		}
+		if e, ok := d.lay[b]; ok && e.w == w && e.key == d.layKey(b, o) {
+			addAll(e.line)
+			continue
+		}
+		var bl []Line
 		switch b.kind {
 		case blockUser:
-			addAll(renderUser(b, w, t))
+			bl = renderUser(b, w, t)
 		case blockAssistant:
-			addAll(renderAssistant(b, w, t))
+			bl = renderAssistant(b, w, t)
 		case blockThink:
 			// Хвост размышлений без перевода строки — часть открытого
 			// блока: отдельная карточка ниже выглядела бы вторым
@@ -405,17 +468,22 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 			if b == d.think && d.pending != "" {
 				cp := *b
 				cp.lines = append(append([]string{}, b.lines...), d.pending)
-				addAll(renderThink(&cp, w, t))
+				bl = renderThink(&cp, w, t)
 			} else {
-				addAll(renderThink(b, w, t))
+				bl = renderThink(b, w, t)
 			}
 		case blockTool:
-			addAll(renderTool(b, w, t, o.Spinner))
+			bl = renderTool(b, w, t, o.Spinner)
 		case blockRule:
-			add(Line{{Text: strings.Repeat("─", w), S: Style{FG: t.BorderDim, BG: t.Bg}}})
+			bl = []Line{{{Text: strings.Repeat("─", w), S: Style{FG: t.BorderDim, BG: t.Bg}}}}
 		default:
-			addAll(renderText(b, w, t))
+			bl = renderText(b, w, t)
 		}
+		if d.lay == nil {
+			d.lay = map[*block]layEntry{}
+		}
+		d.lay[b] = layEntry{w: w, key: d.layKey(b, o), line: bl}
+		addAll(bl)
 	}
 	// Незавершённая строка — хвост текущей печати. Во время размышлений
 	// она уже показана внутри их блока (см. выше).
