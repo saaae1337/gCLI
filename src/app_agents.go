@@ -789,7 +789,7 @@ func (a *app) cmdCompact() {
 	a.ui.SpinnerStop()
 	if ok {
 		a.saveSession()
-		a.ui.Ok("история сжата: осталось " + strconv.Itoa(len(a.sess.Messages)) + " сообщений")
+		a.ui.Ok("история сжата: осталось " + strconv.Itoa(len(a.Messages())) + " сообщений")
 	} else {
 		a.ui.Warn("сжимать нечего или модель не ответила")
 	}
@@ -841,8 +841,9 @@ func (a *app) cmdDoctor(rest string) {
 
 	// Хранилище.
 	ns := len(a.repo.ListSessionInfos())
+	_, ckptN, _ := a.sessionCounters()
 	add(true, "хранилище", fmt.Sprintf("сессий: %d · чекпоинтов: %d · навыков: %d · расширений: %d",
-		ns, len(a.sess.Checkpoints), len(a.tools.LoadSkills()), len(a.tools.LoadExtensions())))
+		ns, ckptN, len(a.tools.LoadSkills()), len(a.tools.LoadExtensions())))
 
 	// Память.
 	if mems := a.memory.Files(); len(mems) > 0 {

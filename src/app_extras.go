@@ -16,7 +16,8 @@ import (
 func (a *app) cmdContext() {
 	// Снимок истории под sessMu: команду зовут из очереди ввода, а ход
 	// (в том числе cron) дописывает сообщения параллельно.
-	msgs := core.EstimateContext(a.Messages())
+	hist := a.Messages()
+	msgs := core.EstimateContext(hist)
 
 	// Инструменты: имена + описания + схемы — постояльцы каждого запроса.
 	var td strings.Builder
