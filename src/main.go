@@ -261,6 +261,36 @@ func (a *app) lastSnapErr() error {
 	return a.snapErr
 }
 
+// provMu — защита пары «провайдер + модель». Писатели — команды ввода
+// (/model, /provider, /setup, /resume): очередь ввода сериализует их между
+// собой, но ход из cron/watch/цепочки читает пару из своей горутины.
+// Читатели на чужих горутинах берут снимок пары (providerModel): провайдер
+// и модель подменяются согласованно, иначе агент мог бы получить нового
+// провайдера со старой моделью и неверными лимитами контекста.
+var provMu sync.Mutex
+
+// providerModel — снимок пары для горутин вне очереди ввода.
+func (a *app) providerModel() (*providers.Provider, string) {
+	provMu.Lock()
+	defer provMu.Unlock()
+	return a.prov, a.model
+}
+
+// setProviderModel — подмена пары целиком (/provider, /resume).
+func (a *app) setProviderModel(p *providers.Provider, m string) {
+	provMu.Lock()
+	a.prov = p
+	a.model = m
+	provMu.Unlock()
+}
+
+// setProvider — подмена одного провайдера (/provider key, /setup).
+func (a *app) setProvider(p *providers.Provider) {
+	provMu.Lock()
+	a.prov = p
+	provMu.Unlock()
+}
+
 // reasonHint — подсказка на строке ожидания.
 const reasonHint = "(Ctrl+O — показать размышления)"
 
@@ -1581,13 +1611,17 @@ func cronUniversalPrompt() string {
 func (a *app) newAgent(quiet bool) *agent.Agent {
 	stream := a.ui.NewStream()
 	a.stream = stream
+	// Снимок пары под provMu: агент целиком живёт на одном провайдере
+	// и модели, а turn() зовётся и из cron-горутины — /model из очереди
+	// ввода не должен подменять их посреди сборки агента.
+	prov, mdl := a.providerModel()
 
 	ag := agent.New(agent.Deps{
 		Providers: a.client,
-		Provider:  a.prov,
+		Provider:  prov,
 		Registry:  a.tools,
 		Session:   a,
-		Model:     a.model,
+		Model:     mdl,
 		Think:     providers.ThinkState(a.repo.Cfg),
 		Memory:    a.memory.Collect,
 		SkillsPrompt: func(query string) string {
@@ -1679,8 +1713,11 @@ func (a *app) autoCompactLimit() int {
 	if a.repo.Cfg.AutoCompact > 0 {
 		return a.repo.Cfg.AutoCompact
 	}
-	// По умолчанию — 70% мягкого лимита контекста модели.
-	return a.prov.CtxSoftLimitFor(a.model)
+	// По умолчанию — 70% мягкого лимита контекста модели. Пара — под
+	// provMu: функцию зовут и из хода (self_status, бюджет агента), и
+	// из команд очереди ввода (/status, /usage).
+	prov, mdl := a.providerModel()
+	return prov.CtxSoftLimitFor(mdl)
 }
 
 // onProgress — живой прогресс пакетных операций (multi_*, spawn_agents).
@@ -1949,14 +1986,17 @@ func (a *app) repl() {
 // лимит контекста модели и состояние сессии. Интерфейс получает готовые
 // числа и рисует их.
 func (a *app) metrics() ui.Metrics {
-	m := ui.Metrics{Model: a.model}
+	// Пара под provMu: /model может прийти из очереди ввода, пока
+	// метрики собираются для панели.
+	prov, mdl := a.providerModel()
+	m := ui.Metrics{Model: mdl}
 	provID := ""
-	if a.prov != nil {
-		m.Provider = a.prov.Label
+	if prov != nil {
+		m.Provider = prov.Label
 		// Окно контекста — свойство модели, а не провайдера: glm-4.6
 		// и gpt-4.1 живут у одного провайдера с разными лимитами.
-		m.ContextMax = a.prov.CtxLimitFor(a.model)
-		provID = a.prov.ID
+		m.ContextMax = prov.CtxLimitFor(mdl)
+		provID = prov.ID
 	}
 	sessMu.Lock()
 	if a.sess != nil {
@@ -1964,7 +2004,7 @@ func (a *app) metrics() ui.Metrics {
 		m.Prompt = a.sess.Usage.PromptTokens
 		m.Completion = a.sess.Usage.CompletionTokens
 		m.Requests = a.sess.Economy.Requests
-		if price, ok := core.ModelPrice(provID, a.model); ok {
+		if price, ok := core.ModelPrice(provID, mdl); ok {
 			m.Cost = price.Cost(a.sess.Usage)
 			m.CostKnown = true
 		}

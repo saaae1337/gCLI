@@ -343,8 +343,8 @@ func (a *app) cmdProvider(rest string) {
 		a.saveConfig()
 		a.registry = a.registry.Rebuild(a.repo.Cfg)
 		if a.prov.ID == id {
-			a.prov = a.registry.Pick("")
-			a.model = providers.ResolveModel(a.prov, "", a.repo.Cfg.Model)
+			np := a.registry.Pick("")
+			a.setProviderModel(np, providers.ResolveModel(np, "", a.repo.Cfg.Model))
 		}
 		a.ui.Ok("провайдер «" + id + "» удалён")
 	default:
@@ -581,7 +581,7 @@ func (a *app) syncProvider() {
 		return
 	}
 	if p := a.registry.Find(a.prov.ID); p != nil {
-		a.prov = p
+		a.setProvider(p)
 		a.bindKeyRotate(p)
 	}
 }
@@ -661,25 +661,30 @@ func (a *app) listProviders() {
 }
 
 func (a *app) switchProvider(p *providers.Provider) {
-	a.prov = p
-	a.bindKeyRotate(p)
-	a.repo.Cfg.Provider = p.ID
+	// Пара читается и пишется одним снимком под provMu: ход из чужой
+	// горутины не должен увидеть провайдера от одной подмены, а модель —
+	// от другой.
+	_, cur := a.providerModel()
 	found := false
 	for _, m := range p.Models {
-		if m == a.model {
+		if m == cur {
 			found = true
 			break
 		}
 	}
+	next := cur
 	if !found {
-		a.model = p.DefaultModel
+		next = p.DefaultModel
 	}
+	a.setProviderModel(p, next)
+	a.bindKeyRotate(p)
+	a.repo.Cfg.Provider = p.ID
 	a.sess.Provider = p.ID
-	a.sess.Model = a.model
+	a.sess.Model = next
 	a.saveConfig()
 	a.saveSession()
 	a.syncMetrics()
-	a.ui.Ok(fmt.Sprintf("провайдер: %s · модель: %s", p.Label, a.model))
+	a.ui.Ok(fmt.Sprintf("провайдер: %s · модель: %s", p.Label, next))
 }
 
 // syncMetrics — обновить нижнюю панель и шапку TUI после смены модели.
@@ -727,7 +732,9 @@ func (a *app) cmdModel(rest string) {
 }
 
 func (a *app) setModel(m string) {
+	provMu.Lock()
 	a.model = m
+	provMu.Unlock()
 	a.repo.Cfg.Model = m
 	a.sess.Model = m
 	a.saveConfig()
@@ -883,12 +890,13 @@ func (a *app) cmdResume(arg string) {
 	if a.sess.Perms.BashExact == nil {
 		a.sess.Perms.BashExact = map[string]bool{}
 	}
-	a.prov = a.registry.Pick(a.sess.Provider)
-	a.repo.Cfg.Provider = a.prov.ID
-	a.model = a.sess.Model
-	if a.model == "" {
-		a.model = providers.ResolveModel(a.prov, "", a.repo.Cfg.Model)
+	np := a.registry.Pick(a.sess.Provider)
+	nm := a.sess.Model
+	if nm == "" {
+		nm = providers.ResolveModel(np, "", a.repo.Cfg.Model)
 	}
+	a.setProviderModel(np, nm)
+	a.repo.Cfg.Provider = np.ID
 	a.saveConfig()
 	a.saveSession()
 	a.syncMetrics()

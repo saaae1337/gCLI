@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"gcli/core"
+	"gcli/providers"
 )
 
 // TestSnapErrRace — запись snapErr из «cron-хода» против чтения в /snapshots.
@@ -154,4 +155,51 @@ func TestForkWaitsForTurnBarrier(t *testing.T) {
 	if !strings.Contains(out(buf), "форк создан") {
 		t.Errorf("форк обязан отчитаться, вывод:\n%s", out(buf))
 	}
+}
+
+// TestProviderModelPairRace — подмена пары «провайдер + модель» из очереди
+// ввода против снимков из хода. Читатель обязан видеть согласованную пару:
+// провайдер и модель от одной и той же подмены, а не нового провайдера со
+// старой моделью (иначе у агента неверные лимиты контекста и цена).
+func TestProviderModelPairRace(t *testing.T) {
+	a := testApp(t)
+	pairs := []struct {
+		p *providers.Provider
+		m string
+	}{
+		{&providers.Provider{ID: "zai"}, "glm-4.6"},
+		{&providers.Provider{ID: "openai"}, "gpt-4.1"},
+		{&providers.Provider{ID: "anthropic"}, "claude-sonnet"},
+	}
+	// Стартовая пара до запуска горутин: иначе быстрый читатель видит
+	// нулевые a.prov/a.model до первой записи писателя.
+	a.setProviderModel(pairs[0].p, pairs[0].m)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // писатель: /provider и /model из очереди ввода
+		defer wg.Done()
+		for i := 0; i < 300; i++ {
+			want := pairs[i%len(pairs)]
+			a.setProviderModel(want.p, want.m)
+			a.setModel(want.m)
+		}
+	}()
+	go func() { // читатель: агент в cron-ходе снимает пару целиком
+		defer wg.Done()
+		for i := 0; i < 300; i++ {
+			p, m := a.providerModel()
+			ok := false
+			for _, want := range pairs {
+				if p == want.p && m == want.m {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				t.Errorf("рваная пара: провайдер %p · модель %q", p, m)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }

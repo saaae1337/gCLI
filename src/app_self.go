@@ -13,11 +13,14 @@ import (
 // то есть модель работала вслепую и упиралась в порог сжатия уже после
 // того, как потратила лишнее.
 func (a *app) selfReport() tools.SelfReport {
+	// Пара под provMu: self_status зовут изнутри хода, а /model меняет
+	// провайдера и модель из очереди ввода.
+	prov, mdl := a.providerModel()
 	rep := tools.SelfReport{
 		CompactAt: a.autoCompactLimit(),
 		MaxIters:  a.maxIters(),
-		Model:     a.model,
-		Provider:  a.prov.ID,
+		Model:     mdl,
+		Provider:  prov.ID,
 	}
 
 	// Расход и статистику снимаем под блокировкой: их пишут горутины

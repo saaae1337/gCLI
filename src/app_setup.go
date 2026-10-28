@@ -124,9 +124,9 @@ func (a *app) runSetup() {
 	a.saveConfig()
 	a.registry = a.registry.Rebuild(a.repo.Cfg)
 	if np := a.registry.Find(p.ID); np != nil {
-		a.prov = np
+		a.setProvider(np)
 	}
-	a.model = model
+	a.setModel(model)
 	a.sess.Provider = a.prov.ID
 	a.sess.Model = model
 	a.saveSession()

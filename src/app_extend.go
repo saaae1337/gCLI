@@ -154,7 +154,10 @@ func (a *app) printMissionIters() {
 	} else {
 		rows = append(rows, [2]string{"Токены", core.CompactNum(tr.Spent())})
 	}
-	if cost := tr.Cost(a.prov.ID, a.model); cost > 0 || m.CostBudget > 0 {
+	// Снимок пары под provMu: отчёт строится в горутине хода, а /model
+	// меняет провайдера и модель из очереди ввода.
+	prov, mdl := a.providerModel()
+	if cost := tr.Cost(prov.ID, mdl); cost > 0 || m.CostBudget > 0 {
 		c := "$" + strconv.FormatFloat(cost, 'f', 2, 64)
 		if m.CostBudget > 0 {
 			c += " из $" + strconv.FormatFloat(m.CostBudget, 'f', 2, 64)

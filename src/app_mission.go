@@ -228,8 +228,10 @@ func (a *app) startTracker() bool {
 		return false
 	}
 	tr := core.NewTracker(m, a.sessionSpent(), a.sessionCost())
-	if a.prov != nil {
-		tr.WithModel(a.prov.ID, a.model)
+	// Снимок пары под provMu: трекер запускается и из цепочки миссий —
+	// чужой горутины по отношению к очереди ввода с /model.
+	if prov, mdl := a.providerModel(); prov != nil {
+		tr.WithModel(prov.ID, mdl)
 	}
 	a.setMissionTr(tr)
 	// Флаги сбрасываются на новый прогон: трекер, который человек
@@ -270,10 +272,13 @@ func (a *app) currentMissionTr() *core.Tracker {
 
 // sessionCost — расход сессии в долларах (для поправки бюджета миссии).
 func (a *app) sessionCost() float64 {
-	if a.prov == nil {
+	// Снимок пары под provMu: бюджет миссии проверяется из хода, а /model
+	// меняет пару из очереди ввода.
+	prov, mdl := a.providerModel()
+	if prov == nil {
 		return 0
 	}
-	price, ok := core.ModelPrice(a.prov.ID, a.model)
+	price, ok := core.ModelPrice(prov.ID, mdl)
 	if !ok {
 		return 0
 	}
@@ -284,10 +289,13 @@ func (a *app) sessionCost() float64 {
 
 // missionDeps — собрать зависимости движка прогона для агента.
 func (a *app) missionDeps() agent.MissionDeps {
+	// Снимок пары под provMu: зависимости движка прогона собираются для
+	// хода из cron/цепочки, а /model меняет пару из очереди ввода.
+	prov, mdl := a.providerModel()
 	d := agent.MissionDeps{
 		Tracker: a.currentMissionTr(),
 		Spent:   func() int { return a.sessionSpent() },
-		Model:   a.model,
+		Model:   mdl,
 		Checkpoint: func(summary string) error {
 			return a.saveMissionState(summary)
 		},
@@ -305,8 +313,8 @@ func (a *app) missionDeps() agent.MissionDeps {
 		Resume:  a.missionResume,
 		Journal: a.missionJournal,
 	}
-	if a.prov != nil {
-		d.Provider = a.prov.ID
+	if prov != nil {
+		d.Provider = prov.ID
 	}
 	return d
 }

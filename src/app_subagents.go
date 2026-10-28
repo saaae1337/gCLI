@@ -22,6 +22,9 @@ func (a *app) customAgents() []subagents.CustomAgent {
 
 // spawnAgent — обработка вызова инструмента spawn_agent.
 func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.SpawnResult, error) {
+	// Снимок пары под provMu: spawn зовут из хода, а /model меняет пару
+	// из очереди ввода.
+	_, mdl := a.providerModel()
 	if !a.pool.Enabled() {
 		return tools.SpawnResult{}, fmt.Errorf("субагенты отключены — включи: /agents on")
 	}
@@ -150,7 +153,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Name:     runName,
 		Type:     string(t),
 		Task:     spec.Task,
-		Model:    core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
+		Model:    core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, mdl),
 		ModelWhy: spec.ModelWhy,
 		Status:   string(statusOf(err)),
 		Depth:    spec.Depth,
@@ -171,7 +174,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		Dispatched: args.Type == "",
 		Reuse:      string(out.Reuse),
 		ReusedFrom: out.ReusedFrom,
-		Model:      core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, a.model),
+		Model:      core.FirstNonEmpty(spec.Model, a.repo.Cfg.SubModel, mdl),
 		ModelWhy:   spec.ModelWhy,
 		Summary:    out.Summary,
 		Full:       out.Full,
@@ -197,11 +200,14 @@ func errText(err error) string {
 
 // runSubagent — собственный цикл субагента.
 func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.Outcome, error) {
+	// Снимок пары под provMu: субагент целиком живёт на одном провайдере
+	// и модели, а /model меняет пару из очереди ввода посреди хода.
+	prov, mdl := a.providerModel()
 	d := agent.SubagentDeps{
-		Provider:  a.prov,
+		Provider:  prov,
 		Providers: a.client,
 		Registry:  a.registryForSubagent,
-		Model:     a.model,
+		Model:     mdl,
 		SubModel:  a.repo.Cfg.SubModel,
 		WorkDir:   a.workDir,
 		Think:     providers.ThinkState(a.repo.Cfg),
@@ -262,11 +268,12 @@ func (a *app) sessionSpent() int {
 // равно проверяет это первым, но лишний параметр с пустым значением читался
 // бы как «явно указано», и подмена вернулась бы незаметно.
 func (a *app) routeModelFor(role subagents.Type) (string, string) {
-	cur := core.FirstNonEmpty(a.repo.Cfg.SubModel, a.model)
+	prov, mdl := a.providerModel()
+	cur := core.FirstNonEmpty(a.repo.Cfg.SubModel, mdl)
 	v := subagents.RouteModel(role, subagents.RouteOptions{
 		Current:    cur,
-		ProviderID: a.prov.ID,
-		Available:  a.prov.Models,
+		ProviderID: prov.ID,
+		Available:  prov.Models,
 		Budget:     subagents.Budget{Spent: a.sessionSpent(), Limit: a.repo.Cfg.SubBudget},
 		Enabled:    a.repo.Cfg.SubRoute,
 	})
