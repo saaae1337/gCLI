@@ -719,10 +719,15 @@ func (a *app) shutdown() {
 		a.lsp.Shutdown()
 	}
 	a.closeMissionJournal()
-	// Остановить фоновую горутину автономных итераций.
+	// Остановить фоновую горутину автономных итераций. Под cronMu:
+	// иначе двойной close наперегонки с /cron off (паника) или close
+	// только что созданного /cron on канала.
+	a.cronMu.Lock()
 	if a.cronDone != nil {
 		close(a.cronDone)
+		a.cronDone = nil
 	}
+	a.cronMu.Unlock()
 }
 
 // buildTools — собрать реестр инструментов.
@@ -1439,11 +1444,10 @@ func (a *app) turn(text string) error {
 
 // cronTouch — пометить момент активности (ход или ввод пользователя).
 func (a *app) cronTouch() {
-	if !a.cronEnabled {
-		return
-	}
 	a.cronMu.Lock()
-	a.cronLastActive = time.Now()
+	if a.cronEnabled {
+		a.cronLastActive = time.Now()
+	}
 	a.cronMu.Unlock()
 }
 
@@ -1459,10 +1463,15 @@ func cronNextInterval() time.Duration {
 func (a *app) cronLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	// Канал снимаем один раз под мьютексом: поле a.cronDone /cron off
+	// обнуляет под cronMu, и чтение поля из горутины гоняло бы с ним.
+	a.cronMu.Lock()
+	done := a.cronDone
+	a.cronMu.Unlock()
 
 	for {
 		select {
-		case <-a.cronDone:
+		case <-done:
 			return
 		case <-ticker.C:
 			a.cronTick()
