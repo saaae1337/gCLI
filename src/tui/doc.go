@@ -664,13 +664,15 @@ func renderPlainSegs(segs Line, w int, t Theme, first, next string, st Style) []
 			}
 			cut, rest := cutText(text, avail)
 			if cut == "" {
-				// Слово не влезло целиком — переносим.
-				out = append(out, cur.trimEnd())
-				cur = Line{}
-				if next != "" {
-					cur = append(cur, Seg{Text: next, S: Style{FG: st.FG, BG: t.Bg}})
+				// Страховка от зацикливания: cutText обязан съесть хоть
+				// что-то. Если нет — жёстко забираем первый кластер.
+				_, sz := wcwidth.ClusterAt(text, 0)
+				if sz <= 0 || sz >= len(text) {
+					out = append(out, cur.trimEnd())
+					cur = Line{}
+					break
 				}
-				continue
+				cut, rest = text[:sz], text[sz:]
 			}
 			cur = append(cur, Seg{Text: cut, S: seg.S})
 			text = rest
@@ -710,7 +712,14 @@ func cutText(s string, w int) (cut, rest string) {
 		r, _ := utf8.DecodeRuneInString(s[i:])
 		if cur+cw > w {
 			if lastSpace > 0 {
-				return strings.TrimRight(s[:lastSpace], " "), strings.TrimLeft(s[lastSpace:], " ")
+				cut := strings.TrimRight(s[:lastSpace], " ")
+				if cut != "" {
+					// Прогресс гарантирован: rest строго короче s.
+					return cut, strings.TrimLeft(s[lastSpace:], " ")
+				}
+				// Пробег до последнего пробела — одни пробелы (паддинг
+				// ячеек таблиц): пустой cut здесь зацикливал вызывающий
+				// код навсегда, интерфейс замерзал до перезапуска.
 			}
 			if i == 0 {
 				// Даже один кластер шире строки: отдаём его, иначе цикл
