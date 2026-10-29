@@ -329,17 +329,17 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 		switch e.Type {
 		case "message_start":
 			if e.Message != nil && e.Message.Usage != nil {
-				out <- core.Delta{Usage: &core.Usage{PromptTokens: e.Message.Usage.promptTokens()}}
+				sendDelta(ctx, out, core.Delta{Usage: &core.Usage{PromptTokens: e.Message.Usage.promptTokens()}})
 			}
 		case "content_block_start":
 			if e.ContentBlock != nil {
 				// Обычно стартовый текстовый блок пуст, но compatible-
 				// прокси иногда кладут начало ответа прямо в него.
 				if e.ContentBlock.Type == "text" && e.ContentBlock.Text != "" {
-					out <- core.Delta{Text: e.ContentBlock.Text}
+					sendDelta(ctx, out, core.Delta{Text: e.ContentBlock.Text})
 				}
 				if e.ContentBlock.Type == "tool_use" {
-					out <- core.Delta{IsTool: true, TCIndex: e.Index, TCID: e.ContentBlock.ID, TCName: e.ContentBlock.Name}
+					sendDelta(ctx, out, core.Delta{IsTool: true, TCIndex: e.Index, TCID: e.ContentBlock.ID, TCName: e.ContentBlock.Name})
 				}
 			}
 		case "content_block_delta":
@@ -347,31 +347,31 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 				switch e.Delta.Type {
 				case "text_delta":
 					if e.Delta.Text != "" {
-						out <- core.Delta{Text: e.Delta.Text}
+						sendDelta(ctx, out, core.Delta{Text: e.Delta.Text})
 					}
 				case "thinking_delta":
 					if e.Delta.Thinking != "" {
-						out <- core.Delta{Reasoning: e.Delta.Thinking}
+						sendDelta(ctx, out, core.Delta{Reasoning: e.Delta.Thinking})
 					}
 				case "signature_delta":
 					if e.Delta.Signature != "" {
-						out <- core.Delta{Sig: e.Delta.Signature}
+						sendDelta(ctx, out, core.Delta{Sig: e.Delta.Signature})
 					}
 				case "input_json_delta":
 					if e.Delta.PartialJSON != "" {
-						out <- core.Delta{IsTool: true, TCIndex: e.Index, TCArgs: e.Delta.PartialJSON}
+						sendDelta(ctx, out, core.Delta{IsTool: true, TCIndex: e.Index, TCArgs: e.Delta.PartialJSON})
 					}
 				}
 			}
 		case "message_delta":
 			if e.Delta != nil && e.Delta.StopReason != "" {
-				out <- core.Delta{Finish: e.Delta.StopReason}
+				sendDelta(ctx, out, core.Delta{Finish: e.Delta.StopReason})
 			}
 			if e.Usage != nil {
-				out <- core.Delta{Usage: &core.Usage{
+				sendDelta(ctx, out, core.Delta{Usage: &core.Usage{
 					PromptTokens:     e.Usage.promptTokens(),
 					CompletionTokens: e.Usage.OutputTokens,
-				}}
+				}})
 			}
 		case "error":
 			msg := "ошибка API"

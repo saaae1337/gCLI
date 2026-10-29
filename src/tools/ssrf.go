@@ -60,7 +60,11 @@ func isPrivateIP(ip net.IP) bool {
 		switch {
 		case v4[0] == 0, v4[0] >= 240: // «this network» и 240.0.0.0/4
 			return true
+		case v4[0] >= 224: // multicast 224.0.0.0/4
+			return true
 		case v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127: // CGNAT 100.64/10
+			return true
+		case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19): // benchmark 198.18/15
 			return true
 		}
 		return false

@@ -262,36 +262,36 @@ func StreamOpenAI(ctx context.Context, c *Client, p *Provider, creq core.ChatReq
 			return err
 		}
 		if ch.Usage != nil {
-			out <- core.Delta{Usage: &core.Usage{
+			sendDelta(ctx, out, core.Delta{Usage: &core.Usage{
 				PromptTokens:     ch.Usage.PromptTokens,
 				CompletionTokens: ch.Usage.CompletionTokens,
-			}}
+			}})
 		}
 		for _, chc := range ch.Choices {
 			d := chc.Delta
 			if r := extractReasoning(d.ReasoningContent, d.Reasoning, d.Thinking); r != "" {
-				out <- core.Delta{Reasoning: r}
+				sendDelta(ctx, out, core.Delta{Reasoning: r})
 			}
 			if d.Content != "" {
-				out <- core.Delta{Text: d.Content}
+				sendDelta(ctx, out, core.Delta{Text: d.Content})
 			}
 			// Отказ модели — такой же видимый ответ, как и текст.
 			// Без этого ход выглядел пустым, и человек не понимал,
 			// почему модель промолчала.
 			if d.Refusal != "" {
-				out <- core.Delta{Text: d.Refusal}
+				sendDelta(ctx, out, core.Delta{Text: d.Refusal})
 			}
 			for _, tc := range d.ToolCalls {
-				out <- core.Delta{
+				sendDelta(ctx, out, core.Delta{
 					IsTool:  true,
 					TCIndex: tc.Index,
 					TCID:    tc.ID,
 					TCName:  tc.Function.Name,
 					TCArgs:  tc.Function.Arguments,
-				}
+				})
 			}
 			if chc.FinishReason != nil && *chc.FinishReason != "" {
-				out <- core.Delta{Finish: *chc.FinishReason}
+				sendDelta(ctx, out, core.Delta{Finish: *chc.FinishReason})
 			}
 		}
 		return nil

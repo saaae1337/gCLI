@@ -186,8 +186,8 @@ func TestRepeatedReadUsesCache(t *testing.T) {
 	a := New(Deps{Registry: reg, Session: sess}, dir)
 	tc := core.ToolCall{ID: "1", Name: "read_file", Args: `{"path":"` + p + `"}`}
 
-	first := a.execOne(context.Background(), tc)
-	second := a.execOne(context.Background(), tc)
+	first := a.execOne(context.Background(), tc, &a.econ)
+	second := a.execOne(context.Background(), tc, &a.econ)
 	if calls != 1 {
 		t.Errorf("инструмент вызван %d раз, ожидался 1", calls)
 	}

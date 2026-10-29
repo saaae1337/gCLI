@@ -387,7 +387,11 @@ func (r *Registry) ToolCtx(ctx context.Context, t *Tool) (context.Context, conte
 		return ctx, nil
 	}
 	d := t.Timeout
-	if d <= 0 {
+	if d <= 0 && t.Category != "agent" {
+		// Общий GCLI_TOOL_TIMEOUT сдерживает bash и сетевые инструменты.
+		// Субагентам он ломал работу: долгий ход обрывался на полуслове
+		// с «context deadline exceeded». Живут они в контексте хода,
+		// как и инструменты без лимита.
 		d = r.toolTimeout
 	}
 	if d <= 0 {

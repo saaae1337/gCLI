@@ -578,48 +578,53 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 			streamDone <- providers.Stream(rctx, a.d.Providers, a.d.Provider, creq, a.d.Think, ch)
 		}()
 
-		for d := range ch {
-			if d.Reasoning != "" {
-				pReason += d.Reasoning
-				if !quiet && showReason && a.d.OnReason != nil {
-					a.d.OnReason(d.Reasoning)
+		// rcancel обязан сработать и при панике в колбэках хоста:
+		// горутина потока иначе навсегда висит на блокирующей
+		// отправке дельты, а rctx течёт до таймаута.
+		func() {
+			defer rcancel()
+			for d := range ch {
+				if d.Reasoning != "" {
+					pReason += d.Reasoning
+					if !quiet && showReason && a.d.OnReason != nil {
+						a.d.OnReason(d.Reasoning)
+					}
 				}
-			}
-			if d.Sig != "" {
-				pSig += d.Sig
-			}
-			if d.Text != "" {
-				gotAny = true
-				pText += d.Text
-				if !quiet && a.d.OnDelta != nil {
-					a.d.OnDelta(d.Text)
+				if d.Sig != "" {
+					pSig += d.Sig
 				}
-			}
-			if d.IsTool {
-				tc, ok := pAcc[d.TCIndex]
-				if !ok {
-					tc = &core.ToolCall{ID: d.TCID, Name: d.TCName}
-					pAcc[d.TCIndex] = tc
-					pOrder = append(pOrder, d.TCIndex)
+				if d.Text != "" {
 					gotAny = true
+					pText += d.Text
+					if !quiet && a.d.OnDelta != nil {
+						a.d.OnDelta(d.Text)
+					}
 				}
-				if d.TCID != "" {
-					tc.ID = d.TCID
+				if d.IsTool {
+					tc, ok := pAcc[d.TCIndex]
+					if !ok {
+						tc = &core.ToolCall{ID: d.TCID, Name: d.TCName}
+						pAcc[d.TCIndex] = tc
+						pOrder = append(pOrder, d.TCIndex)
+						gotAny = true
+					}
+					if d.TCID != "" {
+						tc.ID = d.TCID
+					}
+					if d.TCName != "" {
+						tc.Name = d.TCName
+					}
+					tc.Args += d.TCArgs
 				}
-				if d.TCName != "" {
-					tc.Name = d.TCName
+				if d.Finish != "" {
+					finishReason = d.Finish
 				}
-				tc.Args += d.TCArgs
+				if d.Usage != nil {
+					usage.PromptTokens = core.Max(usage.PromptTokens, d.Usage.PromptTokens)
+					usage.CompletionTokens = core.Max(usage.CompletionTokens, d.Usage.CompletionTokens)
+				}
 			}
-			if d.Finish != "" {
-				finishReason = d.Finish
-			}
-			if d.Usage != nil {
-				usage.PromptTokens = core.Max(usage.PromptTokens, d.Usage.PromptTokens)
-				usage.CompletionTokens = core.Max(usage.CompletionTokens, d.Usage.CompletionTokens)
-			}
-		}
-		rcancel()
+		}()
 		streamErr := <-streamDone
 
 		if streamErr == nil {
@@ -893,7 +898,12 @@ func (a *Agent) Run(ctx context.Context, userText string) (err error) {
 		// прогон рассчитан на переживание перезапуска. Ошибка сохранения
 		// намеренно не поднимается в модель: страховка не должна
 		// превращаться в помеху работе.
-		a.mission.checkpoint()
+		if !a.mission.checkpoint() && a.OnNote != nil {
+			// Страховка на диск сорвалась молча: продолжение после падения
+			// начнётся с устаревшего снимка — сообщим заметкой, как это
+			// делают остальные системные события.
+			a.OnNote("чекпоинт миссии", "не удалось сохранить состояние на диск")
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -1099,16 +1109,28 @@ func (a *Agent) execTools(ctx context.Context, calls []core.ToolCall) []toolResu
 		limit := core.Clamp(a.d.MaxParallelTools, 1, 8)
 		sem := make(chan struct{}, limit)
 		type res struct {
-			pos int
-			r   toolResult
+			pos  int
+			r    toolResult
+			econ *core.EconomyStats
 		}
 		done := make(chan res, len(parallel))
 		for _, s := range parallel {
 			s := s
-			sem <- struct{}{}
+			// Слот ждём с отменой: Ctrl+C не должен молча стоять в
+			// очереди запусков, пока работающие инструменты досматривают
+			// свои таймауты.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				out[s.pos].text = "Ошибка: ход прерван, инструмент не выполнен"
+				continue
+			}
 			go func() {
 				defer func() { <-sem }()
-				done <- res{pos: s.pos, r: a.execOne(ctx, s.tc)}
+				// Счётчики экономики копятся локально: прямая запись из
+				// горутин в a.econ — это concurrent map writes и падение.
+				le := &core.EconomyStats{}
+				done <- res{pos: s.pos, r: a.execOne(ctx, s.tc, le), econ: le}
 			}()
 		}
 		// Кладём результат по номеру вызова, а не «как пришли» и не по ID.
@@ -1124,6 +1146,11 @@ func (a *Agent) execTools(ctx context.Context, calls []core.ToolCall) []toolResu
 		for range parallel {
 			r := <-done
 			out[r.pos] = r.r
+			// Дельты параллельного вызова сливаются после join, на
+			// главной горутине: гонки на картах больше нет.
+			if r.econ != nil {
+				a.econ.Merge(*r.econ)
+			}
 		}
 	}
 
@@ -1134,7 +1161,7 @@ func (a *Agent) execTools(ctx context.Context, calls []core.ToolCall) []toolResu
 			out[s.pos].text = "Ошибка: ход прерван, инструмент не выполнен"
 			continue
 		}
-		out[s.pos] = a.execOne(ctx, s.tc)
+		out[s.pos] = a.execOne(ctx, s.tc, &a.econ)
 	}
 	return out
 }
@@ -1166,7 +1193,7 @@ func (a *Agent) canRunParallel(name string) bool {
 }
 
 // execOne — выполнить один инструмент с защитой от паники.
-func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) {
+func (a *Agent) execOne(ctx context.Context, tc core.ToolCall, econ *core.EconomyStats) (res toolResult) {
 	res.tc = tc
 	t0 := time.Now()
 	// Восстановитель ставится до Get: если реестр nil или Get паникует,
@@ -1209,10 +1236,10 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 	stamp := fileStamp(tc.Args)
 	if cacheableTool(tool) {
 		if text, ok := a.cache.get(key, stamp); ok {
-			a.econ.CacheHits++
+			econ.CacheHits++
 			res.text = text
 			res.images = nil
-			a.econ.AddCall(tc.Name, core.ApproxTokens(text))
+			econ.AddCall(tc.Name, core.ApproxTokens(text))
 			a.reportToolDone(tc, tool, tools.Result{Text: text}, nil, time.Since(t0))
 			return
 		}
@@ -1263,7 +1290,7 @@ func (a *Agent) execOne(ctx context.Context, tc core.ToolCall) (res toolResult) 
 	res.images = out.Images
 	// Учёт: сколько раз звали инструмент и сколько токенов занял его
 	// результат. По этим числам видно, какой инструмент съедает контекст.
-	a.econ.AddCall(tc.Name, core.ApproxTokens(text))
+	econ.AddCall(tc.Name, core.ApproxTokens(text))
 	if cacheableTool(tool) && err == nil {
 		a.cache.put(key, text, stamp)
 	}

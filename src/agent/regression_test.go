@@ -325,7 +325,7 @@ func TestOnToolDonePanicDoesNotCorruptResult(t *testing.T) {
 		panic("хост упал")
 	}
 
-	res := a.execOne(context.Background(), core.ToolCall{ID: "c1", Name: "ok_tool"})
+	res := a.execOne(context.Background(), core.ToolCall{ID: "c1", Name: "ok_tool"}, &a.econ)
 	if res.text != "результат" {
 		t.Errorf("паника хоста испортила результат инструмента: %q", res.text)
 	}

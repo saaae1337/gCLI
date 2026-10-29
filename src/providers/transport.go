@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"gcli/core"
 )
 
 // Client — HTTP-клиент для запросов к провайдерам (общий для всех горутин).
@@ -28,7 +31,11 @@ func NewClient() *Client {
 		HTTP: &http.Client{
 			Timeout: 0, // таймауты управляются через context
 			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
+				Proxy: http.ProxyFromEnvironment,
+				// TCP-соединение тоже надо ограничивать: без DialContext
+				// недоступный провайдер висел до системного SYN-таймаута
+				// (~2 мин) на каждой попытке, вопреки комментарию выше.
+				DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 				MaxIdleConns:          32,
 				MaxIdleConnsPerHost:   8,
 				IdleConnTimeout:       90 * time.Second,
@@ -38,6 +45,18 @@ func NewClient() *Client {
 				ForceAttemptHTTP2:     true,
 			},
 		},
+	}
+}
+
+// sendDelta — отправка дельты в канал с уважением к отмене контекста.
+//
+// Голая отправка «out <- d» навсегда блокирует парсер, если получатель
+// перестал читать (паника колбэка хоста, отмена хода): горутина и
+// соединение висели до конца таймаута. select на ctx.Done освобождает.
+func sendDelta(ctx context.Context, out chan<- core.Delta, d core.Delta) {
+	select {
+	case out <- d:
+	case <-ctx.Done():
 	}
 }
 

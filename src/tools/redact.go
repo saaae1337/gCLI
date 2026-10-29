@@ -89,6 +89,14 @@ var reSecret = []secretRule{
 		[]string{"apikey", "api_key", "api-key", "accesstoken", "access_token", "access-token",
 			"refreshtoken", "refresh_token", "refresh-token", "password", "secret",
 			"private_key", "private-key"}},
+	// PEM-блок приватного ключа целиком: заголовок, тело, END. Частичная
+	// маскировка base64-тела бессмысленна — прячем блок целиком.
+	{regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.{16,}?-----END [A-Z ]*PRIVATE KEY-----`), 0,
+		[]string{"private key"}},
+	// Пароль в URL: https://user:пароль@host. Схема и пользователь
+	// остаются видны, маскируется пароль.
+	{regexp.MustCompile(`\b[a-z][a-z0-9+.\-]*://[^/\s:@]*:([^@\s/]{8,})@`), 2,
+		[]string{"://"}},
 }
 
 // secretMask — чем заменяем значение.

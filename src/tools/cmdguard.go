@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/user"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -159,7 +160,21 @@ func resolveCandidate(p, workdir string) string {
 	case p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`):
 		return filepath.Join(userHome(), strings.TrimLeft(p[1:], `/\`))
 	case strings.HasPrefix(p, "~"):
-		return filepath.Join(userHome(), strings.TrimLeft(p[1:], `/\`))
+		// ~user и ~user/... — домашний каталог другого пользователя:
+		// шелл развернёт его в реальный /home/name. Раньше кусок
+		// подставлялся внутрь рабочего каталога, и «cat ~user/.ssh/id_rsa»
+		// проходил проверку как файл внутри $HOME.
+		name := p[1:]
+		if cut := strings.IndexAny(name, `/\`); cut > 0 {
+			name = name[:cut]
+		}
+		if u, err := user.Lookup(name); err == nil {
+			rest := p[1+len(name):]
+			return filepath.Join(u.HomeDir, filepath.FromSlash(strings.TrimLeft(rest, `/\`)))
+		}
+		// Пользователь не найден: заведомо внешний путь, песочница
+		// обязана его отклонить.
+		return filepath.Join(string(filepath.Separator), "nonexistent-gcli-user", name)
 	case filepath.IsAbs(p) && runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/':
 		// MinGW-путь вида /c/Users/me: в Go это не абсолютный путь, поэтому
 		// приводим к привычному C:\Users\me.

@@ -161,7 +161,7 @@ func TestExecOnePanicPassesToolToHost(t *testing.T) {
 		gotTool = tool
 	}
 
-	res := a.execOne(context.Background(), core.ToolCall{ID: "c1", Name: "boom"})
+	res := a.execOne(context.Background(), core.ToolCall{ID: "c1", Name: "boom"}, &a.econ)
 	if !strings.Contains(res.text, "бум") {
 		t.Errorf("паника не превращена в ошибку инструмента: %q", res.text)
 	}

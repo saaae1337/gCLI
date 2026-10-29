@@ -46,6 +46,8 @@ var (
 const (
 	toolhelpSnapProcess = 0x00000002
 	processTerminate    = 0x0001
+	processSynchronize  = 0x00100000
+	processQueryLimited = 0x00001000
 	waitObject0         = 0x00000000
 	waitTimeoutMs       = 2000
 )
@@ -123,7 +125,9 @@ func descendants(root uint32) []uint32 {
 // закрывается только после сигнала «процесс завершён»: к моменту возврата
 // ядро уже закрыло его файлы и каталог, и уборка TempDir не споткнётся.
 func killPIDWait(pid uint32) {
-	h, _, _ := procOpenProcess.Call(processTerminate, 0, uintptr(pid))
+	// SYNCHRONIZE обязателен для WaitForSingleObject: без него ожидание
+	// падает с WAIT_FAILED, и «дожидания смерти» потомков не было.
+	h, _, _ := procOpenProcess.Call(processTerminate|processSynchronize|processQueryLimited, 0, uintptr(pid))
 	if h == 0 {
 		return
 	}
