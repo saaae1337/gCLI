@@ -125,6 +125,25 @@ func (r *Reader) loop() {
 		t = strings.ReplaceAll(t, "\r", "\n")
 		return emit(Event{Paste: true, Text: t})
 	}
+	// markerTail — длина хвоста p, которая может быть началом закрывающего
+	// маркера вставки ESC[201~, разрезанного между чтениями. На медленном
+	// канале (SSH, большой буфер обмена) пауза между кусками легко превышает
+	// 250 мс: хвост «\x1b[2» уезжал в текст вставки, а его продолжение
+	// «01~» приходило следом отдельной вставкой-мусором в поле ввода.
+	markerTail := func(p []byte) int {
+		// Заготовка короче целого маркера, поэтому потолок — len(pasteEnd)-1;
+		// цельный маркер уже поглощён веткой pasteOpen выше.
+		m := len(p)
+		if m > len(pasteEnd)-1 {
+			m = len(pasteEnd) - 1
+		}
+		for k := m; k > 0; k-- {
+			if bytes.Equal(p[len(p)-k:], pasteEnd[:k]) {
+				return k
+			}
+		}
+		return 0
+	}
 	for {
 		// Пока в буфере есть полные события — отдаём их без задержки.
 		for len(pending) > 0 {
@@ -185,13 +204,15 @@ func (r *Reader) loop() {
 			case <-timer.C:
 				if pasteOpen {
 					// Хвост вставки не спешит: отдаём накопленное как
-					// вставку и продолжаем ждать закрытие — закрывающий
-					// маркер, когда придёт, поглотит ветка pasteOpen.
-					if !emitPaste(pending) {
+					// вставку и продолжаем ждать закрытие. Хвост, похожий
+					// на начало разрезанного маркера, остаётся в pending:
+					// это не текст вставки, в поле ввода ему делать нечего.
+					cut := len(pending) - markerTail(pending)
+					if cut > 0 && !emitPaste(pending[:cut]) {
 						timer.Stop()
 						return
 					}
-					pending = pending[:0]
+					pending = pending[cut:]
 					timer.Stop()
 					continue
 				}
@@ -222,8 +243,10 @@ func (r *Reader) loop() {
 			// Поток кончился: ESC без продолжения — клавиша Esc,
 			// незакрытая вставка — вставка без закрывающего маркера.
 			if pasteOpen {
-				if len(pending) > 0 {
-					emitPaste(pending)
+				// Поток оборвался посреди маркера: заготовку ESC[201~
+				// в текст вставки не отдаём.
+				if cut := len(pending) - markerTail(pending); cut > 0 {
+					emitPaste(pending[:cut])
 				}
 				return
 			}
