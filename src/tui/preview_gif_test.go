@@ -23,7 +23,7 @@ func TestPreviewGIF(t *testing.T) {
 
 	// Кадр «пустая сессия»: шапка, заставка, поле, статус.
 	a := New(Options{
-		Version:  "0.9.0.1",
+		Version:  "0.9.0.2",
 		Model:    "glm-4.6",
 		Provider: "zai",
 		WorkDir:  "~/demo",
