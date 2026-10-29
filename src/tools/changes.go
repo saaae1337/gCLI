@@ -181,14 +181,31 @@ func (r *Registry) noteChange(p, label, old, new string, existed bool) {
 // интерактивен, и Ctrl+C тут не помогает — процесс висит в чтении с
 // терминала, а не в сетевом вызове. Лучше ошибка, которую видно, чем
 // молчаливое ожидание.
+// gitTimeout — потолок одного вызова git. GIT_TERMINAL_PROMPT=0
+// закрывает только промпт авторизации; зависнуть git может и иначе:
+// credential-helper или fsmonitor из локального .git/config — это
+// произвольные команды, чужой NFS-репозиторий — бесконечный status.
+// Потолок щедрый: обычные rev-parse/status/diff укладываются с запасом.
+var gitTimeout = 30 * time.Second
+
 func gitOut(dir string, args ...string) (string, error) {
-	ce := exec.Command("git", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	ce := exec.CommandContext(ctx, "git", args...)
 	ce.Dir = dir
+	PGroup(ce)
+	ce.Cancel = func() error { return KillTree(ce) }
+	ce.WaitDelay = 2 * time.Second
 	ce.Env = append(os.Environ(),
 		"GIT_PAGER=cat", "GIT_OPTIONAL_LOCKS=0", "GCLI=1", "GIT_TERMINAL_PROMPT=0")
 	var stderr strings.Builder
 	ce.Stderr = &stderr
 	out, err := ce.Output()
+	if err != nil && ctx.Err() != nil {
+		// Убит по потолку: ExitError «signal: killed» или DeadlineExceeded.
+		// Наружу нужна причина, а не молчаливый «код 137».
+		err = fmt.Errorf("git не ответил за %v: %w", gitTimeout, err)
+	}
 	return string(out), err
 }
 

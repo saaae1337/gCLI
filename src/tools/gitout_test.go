@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------- gitOut не должен пускать через оболочку ----------
@@ -119,5 +120,45 @@ func TestGitOutIgnoresPagerAndKeepsEnv(t *testing.T) {
 	out, err := gitOut(dir, "log", "--oneline", "-1")
 	if err != nil || !strings.Contains(out, "первый") {
 		t.Fatalf("прямой вызов git не работает: err=%v out=%q", err, out)
+	}
+}
+
+// TestGitOutBoundedByTimeout — gitOut не имеет права висеть вечно.
+//
+// GIT_TERMINAL_PROMPT=0 закрывает только промпт авторизации; зависнуть
+// git может и иначе: credential-helper или fsmonitor из локального
+// .git/config, тяжёлый status на сетевом репозитории. Здесь git
+// подменяется шимом со sleep: без потолка вызов жил бы 60 секунд,
+// с потолком — обязан вернуть ошибку за gitTimeout + WaitDelay.
+func TestGitOutBoundedByTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("на Windows шим с shebang не исполняется")
+	}
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "git")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	old := gitTimeout
+	gitTimeout = 300 * time.Millisecond
+	defer func() { gitTimeout = old }()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := gitOut(dir, "status", "--porcelain")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("зависший git не вернул ошибки")
+		}
+		if !strings.Contains(err.Error(), "не ответил") {
+			t.Fatalf("не та ошибка: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("gitOut висит сверх потолка — таймаут не работает")
 	}
 }
