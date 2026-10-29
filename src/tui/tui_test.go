@@ -738,3 +738,57 @@ func TestParseCtrlEnd(t *testing.T) {
 		t.Fatalf("End разобран как %+v", ev)
 	}
 }
+
+// TestSGRColonSubparams — подпараметры SGR через двоеточие (ITU-T T.416).
+// Раньше часть целиком отваливалась на Atoi: «4:3» теряло подчёркивание,
+// «38:5:196» и «38:2:R:G:B» — цвет.
+func TestSGRColonSubparams(t *testing.T) {
+	th := Dark()
+	base := Style{}
+
+	// «4:3» — волнистое подчёркивание: ведущий параметр 4 применяется.
+	l := parseStyled("\x1b[4:3mU", th, base)
+	if len(l) != 1 || !l[0].S.Underline {
+		t.Fatalf("4:3: подчёркивание потеряно: %+v", l)
+	}
+
+	// «38:5:196» — 256-цветный в колоночной форме.
+	want := xtermColor(196)
+	l = parseStyled("\x1b[38:5:196mR", th, base)
+	if len(l) != 1 || !l[0].S.FG.On || l[0].S.FG != want {
+		t.Fatalf("38:5:196: цвет потерян: %+v", l)
+	}
+
+	// «38:2:R:G:B» — truecolor без идентификатора цветового пространства.
+	l = parseStyled("\x1b[38:2:255:0:0mR", th, base)
+	if len(l) != 1 || !l[0].S.FG.On || l[0].S.FG != RGB(255, 0, 0) {
+		t.Fatalf("38:2:255:0:0: цвет потерян: %+v", l)
+	}
+
+	// «38:2::R:G:B» — T.416 допускает пустой идентификатор пространства.
+	l = parseStyled("\x1b[38:2::25:100:50mR", th, base)
+	if len(l) != 1 || !l[0].S.FG.On || l[0].S.FG != RGB(25, 100, 50) {
+		t.Fatalf("38:2::25:100:50: цвет потерян: %+v", l)
+	}
+
+	// Фон и смесь с точкой с запятой: «1;38:5:46;4» — болд, цвет, подчёркивание.
+	l = parseStyled("\x1b[1;48:5:21;4mB", th, base)
+	if len(l) != 1 {
+		t.Fatalf("смесь: %d сегментов: %+v", len(l), l)
+	}
+	if !l[0].S.Bold || !l[0].S.Underline {
+		t.Fatalf("смесь: потеряны bold/underline: %+v", l[0].S)
+	}
+	if !l[0].S.BG.On || l[0].S.BG != xtermColor(21) {
+		t.Fatalf("смесь: потерян фон 48:5:21: %+v", l[0].S.BG)
+	}
+
+	// Сброс после колоночной формы работает как раньше.
+	l = parseStyled("\x1b[4:3mU\x1b[0mN", th, base)
+	if len(l) != 2 {
+		t.Fatalf("сброс: %d сегментов: %+v", len(l), l)
+	}
+	if l[1].S.Underline {
+		t.Fatalf("сброс не снял подчёркивание: %+v", l[1].S)
+	}
+}

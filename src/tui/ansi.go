@@ -99,6 +99,26 @@ func applySGR(st Style, params string, t Theme, base Style) Style {
 		if p == "" {
 			p = "0"
 		}
+		// Подпараметры через двоеточие (ITU-T T.416): «4:3» — волнистое
+		// подчёркивание, «38:5:N» и «38:2:R:G:B» — цвет. Раньше вся часть
+		// отваливалась на Atoi, и стиль молча терялся.
+		if strings.Contains(p, ":") {
+			sub := strings.Split(p, ":")
+			head, herr := strconv.Atoi(sub[0])
+			if herr != nil {
+				continue
+			}
+			if head == 38 || head == 48 {
+				col := parseExtColorColon(sub)
+				if head == 38 {
+					st.FG = col
+				} else {
+					st.BG = col
+				}
+				continue
+			}
+			p = sub[0] // «4:3» → «4»: ведущий параметр, подпараметры не нужны
+		}
 		n, err := strconv.Atoi(p)
 		if err != nil {
 			continue
@@ -186,6 +206,51 @@ func clamp8(v int) int {
 		return 255
 	}
 	return v
+}
+
+// parseExtColorColon — расширенный цвет в колоночной форме: «38:5:N»
+// (палитра 256) и «38:2:R:G:B». По T.416 перед R:G:B может стоять
+// идентификатор цветового пространства, в том числе пустой:
+// «38:2::25:100:50». Берём последние три числовые поля — так
+// обрабатываются все три формы, а нечисловые идентификаторы
+// отбрасываются сами.
+func parseExtColorColon(sub []string) Color {
+	if len(sub) < 3 {
+		return Color{}
+	}
+	mode, err := strconv.Atoi(sub[1])
+	if err != nil {
+		return Color{}
+	}
+	switch mode {
+	case 5:
+		if len(sub) < 3 {
+			return Color{}
+		}
+		n, err := strconv.Atoi(sub[2])
+		if err != nil {
+			return Color{}
+		}
+		return xtermColor(n)
+	case 2:
+		var vals []int
+		for _, q := range sub[2:] {
+			if q == "" {
+				continue
+			}
+			v, err := strconv.Atoi(q)
+			if err != nil {
+				continue
+			}
+			vals = append(vals, v)
+		}
+		if len(vals) < 3 {
+			return Color{}
+		}
+		vals = vals[len(vals)-3:]
+		return RGB(uint8(clamp8(vals[0])), uint8(clamp8(vals[1])), uint8(clamp8(vals[2])))
+	}
+	return Color{}
 }
 
 // ansiColor — базовые 16 цветов в палитре темы.
