@@ -179,11 +179,7 @@ func (c *Composer) visualRanges(width int) [][2]int {
 			i++
 			continue
 		}
-		cw, n := wcwidth.NextClusterRunes(c.text, i)
-		if n <= 0 {
-			n = 1
-			cw = RuneWidth(r)
-		}
+		cw, n := nextClusterW(c.text, i)
 		if w+cw > width && i > start {
 			br := i
 			// Пробел недалеко от края — переносим по нему.
@@ -210,16 +206,34 @@ func (c *Composer) visualRanges(width int) [][2]int {
 	return out
 }
 
+// tabWidth — сколько колонок таб занимает в отрисовке поля: Lines()
+// рисует его четырьмя пробелами. Мерить его надо так же: wcwidth даёт
+// управляющему символу ширину 0, и на строках с табом курсор съезжал
+// влево на 4 колонки за каждый таб, а переносы и высота поля считались
+// по заниженной ширине.
+const tabWidth = 4
+
+// nextClusterW — ширина очередного кластера в поле ввода в колонках
+// отрисовки: таб — tabWidth, остальное — по кластерам, как нарисует
+// терминал. Гарантирует продвижение: n >= 1.
+func nextClusterW(text []rune, i int) (int, int) {
+	if text[i] == '\t' {
+		return tabWidth, 1
+	}
+	cw, n := wcwidth.NextClusterRunes(text, i)
+	if n <= 0 {
+		return RuneWidth(text[i]), 1
+	}
+	return cw, n
+}
+
 // widthBetween — ширина текста в рунах [from, to) по кластерам.
 // Границы ставит visualRanges и курсор, они выровнены по кластерам;
 // срез, режущий кластер посередине, считается целиком.
 func widthBetween(text []rune, from, to int) int {
 	w := 0
 	for i := from; i < to && i < len(text); {
-		cw, n := wcwidth.NextClusterRunes(text, i)
-		if n <= 0 {
-			break
-		}
+		cw, n := nextClusterW(text, i)
 		w += cw
 		i += n
 	}
@@ -284,10 +298,7 @@ func (c *Composer) Up(width int) {
 	c.cur = target[0]
 	col := 0
 	for k := target[0]; k < target[1]; {
-		cw, n := wcwidth.NextClusterRunes(c.text, k)
-		if n <= 0 {
-			break
-		}
+		cw, n := nextClusterW(c.text, k)
 		if col+cw > x {
 			break
 		}
@@ -309,10 +320,7 @@ func (c *Composer) Down(width int) {
 	c.cur = target[0]
 	col := 0
 	for k := target[0]; k < target[1]; {
-		cw, n := wcwidth.NextClusterRunes(c.text, k)
-		if n <= 0 {
-			break
-		}
+		cw, n := nextClusterW(c.text, k)
 		if col+cw > x {
 			break
 		}
