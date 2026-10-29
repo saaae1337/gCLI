@@ -56,8 +56,8 @@ func (a *app) cmdContext() {
 	for _, t := range a.tools.All() {
 		defs = append(defs, t.Def)
 	}
-	skillsLean := core.ApproxTokens(a.tools.SkillsPromptBlockFor(a.lastUserText()))
-	reqTok, saved := agent.RequestEstimate(sysText, defs, a.sess.Messages)
+	skillsLean := core.ApproxTokens(a.tools.SkillsPromptBlockFor(lastUserText(hist)))
+	reqTok, saved := agent.RequestEstimate(sysText, defs, hist)
 
 	a.ui.Println("")
 	a.ui.Section("Контекст")
@@ -69,7 +69,7 @@ func (a *app) cmdContext() {
 		{"Навыки", "~" + core.Kfmt(skills) + " ток." +
 			fmt.Sprintf("  (в запросе ~%s)", core.Kfmt(skillsLean))},
 		{"История диалога", "~" + core.Kfmt(msgs) + " ток." +
-			fmt.Sprintf("  (%d сообщений)", len(a.sess.Messages))},
+			fmt.Sprintf("  (%d сообщений)", len(hist))},
 		{"Уходит в запрос", "~" + core.Kfmt(reqTok) + " ток."},
 	})
 	if saved > 0 {
@@ -81,9 +81,10 @@ func (a *app) cmdContext() {
 }
 
 // lastUserText — текст последнего сообщения пользователя: по нему
-// подбираются навыки под задачу.
-func (a *app) lastUserText() string {
-	msgs := a.sess.Messages
+// подбираются навыки под задачу. История приходит готовым снимком
+// (a.Messages()): читать a.sess без sessMu из команды нельзя — ход
+// дописывает сообщения параллельно.
+func lastUserText(msgs []core.Message) string {
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role == core.RoleUser && strings.TrimSpace(msgs[i].Content) != "" {
 			return msgs[i].Content

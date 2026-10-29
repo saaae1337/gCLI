@@ -576,3 +576,50 @@ func TestSharedObjectsRace(t *testing.T) {
 		t.Error("после подмен объекты должны остаться на месте")
 	}
 }
+
+// TestContextCmdRace — /context целиком против хода. cmdContext брал
+// снимок истории для оценки контекста, но хвост — RequestEstimate,
+// счётчик сообщений и lastUserText — читал a.sess.Messages вчистую,
+// а ход из cron-горутины дописывает сообщения параллельно: «go test
+// -race» ловит гонку заголовка слайса. История толстая: без неё
+// разблокированное окно команды микросекундное, и a.Messages() в начале
+// каждого вызова закрывает все прошлые append'ы — на старом коде гонка
+// не успевала пойматься. Снимки внутри команды — часть контракта,
+// поэтому зовём команду целиком, как TestSessionCountersRace.
+func TestContextCmdRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	big := strings.Repeat("слово ", 8)
+	sessMu.Lock()
+	a.sess.Messages = make([]core.Message, 8000)
+	for i := range a.sess.Messages {
+		a.sess.Messages[i] = core.Message{Role: core.RoleAssistant, Content: big}
+	}
+	sessMu.Unlock()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // ход из cron-горутины: дописывает историю, ПОКА идёт
+		// /context. Писатель обязан жить всю длину теста: append'ы
+		// микросекундные, и короткий писатель отрабатывает до первого
+		// разблокированного окна читателя — дальше всё накрыто HB-краем
+		// от a.Messages() в начале каждого вызова.
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			a.AddMessage(core.Message{Role: core.RoleAssistant, Content: fmt.Sprintf("ответ %d", i)})
+			i++
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	for i := 0; i < 60; i++ { // очередь ввода: /context
+		a.cmdContext()
+	}
+	close(stop)
+	wg.Wait()
+}
