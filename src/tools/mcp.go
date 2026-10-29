@@ -499,6 +499,15 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 		if srv.Enabled != nil && !*srv.Enabled {
 			continue
 		}
+		// Потолок tools/call резолвится один раз при регистрации и
+		// захватывается в handler: раньше handler перечитывал mcp.json с
+		// диска на КАЖДЫЙ вызов — лишний I/O в горячем пути, а испорченный
+		// файл молча менял потолок на дефолтный. /mcp reload обновляет
+		// значение вместе с остальным набором инструментов.
+		callTimeout := 120 * time.Second
+		if srv.TimeoutSec > 0 {
+			callTimeout = time.Duration(core.Clamp(srv.TimeoutSec, 5, 600)) * time.Second
+		}
 		// Сервер из проекта без согласия не запускаем: это чужой код, и он
 		// стартует ДО первого вопроса пользователя. Подробности — /mcp trust.
 		if !r.mcpTrusted(name) {
@@ -561,7 +570,7 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 				desc = "инструмент MCP-сервера " + name
 			}
 			full := MCPToolName(name, t.Name)
-			if r.registerMCPToolIfAbsent(name, full, t.Name, desc, schema) {
+			if r.registerMCPToolIfAbsent(name, full, t.Name, desc, schema, callTimeout) {
 				count++
 			}
 		}
@@ -576,10 +585,10 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 // проверка и добавление — под одним muTools, иначе два параллельных
 // reload успели бы оба пройти проверку и задвоить инструмент.
 // Возвращает true, если инструмент действительно добавлен.
-func (r *Registry) registerMCPToolIfAbsent(server, fullName, callName, desc, schema string) bool {
+func (r *Registry) registerMCPToolIfAbsent(server, fullName, callName, desc, schema string, timeout time.Duration) bool {
 	t := &Tool{
 		Def:      ToolDef{Name: fullName, Description: "[mcp:" + server + "] " + desc, Schema: schema},
-		Handler:  r.mcpHandler(server, fullName, callName),
+		Handler:  r.mcpHandler(server, fullName, callName, timeout),
 		Category: "mcp",
 		MCPSrv:   server,
 		MCPCall:  callName,
@@ -595,7 +604,7 @@ func (r *Registry) registerMCPToolIfAbsent(server, fullName, callName, desc, sch
 }
 
 // mcpHandler — вызов tools/call на сервере.
-func (r *Registry) mcpHandler(server, fullName, callName string) Handler {
+func (r *Registry) mcpHandler(server, fullName, callName string, timeout time.Duration) Handler {
 	return func(ctx context.Context, m map[string]any) (Result, error) {
 		// muMCP обязателен: /mcp reload из UI-потока может писать в
 		// карту ровно в этот момент (та же гонка, от которой muMCP
@@ -606,13 +615,8 @@ func (r *Registry) mcpHandler(server, fullName, callName string) Handler {
 		if conn == nil || !conn.alive() {
 			return Result{}, fmt.Errorf("MCP-сервер «%s» не подключён — /mcp reload", server)
 		}
-		// Таймаут: из конфига сервера (по умолчанию 120 с).
-		var timeout time.Duration
-		if cfg, _ := r.LoadMCPConfig(); cfg.Servers[server].TimeoutSec > 0 {
-			timeout = time.Duration(core.Clamp(cfg.Servers[server].TimeoutSec, 5, 600)) * time.Second
-		} else {
-			timeout = 120 * time.Second
-		}
+		// Потолок захвачен при регистрации (см. registerMCPToolIfAbsent):
+		// читать mcp.json на каждый вызов — лишний I/O в горячем пути.
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 

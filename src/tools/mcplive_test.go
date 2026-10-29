@@ -204,7 +204,7 @@ func TestMCPCallToolErrorIsNotFatal(t *testing.T) {
 // понятный отказ с подсказкой, а не пустоту.
 func TestMCPCallNotConnectedIsHonest(t *testing.T) {
 	r, _ := mcpRegistry(t, "ok")
-	h := r.mcpHandler("выдуманный", "mcp__выдуманный__x", "x")
+	h := r.mcpHandler("выдуманный", "mcp__выдуманный__x", "x", time.Second)
 	_, err := h(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("вызов неподключённого сервера прошёл молча")
