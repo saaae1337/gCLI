@@ -325,6 +325,15 @@ func (d *Doc) HasThink() bool {
 
 // ToolStart — добавить карточку инструмента.
 func (d *Doc) ToolStart(info ToolInfo) {
+	// Недописанный хвост предыдущего блока фиксируется ДО карточки —
+	// иначе Layout рисовал его в самом конце ленты, после карточки, а
+	// при завершении строка дописывалась в свой блок выше: текст
+	// «прыгал» через карточку. BeginThink, EndThink и EndStream хвост
+	// фиксируют; здесь пропуск был единственным.
+	if d.pending != "" {
+		d.addLine(d.pending)
+		d.pending = ""
+	}
 	info.Status = "running"
 	b := &block{kind: blockTool, tool: info}
 	d.blocks = append(d.blocks, b)
