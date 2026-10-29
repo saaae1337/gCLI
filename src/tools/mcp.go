@@ -474,6 +474,10 @@ func (r *Registry) RegisterMCP() (int, []string) {
 
 // RegisterMCPVersion — то же, с явной версией (для тестов).
 func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
+	// Один проход переподключения за раз — см. muMCPReload: проверка «конн мёртв» и mcpStart не атомарны,
+	// и два параллельных прохода запустили бы по процессу на один сервер.
+	r.muMCPReload.Lock()
+	defer r.muMCPReload.Unlock()
 	cfg, warns := r.LoadMCPConfig()
 	if len(cfg.Servers) == 0 {
 		return 0, warns
