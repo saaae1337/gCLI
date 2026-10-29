@@ -48,7 +48,7 @@ func skillWords(s string) []string {
 		if r == '-' || r == '_' {
 			return ' '
 		}
-		if r >= 'а' && r <= 'я' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+		if r >= 'а' && r <= 'я' || r == 'ё' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
 			return r
 		}
 		return ' '
