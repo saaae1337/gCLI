@@ -11,7 +11,7 @@ on:
       mode:
         description: "Режим"
         type: choice
-        options: [long-time, overnight, long-time-4h]
+        options: [normal, long-time, extra-long-time, overnight]
         default: long-time
       deadline:
         description: "Срок (например 4h)"
@@ -33,14 +33,15 @@ jobs:
 
       - name: Установить gcli
         run: |
-          curl -fsSL -o gcli.tar.gz https://github.com/saaae1337/gCLI/releases/latest/download/gcli-linux-amd64.tar.gz || true
-          if [ ! -s gcli.tar.gz ]; then
+          # Релиз публикует голые бинарники gcli-<версия>-<os>-<arch>:
+          # ни tar.gz, ни каталогов — качаем файл сразу в PATH.
+          curl -fsSL -o /usr/local/bin/gcli https://github.com/saaae1337/gCLI/releases/latest/download/gcli-linux-amd64 && chmod +x /usr/local/bin/gcli || true
+          # Если релизов ещё нет — собираем из исходников:
+          if [ ! -x /usr/local/bin/gcli ]; then
             git clone --depth 1 https://github.com/saaae1337/gCLI.git /tmp/gcli-src
             cd /tmp/gcli-src && ./build.sh one linux amd64
-            cp builds/gcli-*-linux-amd64/gcli /usr/local/bin/gcli || cp builds/gcli /usr/local/bin/gcli
-            exit 0
+            mv builds/gcli-*-linux-amd64 /usr/local/bin/gcli && chmod +x /usr/local/bin/gcli
           fi
-          tar -xzf gcli.tar.gz && mv gcli-*-linux-amd64/gcli /usr/local/bin/gcli && chmod +x /usr/local/bin/gcli
 
       - name: Ветка для работы агента
         run: |
@@ -50,7 +51,7 @@ jobs:
 
       - name: Прогон
         env:
-          GCLI_API_KEY: ${{ secrets.GCLI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
         run: |
           gcli -mission ${{ inputs.mode }} \
                -objective "${{ inputs.objective }}" \

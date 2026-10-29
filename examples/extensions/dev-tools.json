@@ -17,13 +17,13 @@
     {
       "name": "run_tests",
       "description": "Запустить тесты проекта (Go; input — опциональный путь/пакет)",
-      "command": "go test {input} ./...",
+      "command": "go test $GCLI_INPUT ./...",
       "timeout_sec": 240
     },
     {
       "name": "todo_grep",
       "description": "Найти в коде комментарии TODO/FIXME по слову из input",
-      "command": "grep -rn \"{input}\" --include=*.go . | head -30",
+      "command": "grep -rn \"${GCLI_INPUT:-TODO}\" --include=*.go . | head -30",
       "timeout_sec": 30
     }
   ]

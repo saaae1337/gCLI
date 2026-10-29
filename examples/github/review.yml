@@ -1,6 +1,7 @@
 # Ревью PR агентом gcli: читает дифф и оставляет комментарий.
-# Требуется секрет GCLI_API_KEY (или замените на ZAI_API_KEY/OpenAI_API_KEY
-# и соответствующие флаги провайдера).
+# Требуется секрет ZAI_API_KEY — ключ провайдера по умолчанию. Для другого
+# провайдера переименуйте переменную (см. *_API_KEY в reference.md) и
+# добавьте -provider <id>.
 name: gcli review
 
 on:
@@ -24,22 +25,22 @@ jobs:
 
       - name: Установить gcli
         run: |
-          curl -fsSL -o gcli.tar.gz https://github.com/saaae1337/gCLI/releases/latest/download/gcli-linux-amd64.tar.gz || true
+          # Релиз публикует голые бинарники gcli-<версия>-<os>-<arch>:
+          # ни tar.gz, ни каталогов — качаем файл сразу в PATH.
+          curl -fsSL -o /usr/local/bin/gcli https://github.com/saaae1337/gCLI/releases/latest/download/gcli-linux-amd64 && chmod +x /usr/local/bin/gcli || true
           # Если релизов ещё нет — собираем из исходников:
-          if [ ! -s gcli.tar.gz ]; then
+          if [ ! -x /usr/local/bin/gcli ]; then
             git clone --depth 1 https://github.com/saaae1337/gCLI.git /tmp/gcli-src
             cd /tmp/gcli-src && ./build.sh one linux amd64
-            cp builds/gcli-*-linux-amd64/gcli /usr/local/bin/gcli || cp builds/gcli /usr/local/bin/gcli
-            exit 0
+            mv builds/gcli-*-linux-amd64 /usr/local/bin/gcli && chmod +x /usr/local/bin/gcli
           fi
-          tar -xzf gcli.tar.gz && mv gcli-*-linux-amd64/gcli /usr/local/bin/gcli && chmod +x /usr/local/bin/gcli
 
       - name: Дифф PR
         run: git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
 
       - name: Ревью агентом
         env:
-          GCLI_API_KEY: ${{ secrets.GCLI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
         run: |
           gcli -p "Отревьюй дифф из файла /tmp/pr.diff. Найди: баги, риски безопасности, упрощения. Отвечай по-русски, коротко, по пунктам. Если проблем нет — так и скажи." -json > /tmp/review.md
 
