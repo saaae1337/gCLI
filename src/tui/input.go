@@ -316,6 +316,15 @@ func parseEscape(b []byte, forced bool) (Event, int, bool) {
 		return Event{}, 3, false
 	case '\r':
 		return Event{Key: KeyEnter, Alt: true}, 2, false
+	case 0x1b:
+		// Двойное Esc (два нажатия в одном чтении) раньше уходило в
+		// ветку «Alt+руна» ниже: 0x1b — валидная руна, и оба нажатия
+		// съедало одно Alt-событие, которое обработчики молча бросали
+		// (case ev.Alt: return). Прерывание хода, закрытие модалки и
+		// очистка ввода по Esc не срабатывали, пока нажатия не разнесены
+		// форс-таймером. Отдаём первое нажатие как Esc, второе разберёт
+		// следующая итерация цикла.
+		return Event{Key: KeyEsc}, 1, false
 	}
 	// Alt+руна.
 	r, size := utf8.DecodeRune(b[1:])
