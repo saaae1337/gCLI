@@ -1426,11 +1426,13 @@ func (a *App) modalKeyLocked(ev Event) {
 			r = 'y'
 		case 'н', 'Н':
 			r = 'n'
-		case 'а', 'в':
+		case 'а':
 			r = 'a'
-		case 'А', 'В':
+		case 'А':
 			r = 'A'
 		}
+		// «в» не мапим: первая буква и «всегда», и «все» — промах по
+		// клавише превращал разовое разрешение в постоянное.
 		switch r {
 		case 'Y':
 			r = 'y'
@@ -1548,6 +1550,11 @@ func (a *App) composerTop() int {
 	top := a.h - 3 - a.composerHeight()
 	if top < 5 {
 		top = 5
+	}
+	// Низкий терминал: рамка поля не должна налезать на строки подсказок
+	// и статуса — лучше поднять поле и поджать ленту, чем рвать рамку.
+	if maxTop := a.h - 2 - a.composerHeight(); maxTop >= 1 && top > maxTop {
+		top = maxTop
 	}
 	return top
 }
@@ -1909,7 +1916,7 @@ func (a *App) drawHeader(s *Screen) {
 	x += StringWidth("v"+ver) + 1
 	s.Text(x, 0, "·", Style{FG: t.Border, BG: t.Panel})
 	x += 2
-	s.Text(x, 0, "ИИ-агент в терминале", Style{FG: t.Muted, BG: t.Panel})
+	tag := "ИИ-агент в терминале"
 
 	// Правая часть: расход контекста, как на витрине. Модель и провайдер
 	// живут на заставке и в /status — шапка остаётся тонкой.
@@ -1925,6 +1932,11 @@ func (a *App) drawHeader(s *Screen) {
 	rx := a.w - StringWidth(right) - 2
 	if rx > x+6 {
 		s.Text(rx, 0, right, Style{FG: t.Muted, BG: t.Panel})
+	}
+	// Теглайн — только если он кончается левее расхода контекста:
+	// на узкой шапке строки наезжают друг на друга.
+	if rx > x+StringWidth(tag)+2 {
+		s.Text(x, 0, tag, Style{FG: t.Muted, BG: t.Panel})
 	}
 	// Тонкая линия под шапкой.
 	s.FillLine(1, Style{BG: t.Bg})
@@ -2870,8 +2882,10 @@ func (a *App) askCursorLocked() (int, int, bool) {
 // CursorX — колонка курсора в однострочном поле.
 func (c *Composer) CursorX() int {
 	x := 0
-	for i := 0; i < c.cur && i < len(c.text); i++ {
-		x += RuneWidth(c.text[i])
+	for i := 0; i < c.cur && i < len(c.text); {
+		cw, n := nextClusterW(c.text, i)
+		x += cw
+		i += n
 	}
 	return x
 }

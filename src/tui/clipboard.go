@@ -18,8 +18,15 @@ import (
 // платформы. Оба пути завёрнуты сюда, чтобы остальной код не знал
 // деталей.
 
+// osc52Limit — потолок данных для OSC52: крупные вставки переживают
+// не все терминалы (tmux и часть эмуляторов молча их роняют).
+const osc52Limit = 100 << 10
+
 // OSC52 — последовательность «положи текст в системный буфер обмена».
 func OSC52(text string) string {
+	if len(text) > osc52Limit {
+		text = strings.ToValidUTF8(text[:osc52Limit], "")
+	}
 	return "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\x07"
 }
 

@@ -222,7 +222,11 @@ func (u *UI) inline(s string) string {
 	s = reBareURL.ReplaceAllStringFunc(s, func(m string) string {
 		p := reBareURL.FindStringSubmatch(m)
 		lead, url := p[1], p[2]
-		return lead + keep(u.c(u.pal.Link, "⟨"+url+"⟩"))
+		l, rgt := "⟨", "⟩"
+		if !u.g.Unicode {
+			l, rgt = "<", ">"
+		}
+		return lead + keep(u.c(u.pal.Link, l+url+rgt))
 	})
 
 	// 4. Жирный, зачёркнутый, курсив.

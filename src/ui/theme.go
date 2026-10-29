@@ -82,7 +82,8 @@ func detectColorLevel() colorLevel {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TERM"))) {
 	case "dumb":
 		return colorNone
-	case "xterm-256color", "screen-256color", "alacritty", "wezterm", "foot", "kitty", "tmux-256color":
+	case "xterm-256color", "screen-256color", "alacritty", "wezterm", "foot", "kitty",
+		"xterm-kitty", "xterm-ghostty", "st-256color", "tmux-256color":
 		return color256
 	}
 	// Windows Terminal и современный conhost умеют 256 цветов.

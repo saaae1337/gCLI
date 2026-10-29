@@ -113,9 +113,9 @@ func (u *UI) RailEndChain(note string) {
 	u.Println(u.railIndent() + u.emberTail() + " " + u.Gray(core.OneLine(note)))
 }
 
-// railOn — вертикаль вложенного рельса, railGap — шаг отступа.
+// railGap — шаг отступа рельса. Вертикаль берётся из таблицы глифов
+// (u.g.V): в ASCII-режиме это «|», а не юникодная «│».
 const (
-	railOn  = "│"
 	railGap = " "
 )
 
@@ -132,7 +132,7 @@ func (u *UI) railIndentLocked() string {
 	base := railGap + railGap
 	extra := ""
 	for i := 0; i < u.railDepth; i++ {
-		extra += u.c(u.pal.Muted, railOn) + railGap
+		extra += u.c(u.pal.Muted, u.g.V) + railGap
 	}
 	return base + extra
 }

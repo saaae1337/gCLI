@@ -521,7 +521,11 @@ func (u *UI) Step(s string) { u.Println(" " + u.Accent(u.g.Arrow) + " " + s) }
 // AutoOK — строка «автопилот одобрил изменение файла».
 func (u *UI) AutoOK(path string) {
 	p := truncate(core.OneLine(path), 72)
-	u.Println("  " + u.c(u.pal.OK, u.g.Check) + " " + u.Gray(u.c(u.pal.Muted, "✎ ")+p) +
+	mark := "✎ "
+	if !u.g.Unicode {
+		mark = "+ "
+	}
+	u.Println("  " + u.c(u.pal.OK, u.g.Check) + " " + u.Gray(u.c(u.pal.Muted, mark)+p) +
 		"  " + u.AutoTag())
 }
 
@@ -813,7 +817,13 @@ func (u *UI) Bar(done, total int, width int) string {
 	}
 	s := u.Accent(strings.Repeat(fullChar, full))
 	if full < width && rem >= 0.5 {
-		s += u.Accent(barPart)
+		// Половинка блока — юникод; в ASCII доливаем целую клетку,
+		// чтобы полоса оставалась сплошной.
+		part := barPart
+		if !u.g.Unicode {
+			part = fullChar
+		}
+		s += u.Accent(part)
 		full++
 	}
 	if full < width {
@@ -871,7 +881,7 @@ func (u *UI) SpinnerStart(label string) {
 				el := time.Since(u.spinT0).Truncate(time.Second)
 				label := u.spinLbl
 				// Обрезаем, чтобы не ломать строку на узком терминале.
-				maxl := u.opts.Width - 14
+				maxl := u.Width() - 14
 				if maxl > 8 && cellWidth(label) > maxl {
 					label = truncate(label, maxl)
 				}
@@ -964,7 +974,7 @@ func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 				// человек видит, вписывается ли ход в окно модели.
 				if m := u.metrics; m.Context > 0 {
 					ctxInfo := u.c(u.pal.Muted, "  ctx "+m.ContextText())
-					if visibleWidth(line+ctxInfo) <= u.opts.Width {
+					if visibleWidth(line+ctxInfo) <= u.Width() {
 						line += ctxInfo
 					}
 				}
@@ -973,7 +983,7 @@ func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 				// с ней — просто теснее.
 				if h := u.spinHint; h != "" {
 					withHint := line + u.c(u.pal.Muted, "  "+h)
-					if visibleWidth(withHint) <= u.opts.Width {
+					if visibleWidth(withHint) <= u.Width() {
 						line = withHint
 					}
 				}
