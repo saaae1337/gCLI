@@ -364,6 +364,56 @@ func miniMascot(state MascotState, phase int) (*pixmap, map[byte]Color) {
 	return p, pal
 }
 
+// ---------- Мини-Искра: ASCII-лицо из витрины ----------
+//
+// Колонка слева от поля ввода показывает того же кота, что и GIF в
+// README: три строки «/\_/\», «( ^.^ )», «> ^ <». Контур охрой,
+// мордочка тёплым белым — как в mascotPaintFace.
+
+// miniCatLines — три строки ASCII-кота в позе текущего состояния.
+func miniCatLines(state MascotState, phase int) [3]string {
+	face := "^.^"
+	switch state {
+	case MascotBlink, MascotSleep, MascotThink:
+		face = "-.-"
+	case MascotWork:
+		face = ">.<"
+	case MascotDone, MascotHappy:
+		face = "^ω^"
+		if phase%2 == 1 {
+			face = "^.^"
+		}
+	}
+	suf := ""
+	if state == MascotSleep {
+		suf = "zZ"
+	}
+	l2 := " ( " + face + " )"
+	for StringWidth(l2) < 8 {
+		l2 += " "
+	}
+	if suf != "" {
+		l2 += " " + suf
+	}
+	return [3]string{"  /\\_/\\", l2, "  > ^ <"}
+}
+
+// drawMiniCat — нарисовать ASCII-Искру в позиции: (x,y) — левый верх.
+func drawMiniCat(s *Screen, x, y int, state MascotState, phase int, t Theme) {
+	lines := miniCatLines(state, phase)
+	for i, ln := range lines {
+		s.Text(x, y+i, ln, Style{FG: t.Accent, BG: t.Bg})
+	}
+	// Мордочка светлым поверх контура.
+	r := []rune(lines[1])
+	if len(r) >= 6 {
+		s.Text(x+3, y+1, string(r[3:6]), Style{FG: t.Text, BG: t.Bg})
+	}
+	if len(r) > 9 {
+		s.Text(x+9, y+1, string(r[9:]), Style{FG: t.Dim, BG: t.Bg})
+	}
+}
+
 // drawMiniMascot — мини-кот: (x,y) — левый верхний угол области 5×3 клетки.
 func drawMiniMascot(s *Screen, x, y int, state MascotState, phase int, bg Color) {
 	p, pal := miniMascot(state, phase)

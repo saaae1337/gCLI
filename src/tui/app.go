@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // ---------- Приложение ----------
@@ -168,6 +169,23 @@ type App struct {
 	filesAt   time.Time
 	filesBusy bool
 	fileHide  string // @-токен, для которого список закрыли по Esc
+
+	// Выделение мышью: якорь и подвижный край в клетках экрана. Текст
+	// выделения снимается с последнего собранного кадра (lastScreen).
+	selAnchor              [2]int
+	selHead                [2]int
+	selOn                  bool
+	clicks                 int
+	lastClick              time.Time
+	lastClickX, lastClickY int
+
+	// blockOf — блок-владелец каждой строки кэша ленты: клик по строке-
+	// заголовку размышлений сворачивает или разворачивает их.
+	blockOf []*block
+
+	// lastScreen — последний собранный кадр: из него берётся текст
+	// выделения для копирования.
+	lastScreen *Screen
 }
 
 // modalKind — вид окна поверх ленты.
@@ -403,6 +421,13 @@ func (a *App) handleEvent(ev Event) {
 		a.mu.Unlock()
 		return
 	}
+	if ev.MDown || ev.MDrag || ev.MUp {
+		// Мышь: выделение перетаскиванием, клики по полю и по блокам.
+		a.mouseLocked(ev)
+		a.drawLocked()
+		a.mu.Unlock()
+		return
+	}
 	a.keyLocked(ev)
 	a.drawLocked()
 	a.mu.Unlock()
@@ -422,17 +447,55 @@ func (a *App) keyLocked(ev Event) {
 	if ev.Key == KeyRune {
 		switch {
 		case ev.Ctrl && (ev.R == 'c'):
+			// Есть выделение — Ctrl+C копирует его, как в привычных
+			// программах. Без выделения — прежнее поведение: прервать ход,
+			// очистить ввод, выйти.
+			if a.selOn {
+				if txt := a.selectionText(); txt != "" {
+					a.copyTextLocked(txt)
+				}
+				a.clearSel()
+				return
+			}
 			a.ctrlCLocked()
 			return
 		case ev.Ctrl && ev.R == 'd':
-			// Выход только на простое: иначе сессия закрылась бы посреди
-			// хода, оставив инструменты и журнал недописанными.
-			if a.comp.Empty() && !a.busy {
+			// Непустое поле — Ctrl+D отправляет (второй способ после
+			// alt+enter). Пустое — выход, но только на простое: иначе сессия
+			// закрылась бы посреди хода, оставив инструменты и журнал
+			// недописанными.
+			if !a.comp.Empty() {
+				a.submitLocked()
+				return
+			}
+			if !a.busy {
 				a.closed = true
 			}
 			return
 		case ev.Ctrl && ev.R == 'j':
-			a.comp.Insert("\n")
+			a.comp.Newline()
+			return
+		case ev.Ctrl && ev.R == 'v':
+			// Ctrl+V: системный буфер обмена штатной утилитой (wl-paste,
+			// xclip, pbpaste). Читаем вне мьютекса: утилита может отвечать
+			// сотню миллисекунд, интерфейс замирать не должен.
+			go func() {
+				txt, ok := ReadClipboard()
+				a.mu.Lock()
+				defer a.mu.Unlock()
+				if a.closed {
+					return
+				}
+				if !ok || txt == "" {
+					a.toastLocked("буфер обмена недоступен — вставь ctrl+shift+v")
+				} else {
+					a.comp.Insert(txt)
+					if n := strings.Count(txt, "\n") + 1; n > 1 {
+						a.toastLocked(fmt.Sprintf("вставлено строк: %d", n))
+					}
+				}
+				a.markDirty()
+			}()
 			return
 		case ev.Ctrl && ev.R == 'o':
 			a.toggleThinkLocked()
@@ -482,8 +545,10 @@ func (a *App) keyLocked(ev Event) {
 	fileOpen := a.filePaletteOpen()
 	switch ev.Key {
 	case KeyEnter:
-		if ev.Shift || ev.Alt {
-			a.comp.Insert("\n")
+		if ev.Alt || ev.Ctrl {
+			// Alt+Enter и Ctrl+Enter отправляют: обычный Enter переносит
+			// строку, отправке нужен отдельный аккорд.
+			a.submitLocked()
 			return
 		}
 		// Палитра открыта: первый Enter доводит команду до выбранной,
@@ -496,13 +561,28 @@ func (a *App) keyLocked(ev Event) {
 				a.palSel = 0
 				return
 			}
+			// Текст уже совпадает с выбранной командой — второй Enter
+			// запускает её.
+			a.submitLocked()
+			return
 		}
 		if fileOpen {
 			if a.completeFileLocked() {
 				return
 			}
 		}
-		a.submitLocked()
+		// Слэш-команда без переносов — привычный Enter запускает её:
+		// команды не бывают многострочными, а текст сообщения может.
+		if text := a.comp.Text(); strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") {
+			a.submitLocked()
+			return
+		}
+		// Грамотный перенос строки: хвост уезжает вниз, отступ текущей
+		// строки повторяется, курсор встаёт в конец отступа. На пустом
+		// поле Enter ничего не делает.
+		if !a.comp.Empty() {
+			a.comp.Newline()
+		}
 	case KeyTab:
 		if fileOpen {
 			a.completeFileLocked()
@@ -608,6 +688,276 @@ func (a *App) interruptLocked() {
 	if a.handle.Interrupt != nil {
 		go a.handle.Interrupt()
 	}
+}
+
+// ---------- Мышь: выделение и клики ----------
+
+// clearSel — снять выделение.
+func (a *App) clearSel() {
+	a.selOn = false
+	a.selAnchor = [2]int{}
+	a.selHead = [2]int{}
+}
+
+// selRect — нормализованный прямоугольник выделения.
+func (a *App) selRect() (int, int, int, int) {
+	x0, y0 := a.selAnchor[0], a.selAnchor[1]
+	x1, y1 := a.selHead[0], a.selHead[1]
+	if x1 < x0 {
+		x0, x1 = x1, x0
+	}
+	if y1 < y0 {
+		y0, y1 = y1, y0
+	}
+	return x0, y0, x1, y1
+}
+
+// selectionText — текст выделения с последнего кадра: строки в границах
+// прямоугольника, хвосты строк подрезаны. Широкие символы берутся
+// целиком: клетки-продолжения пропускаются, хвост кластера дописывается.
+func (a *App) selectionText() string {
+	s := a.lastScreen
+	if s == nil || !a.selOn {
+		return ""
+	}
+	x0, y0, x1, y1 := a.selRect()
+	if y0 == y1 && x0 == x1 {
+		return ""
+	}
+	var rows []string
+	for y := y0; y <= y1 && y < s.H; y++ {
+		from, to := 0, s.W
+		if y == y0 {
+			from = x0
+		}
+		if y == y1 {
+			to = x1 + 1
+		}
+		if to > s.W {
+			to = s.W
+		}
+		var sb strings.Builder
+		for x := from; x < to && x < s.W; x++ {
+			c := s.Cells[y*s.W+x]
+			if c.Cont {
+				continue
+			}
+			r := c.R
+			if r == 0 {
+				r = ' '
+			}
+			sb.WriteRune(r)
+			if c.Rest != "" {
+				sb.WriteString(c.Rest)
+			}
+		}
+		rows = append(rows, strings.TrimRight(sb.String(), " "))
+	}
+	for len(rows) > 0 && rows[0] == "" {
+		rows = rows[1:]
+	}
+	for len(rows) > 0 && rows[len(rows)-1] == "" {
+		rows = rows[:len(rows)-1]
+	}
+	return strings.Join(rows, "\n")
+}
+
+// copyTextLocked — положить текст в системный буфер обмена (OSC52) и
+// подтвердить тостом. Терминал без поддержки OSC52 молча проигнорирует
+// последовательность — изнутри TUI лучше не сделать.
+func (a *App) copyTextLocked(text string) {
+	a.Raw(OSC52(text))
+	n := len([]rune(text))
+	if lines := strings.Count(text, "\n") + 1; lines > 1 {
+		a.toastLocked(fmt.Sprintf("скопировано: %d строк", lines))
+		return
+	}
+	a.toastLocked(fmt.Sprintf("скопировано: %d %s", n, plural(n, "символ", "символа", "символов")))
+}
+
+// applySelLocked — подсветить выделение в собранном кадре: у выделенных
+// клеток меняются местами передний и задний план. Прямой обмен цветов,
+// а не атрибут reverse: у пустых клеток цвета не заданы, reverse сделал
+// бы выделение невидимым.
+func (a *App) applySelLocked(s *Screen) {
+	if !a.selOn || s == nil {
+		return
+	}
+	x0, y0, x1, y1 := a.selRect()
+	for y := y0; y <= y1 && y < s.H; y++ {
+		from, to := 0, s.W
+		if y == y0 {
+			from = x0
+		}
+		if y == y1 {
+			to = x1 + 1
+		}
+		if to > s.W {
+			to = s.W
+		}
+		for x := from; x < to; x++ {
+			c := &s.Cells[y*s.W+x]
+			fg, bg := c.S.FG, c.S.BG
+			if !fg.On {
+				fg = a.th.Text
+			}
+			if !bg.On {
+				bg = a.th.Bg
+			}
+			c.S.FG, c.S.BG = bg, fg
+			c.S.Reverse = false
+		}
+	}
+}
+
+// mouseLocked — мышь: нажатие начинает выделение или ставит курсор,
+// движение тянет выделение, отпускание копирует его в буфер обмена.
+// Двойной клик выбирает слово, тройной — строку; клик по заголовку
+// размышлений сворачивает или разворачивает их.
+func (a *App) mouseLocked(ev Event) {
+	x, y := ev.X-1, ev.Y-1 // SGR-мышь отдаёт координаты с единицы
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	if y >= a.h {
+		y = a.h - 1
+	}
+	if x >= a.w {
+		x = a.w - 1
+	}
+	switch {
+	case ev.MDown:
+		now := time.Now()
+		if now.Sub(a.lastClick) < 450*time.Millisecond &&
+			absDiff(a.lastClickX, x) <= 1 && absDiff(a.lastClickY, y) <= 1 {
+			a.clicks++
+		} else {
+			a.clicks = 1
+		}
+		a.lastClick, a.lastClickX, a.lastClickY = now, x, y
+		a.clearSel()
+		// Клик в поле ввода: поставить курсор.
+		if y >= a.composerTop() {
+			a.composerClickLocked(x, y)
+			return
+		}
+		if a.clicks == 2 {
+			a.selectWordLocked(x, y)
+			a.selOn = true
+			return
+		}
+		if a.clicks >= 3 {
+			a.selOn = true
+			a.selAnchor = [2]int{0, y}
+			a.selHead = [2]int{a.w - 1, y}
+			return
+		}
+		// Клик по заголовку размышлений — развернуть или свернуть.
+		if a.toggleThinkClickLocked(x, y) {
+			return
+		}
+		a.selOn = true
+		a.selAnchor = [2]int{x, y}
+		a.selHead = a.selAnchor
+	case ev.MDrag:
+		if !a.selOn {
+			return
+		}
+		a.selHead = [2]int{x, y}
+	case ev.MUp:
+		if !a.selOn {
+			return
+		}
+		a.selHead = [2]int{x, y}
+		if txt := a.selectionText(); txt != "" {
+			a.copyTextLocked(txt)
+			return
+		}
+		a.clearSel()
+	}
+}
+
+// toggleThinkClickLocked — клик по строке-заголовку размышлений.
+// true — клик попал по блоку размышлений, состояние переключено.
+func (a *App) toggleThinkClickLocked(x, y int) bool {
+	if len(a.blockOf) != len(a.cache) || y < 2 {
+		return false
+	}
+	row := y - 2 - a.bodyOffset()
+	if row < 0 || row >= len(a.blockOf) {
+		return false
+	}
+	b := a.blockOf[row]
+	if b == nil || b.kind != blockThink {
+		return false
+	}
+	a.doc.ToggleBlock(b)
+	return true
+}
+
+// composerClickLocked — клик в поле ввода: курсор в позицию под мышью.
+func (a *App) composerClickLocked(x, y int) {
+	inner := a.composerInner()
+	boxTop := a.composerTop()
+	maxLines := a.composerHeight() - 2
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	_, cy := a.comp.CursorPos(inner)
+	start := 0
+	if cy >= maxLines {
+		start = cy - maxLines + 1
+	}
+	line := start + (y - boxTop - 1)
+	col := x - a.composerX() - 4
+	if col < 0 {
+		col = 0
+	}
+	a.comp.SetCursor(a.comp.PosAt(inner, line, col))
+}
+
+// selectWordLocked — двойной клик: выделить слово под курсором.
+func (a *App) selectWordLocked(x, y int) {
+	s := a.lastScreen
+	if s == nil || y < 0 || y >= s.H || x < 0 || x >= s.W {
+		return
+	}
+	isWord := func(c Cell) bool {
+		if c.Cont {
+			return false
+		}
+		r := c.R
+		if r == 0 {
+			return false
+		}
+		return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '.'
+	}
+	if !isWord(s.Cells[y*s.W+x]) {
+		a.selAnchor = [2]int{x, y}
+		a.selHead = [2]int{x, y}
+		return
+	}
+	from := x
+	for from > 0 && isWord(s.Cells[y*s.W+from-1]) {
+		from--
+	}
+	to := x
+	for to < s.W-1 && isWord(s.Cells[y*s.W+to+1]) {
+		to++
+	}
+	a.selAnchor = [2]int{from, y}
+	a.selHead = [2]int{to, y}
+}
+
+// absDiff — модуль разности: «клик рядом с прошлым» для двойного.
+func absDiff(a, b int) int {
+	if a < b {
+		return b - a
+	}
+	return a - b
 }
 
 // submitLocked — отправить введённое.
@@ -890,7 +1240,7 @@ func (a *App) ToggleThink() {
 // toggleThinkLocked — переключение мыслей под уже взятым мьютексом.
 func (a *App) toggleThinkLocked() {
 	if !a.doc.HasThink() {
-		a.toastLocked("размышлений в этом ходе нет")
+		a.toastLocked("размышлений пока нет")
 		return
 	}
 	a.doc.ToggleThink()
@@ -1150,11 +1500,18 @@ func (a *App) scrollBy(delta int) {
 	}
 }
 
-// bodyHeight — высота ленты.
+// bodyOffset — первая видимая строка ленты: 0 — прилипание к низу.
+func (a *App) bodyOffset() int {
+	off := len(a.cache) - a.bodyHeight() - a.scroll
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
+// bodyHeight — высота ленты: от строки под шапкой до верха поля ввода.
 func (a *App) bodyHeight() int {
-	// Шапка (2) + пустая строка + поле ввода (3..7) + подсказка + статус.
-	footer := a.composerHeight() + 3
-	hh := a.h - 2 - footer
+	hh := a.composerTop() - 2
 	if hh < 3 {
 		hh = 3
 	}
@@ -1167,8 +1524,14 @@ func (a *App) composerHeight() int {
 	if lines > 6 {
 		lines = 6
 	}
-	if lines < 1 {
-		lines = 1
+	// Витринный минимум: три строки содержимого, рамка в пять строк —
+	// как на демо-GIF. На низком окне поле сжимается до одной строки.
+	min := 3
+	if a.h < 18 {
+		min = 1
+	}
+	if lines < min {
+		lines = min
 	}
 	return lines + 2
 }
@@ -1178,9 +1541,11 @@ func (a *App) composerHeight() int {
 // Одна формула на отрисовку и на курсор: если считать их порознь, на
 // низком терминале курсор уезжает на строку выше поля.
 func (a *App) composerTop() int {
-	top := a.h - 2 - a.composerHeight()
-	if min := 2 + a.bodyHeight() + 1; top < min {
-		top = min
+	// Витрина: между рамкой и строкой подсказок живёт пустая строка,
+	// поэтому отступ снизу — три строки, а не две.
+	top := a.h - 3 - a.composerHeight()
+	if top < 5 {
+		top = 5
 	}
 	return top
 }
@@ -1202,7 +1567,7 @@ func (a *App) railWidth() int {
 	if a.opt.HideMascot || a.w < 66 {
 		return 0
 	}
-	return 7
+	return 8
 }
 
 // composerInner — ширина текста внутри поля ввода.
@@ -1476,6 +1841,8 @@ func (a *App) drawLocked() {
 	}
 	a.lastDraw = time.Now()
 	s := a.buildLocked()
+	a.applySelLocked(s)
+	a.lastScreen = s
 	a.rend.Draw(s)
 	if a.modal != nil && a.modal.kind == modalAsk {
 		if x, y, ok := a.askCursorLocked(); ok {
@@ -1514,7 +1881,8 @@ func (a *App) buildLocked() *Screen {
 	return s
 }
 
-// drawHeader — шапка: бренд, версия, модель.
+// drawHeader — шапка: бренд, версия, теглайн и расход контекста —
+// один в один с витриной README.
 func (a *App) drawHeader(s *Screen) {
 	t := a.th
 	s.FillLine(0, Style{BG: t.Panel})
@@ -1534,22 +1902,22 @@ func (a *App) drawHeader(s *Screen) {
 	x += StringWidth("v"+ver) + 1
 	s.Text(x, 0, "·", Style{FG: t.Border, BG: t.Panel})
 	x += 2
-	s.Text(x, 0, "Искра", Style{FG: t.Muted, BG: t.Panel})
+	s.Text(x, 0, "ИИ-агент в терминале", Style{FG: t.Muted, BG: t.Panel})
 
-	// Правая часть: провайдер и модель.
-	right := ""
-	if a.opt.Provider != "" {
-		right = a.opt.Provider + "  ·  "
+	// Правая часть: расход контекста, как на витрине. Модель и провайдер
+	// живут на заставке и в /status — шапка остаётся тонкой.
+	pct := "—"
+	if a.met.ContextMax > 0 {
+		p := a.met.Context * 100 / a.met.ContextMax
+		if p > 999 {
+			p = 999
+		}
+		pct = fmt.Sprintf("%d%%", p)
 	}
-	model := a.opt.Model
-	if model == "" {
-		model = "модель не выбрана"
-	}
-	rightW := StringWidth(right) + StringWidth(model)
-	rx := a.w - rightW - 2
+	right := "ctx " + pct
+	rx := a.w - StringWidth(right) - 2
 	if rx > x+6 {
 		s.Text(rx, 0, right, Style{FG: t.Muted, BG: t.Panel})
-		s.Text(rx+StringWidth(right), 0, model, Style{FG: t.Accent2, BG: t.Panel, Bold: true})
 	}
 	// Тонкая линия под шапкой.
 	s.FillLine(1, Style{BG: t.Bg})
@@ -1573,10 +1941,7 @@ func (a *App) drawBody(s *Screen, top, h int) {
 	a.refreshCacheLocked(w)
 	lines := a.cache
 	// Позиция окна: 0 — прилипание к низу.
-	off := len(lines) - h - a.scroll
-	if off < 0 {
-		off = 0
-	}
+	off := a.bodyOffset()
 	for i := 0; i < h; i++ {
 		idx := off + i
 		if idx >= len(lines) {
@@ -1624,7 +1989,7 @@ func (a *App) refreshCacheLocked(w int) {
 	if a.cacheVer == a.doc.Version() && a.cacheW == w && a.cacheSpin == spin {
 		return
 	}
-	a.cache = a.doc.Layout(LayoutOpts{Width: w, Theme: a.th, Spinner: spin})
+	a.cache, a.blockOf = a.doc.layout(LayoutOpts{Width: w, Theme: a.th, Spinner: spin})
 	a.cacheVer = a.doc.Version()
 	a.cacheW = w
 	a.cacheSpin = spin
@@ -1757,8 +2122,10 @@ func (a *App) welcomeLines() []Line {
 	}
 	right = append(right, Line{})
 	right = append(right, Line{
-		{Text: "  /help", S: Style{FG: t.Gold, BG: t.Bg}},
-		{Text: " — все команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: "/help", S: Style{FG: t.Gold, BG: t.Bg}},
+		{Text: " — команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: "alt+enter", S: Style{FG: t.Gold, BG: t.Bg}},
+		{Text: " — отправить   ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: "ctrl+o", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — размышления", S: Style{FG: t.Dim, BG: t.Bg}},
 	})
@@ -2013,17 +2380,14 @@ func (a *App) drawFooter(s *Screen, top int) {
 	if top >= a.h {
 		return
 	}
-	// Пустая строка перед полем.
-	if top < a.h {
-		s.FillLine(top, Style{BG: t.Bg})
-	}
-	// Подсказки — под полем, статус — последняя строка.
-	hintY := a.h - 2
-	statusY := a.h - 1
 	boxTop := a.composerTop()
 	a.drawComposer(s, boxTop, a.composerHeight())
-	a.drawHints(s, hintY)
-	a.drawStatus(s, statusY)
+	// Пустая строка между рамкой и подсказками — как на витрине.
+	if blank := boxTop + a.composerHeight(); blank < a.h-2 {
+		s.FillLine(blank, Style{BG: t.Bg})
+	}
+	a.drawHints(s, a.h-2)
+	a.drawStatus(s, a.h-1)
 }
 
 // drawComposer — рамка и текст ввода.
@@ -2035,7 +2399,7 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 	}
 	st := Style{FG: border, BG: t.Panel}
 	boxX := a.composerX()
-	boxW := a.w - boxX - 1
+	boxW := a.w - boxX - 2
 	// Рамка.
 	s.Fill(boxX, top, boxW, h, Style{BG: t.Panel})
 	s.Box(boxX, top, boxW, h, a.corners, st)
@@ -2055,7 +2419,7 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		label = fmt.Sprintf(" в очереди: %d ", len(a.queue))
 	}
 	if label != "" {
-		lx := a.w - StringWidth(label) - 6
+		lx := a.w - 4 - StringWidth(label)
 		if lx > boxX+3 {
 			s.Text(lx, top, label, Style{FG: t.Accent2, BG: t.Panel, Bold: true})
 		}
@@ -2072,29 +2436,37 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 	if cy >= maxLines {
 		start = cy - maxLines + 1
 	}
-	for i := 0; i < maxLines; i++ {
-		idx := start + i
-		if idx >= len(lines) {
-			break
+	if a.comp.Empty() {
+		// Витрина: пустое поле — приглашение по центру рамки.
+		py := top + 1 + (maxLines-1)/2
+		s.Text(boxX+2, py, "❯ ", Style{FG: t.Accent, BG: t.Panel, Bold: true})
+		s.Text(boxX+4, py, "спроси что-нибудь… alt+enter — отправить", Style{FG: t.Dim, BG: t.Panel})
+	} else {
+		for i := 0; i < maxLines; i++ {
+			idx := start + i
+			if idx >= len(lines) {
+				break
+			}
+			y := top + 1 + i
+			prompt := "  "
+			pst := Style{FG: t.Dim, BG: t.Panel}
+			if idx == 0 {
+				prompt = "❯ "
+				pst = Style{FG: t.Accent, BG: t.Panel, Bold: true}
+			}
+			s.Text(boxX+2, y, prompt, pst)
+			s.Text(boxX+4, y, lines[idx], Style{FG: t.Text, BG: t.Panel})
 		}
-		y := top + 1 + i
-		prompt := "  "
-		pst := Style{FG: t.Dim, BG: t.Panel}
-		if idx == 0 {
-			prompt = "❯ "
-			pst = Style{FG: t.Accent, BG: t.Panel, Bold: true}
-		}
-		s.Text(boxX+2, y, prompt, pst)
-		if idx == 0 && a.comp.Empty() {
-			s.Text(boxX+4, y, "спроси что-нибудь… @файл — приложить", Style{FG: t.Dim, BG: t.Panel})
-			continue
-		}
-		s.Text(boxX+4, y, lines[idx], Style{FG: t.Text, BG: t.Panel})
 	}
-	// Мини-Искра в левой колонке: 5×3 клеток по высоте рамки поля.
-	if rail := a.railWidth(); rail > 0 {
+	// Мини-Искра в левой колонке: ASCII-кот из витрины, поза по состоянию.
+	if a.railWidth() > 0 {
 		ph := a.tick / 2
-		drawMiniMascot(s, 2, top, a.miniMascotState(), ph, t.Bg)
+		content := a.composerHeight() - 2
+		y := top + 1
+		if content > 3 {
+			y += (content - 3) / 2
+		}
+		drawMiniCat(s, 1, y, a.miniMascotState(), ph, t)
 	}
 }
 
@@ -2105,7 +2477,7 @@ func (a *App) drawHints(s *Screen, y int) {
 	}
 	t := a.th
 	s.FillLine(y, Style{BG: t.Bg})
-	left := " enter отправить · ctrl+j перенос · @файл приложить · ctrl+y копировать · / команды"
+	left := " /help — команды · /mascot demo — все состояния Искры · alt+enter — отправить"
 	if a.paletteOpen() {
 		left = " ↑↓ выбор · tab вставить · esc закрыть"
 	}
@@ -2113,7 +2485,7 @@ func (a *App) drawHints(s *Screen, y int) {
 		left = " ↑↓ файл · tab/enter подставить · esc закрыть"
 	}
 	if a.busy {
-		left = " enter в очередь · esc остановить · pgup/pgdn прокрутка"
+		left = " alt+enter в очередь · esc остановить · pgup/pgdn прокрутка"
 	}
 	if a.scroll > 0 {
 		left = " pgup/pgdn прокрутка · ctrl+end — вниз"
@@ -2156,7 +2528,9 @@ func (a *App) drawStatus(s *Screen, y int) {
 	barW := 10
 	fill := 0
 	if a.met.ContextMax > 0 {
-		fill = barW * a.met.Context / a.met.ContextMax
+		// Округление до ближайшего, а не к нулю: витринная полоса при
+		// малых процентах не должна выглядеть пустой.
+		fill = (2*barW*a.met.Context + a.met.ContextMax) / (2 * a.met.ContextMax)
 		if fill > barW {
 			fill = barW
 		}
@@ -2453,6 +2827,11 @@ func (a *App) drawModal(s *Screen) {
 
 // composerCursorLocked — позиция курсора в поле ввода.
 func (a *App) composerCursorLocked() (int, int, bool) {
+	if a.comp.Empty() {
+		// Пустое поле: приглашение рисуется по центру рамки, курсор к нему
+		// не привязан — прятать.
+		return 0, 0, false
+	}
 	boxTop := a.composerTop()
 	boxH := a.composerHeight()
 	inner := a.composerInner()

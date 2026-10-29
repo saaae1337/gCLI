@@ -330,6 +330,101 @@ func (c *Composer) Down(width int) {
 	}
 }
 
+// Newline — грамотный перенос строки в позиции курсора.
+//
+// Хвост после курсора уезжает на новую строку, отступ текущей строки
+// повторяется (auto-indent, как в редакторах), курсор встаёт в конец
+// отступа. Разрез идёт строго по рунам: текст хранится рунами, курсор —
+// индекс руны, широкие символы и составные кластеры не рвутся.
+//
+// Аккуратность:
+//   - если после курсора до конца строки одни пробелы — они не тащатся
+//     на новую строку;
+//   - если текущая строка сама состоит из одних пробелов, отступ не
+//     копируется — Enter на пустых строках не выращивает лесенку
+//     whitespace.
+func (c *Composer) Newline() {
+	// Начало текущей логической строки и её отступ.
+	start := c.cur
+	for start > 0 && c.text[start-1] != '\n' {
+		start--
+	}
+	indent := 0
+	for start+indent < c.cur && (c.text[start+indent] == ' ' || c.text[start+indent] == '\t') {
+		indent++
+	}
+	lineAllWS := indent == c.cur-start
+	// Конец текущей логической строки и «хвост» после курсора.
+	end := c.cur
+	for end < len(c.text) && c.text[end] != '\n' {
+		end++
+	}
+	tailSpaces := true
+	for i := c.cur; i < end; i++ {
+		if c.text[i] != ' ' && c.text[i] != '\t' {
+			tailSpaces = false
+			break
+		}
+	}
+	if tailSpaces && lineAllWS {
+		indent = 0
+	}
+	next := make([]rune, 0, len(c.text)+1+indent)
+	next = append(next, c.text[:c.cur]...)
+	next = append(next, '\n')
+	next = append(next, c.text[start:start+indent]...)
+	if !tailSpaces {
+		next = append(next, c.text[c.cur:]...)
+	} else {
+		next = append(next, c.text[end:]...)
+	}
+	c.text = next
+	c.cur = c.cur + 1 + indent
+	c.hpos = -1
+}
+
+// PosAt — индекс руны для визуальной позиции (строка, колонка) в
+// видимых строках; граница диапазона принадлежит своей строке, как в
+// CursorPos. Служит клику мышью: клик правее текста ставит курсор в
+// конец видимой строки, ниже последней — в конец текста.
+func (c *Composer) PosAt(width, line, col int) int {
+	ranges := c.visualRanges(width)
+	if line < 0 {
+		line = 0
+	}
+	if line >= len(ranges) {
+		return len(c.text)
+	}
+	r := ranges[line]
+	if col <= 0 {
+		return r[0]
+	}
+	w := 0
+	k := r[0]
+	for k < r[1] {
+		cw, n := nextClusterW(c.text, k)
+		if w+cw > col {
+			break
+		}
+		w += cw
+		k += n
+	}
+	return k
+}
+
+// SetCursor — поставить курсор в позицию (в рунах) с клампом: клик
+// мышью по полю ввода и другие программные перемещения.
+func (c *Composer) SetCursor(pos int) {
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(c.text) {
+		pos = len(c.text)
+	}
+	c.cur = pos
+	c.hpos = -1
+}
+
 // HistoryPrev — предыдущая строка истории.
 func (c *Composer) HistoryPrev() {
 	if len(c.hist) == 0 {

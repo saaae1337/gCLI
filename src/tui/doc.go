@@ -313,6 +313,16 @@ func (d *Doc) ToggleThink() {
 	d.touch()
 }
 
+// ToggleBlock — развернуть или свернуть один блок размышлений
+// (клик мышью по его заголовку).
+func (d *Doc) ToggleBlock(b *block) {
+	if b == nil || b.kind != blockThink {
+		return
+	}
+	b.collapsed = !b.collapsed
+	d.touch()
+}
+
 // HasThink — есть ли что показывать по Ctrl+O.
 func (d *Doc) HasThink() bool {
 	for _, b := range d.blocks {
@@ -432,21 +442,37 @@ func (d *Doc) layKey(b *block, o LayoutOpts) layKey {
 //
 // Возвращает все строки ленты: видимую часть выбирает вызывающий. Так
 // проще считать прокрутку и «прилипание» к низу.
-//
-// Отрисовка блоков кэшируется (d.lay): на каждом кадре заново рисуются
-// только блоки, чей отпечаток состояния изменился, — при стриминге в
-// длинной сессии это один-два хвостовых блока, а не вся лента.
 func (d *Doc) Layout(o LayoutOpts) []Line {
+	out, _ := d.layout(o)
+	return out
+}
+
+// layout — то же, что Layout, плюс владелец каждой строки: блок, из
+// которого она вышла. Нужен клику мышью: щелчок по строке-заголовку
+// размышлений сворачивает или разворачивает их. Отрисовка блоков
+// кэшируется (d.lay): на каждом кадре заново рисуются только блоки,
+// чей отпечаток состояния изменился, — при стриминге в длинной сессии
+// это один-два хвостовых блока, а не вся лента.
+func (d *Doc) layout(o LayoutOpts) ([]Line, []*block) {
 	w := o.Width
 	if w < 10 {
 		w = 10
 	}
 	t := o.Theme
 	var out []Line
-	add := func(l Line) { out = append(out, l) }
-	addAll := func(ls []Line) { out = append(out, ls...) }
+	owners := make([]*block, 0, 128)
+	add := func(l Line, b *block) {
+		out = append(out, l)
+		owners = append(owners, b)
+	}
+	addAll := func(ls []Line, b *block) {
+		out = append(out, ls...)
+		for range ls {
+			owners = append(owners, b)
+		}
+	}
 	if d.Empty() {
-		return nil
+		return nil, nil
 	}
 	if w != d.layW {
 		d.layW = w
@@ -457,11 +483,11 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 			// Между соседними карточками инструментов пустой строки нет:
 			// серия вызовов должна читаться как один список.
 			if b.kind != blockTool || d.blocks[i-1].kind != blockTool {
-				add(Line{})
+				add(Line{}, nil)
 			}
 		}
 		if e, ok := d.lay[b]; ok && e.w == w && e.key == d.layKey(b, o) {
-			addAll(e.line)
+			addAll(e.line, b)
 			continue
 		}
 		var bl []Line
@@ -477,9 +503,9 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 			if b == d.think && d.pending != "" {
 				cp := *b
 				cp.lines = append(append([]string{}, b.lines...), d.pending)
-				bl = renderThink(&cp, w, t)
+				bl = renderThink(&cp, w, t, o.Spinner)
 			} else {
-				bl = renderThink(b, w, t)
+				bl = renderThink(b, w, t, o.Spinner)
 			}
 		case blockTool:
 			bl = renderTool(b, w, t, o.Spinner)
@@ -492,80 +518,92 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 			d.lay = map[*block]layEntry{}
 		}
 		d.lay[b] = layEntry{w: w, key: d.layKey(b, o), line: bl}
-		addAll(bl)
+		addAll(bl, b)
 	}
 	// Незавершённая строка — хвост текущей печати. Во время размышлений
 	// она уже показана внутри их блока (см. выше).
 	if d.pending != "" && d.think == nil {
 		if d.armed {
-			addAll(renderAssistant(&block{kind: blockAssistant, lines: []string{d.pending}}, w, t))
+			addAll(renderAssistant(&block{kind: blockAssistant, lines: []string{d.pending}}, w, t), nil)
 		} else {
-			addAll(renderPlainText(d.pending, w, t, "  ", "  ", Style{FG: t.Text, BG: t.Bg}))
+			addAll(renderPlainText(d.pending, w, t, "  ", "  ", Style{FG: t.Text, BG: t.Bg}), nil)
 		}
 	}
 	// Убираем пустые строки в начале и в конце.
 	for len(out) > 0 && out[0].Width() == 0 {
 		out = out[1:]
+		owners = owners[1:]
 	}
 	for len(out) > 0 && out[len(out)-1].Width() == 0 {
 		out = out[:len(out)-1]
+		owners = owners[:len(owners)-1]
 	}
-	return out
+	return out, owners
 }
 
-// renderUser — запрос пользователя: плашка с акцентной полосой.
+// renderUser — запрос пользователя: заголовок «◆ запрос» с линией и
+// текст с отступом, как на витрине README.
 func renderUser(b *block, w int, t Theme) []Line {
 	text := strings.Join(b.lines, "\n")
-	inner := w - 4
-	if inner < 10 {
-		inner = 10
+	if w < 16 {
+		w = 16
 	}
-	st := Style{FG: t.Text, BG: t.User}
-	lines := wrapPlain(text, inner)
-	out := make([]Line, 0, len(lines))
-	for _, ln := range lines {
-		line := Line{
-			{Text: "▌ ", S: Style{FG: t.Accent, BG: t.User}},
-			{Text: PadRight(ln, inner), S: st},
-		}
-		out = append(out, line)
+	out := []Line{blockHeader("запрос", w, t.Accent, t)}
+	for _, ln := range wrapPlain(text, w-4) {
+		out = append(out, Line{
+			{Text: "    ", S: Style{FG: t.Text, BG: t.Bg}},
+			{Text: ln, S: Style{FG: t.Text, BG: t.Bg}},
+		})
 	}
 	return out
 }
 
-// renderAssistant — ответ модели с искрой в начале.
+// blockHeader — строка «◆ имя ─────»: общий заголовок блока в стиле
+// витрины. Линия добивается до устойчивой ширины, чтобы заголовки
+// «запрос», «gcli» и инструментов читались одним глазом, но никогда не
+// выталкивает строку за ширину ленты.
+func blockHeader(title string, w int, col Color, t Theme) Line {
+	rule := 42 - utf8.RuneCountInString(title)
+	if max := w - 5 - utf8.RuneCountInString(title); rule > max {
+		rule = max
+	}
+	if rule < 1 {
+		rule = 1
+	}
+	return Line{
+		{Text: "  ◆ ", S: Style{FG: col, BG: t.Bg, Bold: true}},
+		{Text: title, S: Style{FG: col, BG: t.Bg, Bold: true}},
+		{Text: " " + strings.Repeat("─", rule), S: Style{FG: t.BorderDim, BG: t.Bg}},
+	}
+}
+
+// renderAssistant — ответ модели: заголовок «◆ gcli» и текст с отступом.
 func renderAssistant(b *block, w int, t Theme) []Line {
-	var out []Line
-	prefix := []Seg{{Text: "✦ ", S: Style{FG: t.Gold, BG: t.Bg}}}
-	indent := []Seg{{Text: "  ", S: Style{FG: t.Muted, BG: t.Bg}}}
-	first := true
+	if w < 16 {
+		w = 16
+	}
+	out := []Line{blockHeader("gcli", w, t.Accent2, t)}
 	for _, raw := range b.lines {
 		if strings.TrimSpace(stripANSI(raw)) == "" {
 			out = append(out, Line{})
 			continue
 		}
 		segs := parseStyled(raw, t, Style{FG: t.Text, BG: t.Bg})
-		wrapped := wrapSegs(segs, w-2)
-		for _, ln := range wrapped {
-			var line Line
-			if first {
-				line = append(line, prefix...)
-				first = false
-			} else {
-				line = append(line, indent...)
-			}
-			line = append(line, ln...)
-			out = append(out, line)
+		for _, ln := range wrapSegs(segs, w-4) {
+			line := Line{{Text: "    ", S: Style{FG: t.Text, BG: t.Bg}}}
+			out = append(out, append(line, ln...))
 		}
 	}
 	if b.meta != "" {
-		out = append(out, Line{{Text: "  " + b.meta, S: Style{FG: t.Dim, BG: t.Bg}}})
+		out = append(out, Line{{Text: "    " + b.meta, S: Style{FG: t.Dim, BG: t.Bg}}})
 	}
 	return out
 }
 
-// renderThink — размышления: свёрнуты в одну строку.
-func renderThink(b *block, w int, t Theme) []Line {
+// renderThink — размышления: свёрнуты в одну строку, разворачиваются
+// Ctrl+O или кликом по заголовку. Пока модель думает, в заголовке
+// живёт спиннер — видно, что размышления пишутся прямо сейчас.
+func renderThink(b *block, w int, t Theme, spin string) []Line {
 	body := strings.Join(b.lines, "\n")
 	body = strings.TrimSpace(stripANSI(body))
 	if body == "" {
@@ -573,13 +611,21 @@ func renderThink(b *block, w int, t Theme) []Line {
 	}
 	n := len(strings.Split(body, "\n"))
 	if b.collapsed {
-		hint := "ctrl+o — показать"
-		line := fmt.Sprintf("  ◇ размышления · %d %s · %s", n, plural(n, "строка", "строки", "строк"), hint)
+		if !b.done {
+			line := "  ◇ думаю " + spin + "  ·  ctrl+o — развернуть"
+			return []Line{{{Text: Truncate(line, w), S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
+		}
+		line := fmt.Sprintf("  ◇ размышления · %d %s · ctrl+o — развернуть",
+			n, plural(n, "строка", "строки", "строк"))
 		return []Line{{{Text: Truncate(line, w), S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 	}
 	// Развёрнутые мысли: приглушённый блок с вертикальной чертой.
 	var out []Line
-	out = append(out, Line{{Text: "  ◇ размышления · ctrl+o — скрыть", S: Style{FG: t.Muted, BG: t.Bg, Italic: true}}})
+	head := "  ◇ размышления · ctrl+o — свернуть"
+	if !b.done {
+		head = "  ◇ думаю " + spin + " · ctrl+o — свернуть"
+	}
+	out = append(out, Line{{Text: Truncate(head, w), S: Style{FG: t.Muted, BG: t.Bg, Italic: true}}})
 	max := 400
 	for i, ln := range strings.Split(body, "\n") {
 		if i >= max {
@@ -597,7 +643,7 @@ func renderThink(b *block, w int, t Theme) []Line {
 // renderTool — карточка инструмента в одну-две строки.
 func renderTool(b *block, w int, t Theme, spin string) []Line {
 	ti := b.tool
-	icon, color := toolIcon(ti.Kind, t)
+	_, color := toolIcon(ti.Kind, t)
 	name := ti.Name
 	args := sanitizeOneLine(ti.Args)
 	nameW := StringWidth(name)
@@ -623,9 +669,6 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 		scol = t.Err
 	}
 	right := status
-	if ti.Status == "ok" && ti.Detail != "" {
-		right = Truncate(sanitizeOneLine(ti.Detail), 28) + "  " + status
-	}
 	if ti.Elapsed > 0 {
 		right = fmt.Sprintf("%s  %.1fс", right, ti.Elapsed.Seconds())
 	}
@@ -645,9 +688,9 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	st := Style{FG: t.Text, BG: t.Bg}
 	line := Line{
 		{Text: "  ", S: st},
-		{Text: icon, S: Style{FG: color, BG: t.Bg}},
+		{Text: "◆", S: Style{FG: color, BG: t.Bg, Bold: true}},
 		{Text: " ", S: st},
-		{Text: name, S: Style{FG: t.Text, BG: t.Bg, Bold: false}},
+		{Text: name, S: Style{FG: color, BG: t.Bg, Bold: true}},
 		{Text: args, S: Style{FG: t.Muted, BG: t.Bg}},
 	}
 	// Дополняем пробелами до правой части.
@@ -655,9 +698,19 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	if pad < 1 {
 		pad = 1
 	}
-	line = append(line, Seg{Text: strings.Repeat(" ", pad), S: Style{FG: t.Muted, BG: t.Bg}})
+	line = append(line, Seg{Text: strings.Repeat(" ", pad), S: st})
 	line = append(line, Seg{Text: right, S: Style{FG: scol, BG: t.Bg}})
 	out := []Line{line.trimEnd()}
+
+	// Деталь удачного вызова — второй строкой с отступом, как на
+	// витрине: «214 строк · голова файла в контексте».
+	if ti.Status == "ok" && ti.Detail != "" {
+		detail := sanitizeOneLine(ti.Detail)
+		for _, seg := range wrapSegs(Line{{Text: detail, S: Style{FG: t.Muted, BG: t.Bg}}}, w-6) {
+			l := Line{{Text: "    ", S: st}}
+			out = append(out, append(l, seg...).trimEnd())
+		}
+	}
 
 	// Ошибка — отдельной строкой под карточкой: её видно, не раскрывая.
 	if (ti.Status == "fail" || ti.Status == "denied") && ti.Detail != "" {
@@ -674,7 +727,7 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 func toolIcon(kind string, t Theme) (string, Color) {
 	switch kind {
 	case "read":
-		return "◧", t.Info
+		return "◧", t.OK
 	case "write":
 		return "✎", t.Warn
 	case "exec":

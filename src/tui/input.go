@@ -51,6 +51,14 @@ type Event struct {
 	Wheel int   // -1 вверх, +1 вниз
 	X, Y  int   // координаты мыши (1-based)
 	Tick  int64 // служебное: тик анимации (в события не попадает)
+
+	// Мышь: какая кнопка и что с ней случилось. SGR-мышь различает
+	// нажатие, движение с зажатой кнопкой и отпускание — на них
+	// строится выделение перетаскиванием.
+	MBtn  int  // 0 — левая, 1 — средняя, 2 — правая
+	MDown bool // нажатие
+	MDrag bool // движение с зажатой кнопкой
+	MUp   bool // отпускание
 }
 
 // Reader — читатель терминала.
@@ -464,13 +472,15 @@ func parseCSI(b []byte, forced bool) (Event, int, bool) {
 			}
 			return parseX10Mouse(b[next], b[next+1], b[next+2]), next + 3, false
 		}
-		return parseMouse(seq, next), next, false
+		return parseMouse(b[fin], seq), next, false
 	}
 	return Event{}, next, false
 }
 
-// parseMouse — SGR-мышь.
-func parseMouse(seq string, n int) Event {
+// parseMouse — SGR-мышь. final — финальный байт CSI: 'M' — нажатие или
+// движение, 'm' — отпускание. Код кнопки: 0..2 — кнопки, 32 — бит
+// движения (движение с зажатой кнопкой), 64/65 — колесо.
+func parseMouse(final byte, seq string) Event {
 	if !strings.HasPrefix(seq, "<") {
 		return Event{}
 	}
@@ -482,12 +492,25 @@ func parseMouse(seq string, n int) Event {
 	x, _ := strconv.Atoi(parts[1])
 	y, _ := strconv.Atoi(parts[2])
 	ev := Event{X: x, Y: y}
-	switch btn & 0x43 {
+	code := btn & 0x43
+	switch code {
 	case 64: // колесо вверх
 		ev.Wheel = -1
+		return ev
 	case 65: // колесо вниз
 		ev.Wheel = 1
+		return ev
 	}
+	switch {
+	case final == 'm':
+		// Отпускание приходит с кодом кнопки без бита движения.
+		ev.MUp = true
+	case code >= 32:
+		ev.MDrag = true
+	default:
+		ev.MDown = true
+	}
+	ev.MBtn = code & 3
 	if btn&4 != 0 {
 		ev.Shift = true
 	}
@@ -510,12 +533,21 @@ func parseX10Mouse(btn, xb, yb byte) Event {
 		return Event{}
 	}
 	ev := Event{X: x, Y: y}
-	switch b & 0x43 {
+	code := b & 0x43
+	switch code {
 	case 64: // колесо вверх
 		ev.Wheel = -1
+		return ev
 	case 65: // колесо вниз
 		ev.Wheel = 1
+		return ev
 	}
+	if code >= 32 {
+		ev.MDrag = true
+	} else {
+		ev.MDown = true
+	}
+	ev.MBtn = code & 3
 	if b&4 != 0 {
 		ev.Shift = true
 	}

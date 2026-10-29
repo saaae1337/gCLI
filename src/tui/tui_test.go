@@ -238,7 +238,7 @@ func TestAppLoop(t *testing.T) {
 	}()
 
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "привет\r"); err != nil {
+	if _, err := io.WriteString(pw, "привет\x1b\r"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -293,7 +293,7 @@ func TestAppQueue(t *testing.T) {
 		}})
 	}()
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "первый\r"); err != nil {
+	if _, err := io.WriteString(pw, "первый\x1b\r"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -305,7 +305,7 @@ func TestAppQueue(t *testing.T) {
 		t.Fatal("первый ход не начался")
 	}
 	// Второй запрос уходит в очередь: ход ещё идёт.
-	if _, err := io.WriteString(pw, "второй\r"); err != nil {
+	if _, err := io.WriteString(pw, "второй\x1b\r"); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -385,7 +385,7 @@ func testConfirmKey(t *testing.T, key string, want Choice) {
 		}})
 	}()
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "go\r"); err != nil {
+	if _, err := io.WriteString(pw, "go\x1b\r"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -508,7 +508,7 @@ func TestAppCtrlDOnlyIdle(t *testing.T) {
 		}})
 	}()
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "долгий ход\r"); err != nil {
+	if _, err := io.WriteString(pw, "долгий ход\x1b\r"); err != nil {
 		t.Fatal(err)
 	}
 	select {
