@@ -21,10 +21,14 @@ func lineDiff(oldS, newS string) []diffOp {
 	const maxN = 500
 	if len(a) > maxN || len(b) > maxN {
 		// Слишком большие файлы: не строим матрицу, показываем начало.
-		return []diffOp{
-			{'+', "файл большой: показаны первые строки"},
-			{'+', strings.Join(b[:minInt(len(b), 8)], "\n")},
+		// Каждая строка — отдельный op: op рисуется как одна клеточная
+		// строка, и Screen.Text выбрасывает перевод строки из Text —
+		// склеенные через "\n" строки слиплись бы в одну нечитаемую.
+		ops := []diffOp{{'+', "файл большой: показаны первые строки"}}
+		for _, ln := range b[:minInt(len(b), 8)] {
+			ops = append(ops, diffOp{'+', ln})
 		}
+		return ops
 	}
 	// LCS-таблица.
 	n, m := len(a), len(b)
@@ -64,6 +68,17 @@ func lineDiff(oldS, newS string) []diffOp {
 	}
 	for ; j < m; j++ {
 		ops = append(ops, diffOp{'+', b[j]})
+	}
+	// splitLines не видит разницу конечного перевода строки: «a\nb\n» и
+	// «a\nb» дают одинаковые строки, а файлы при этом разные. Без пометки
+	// правка, снимающая или ставящая хвостовой перевод, выглядела бы в
+	// модалке как «изменений нет» — пользователь подтверждал бы вслепую.
+	if strings.HasSuffix(oldS, "\n") != strings.HasSuffix(newS, "\n") {
+		if strings.HasSuffix(oldS, "\n") {
+			ops = append(ops, diffOp{'-', "конечный перевод строки удалён"})
+		} else {
+			ops = append(ops, diffOp{'+', "конечный перевод строки добавлен"})
+		}
 	}
 	return ops
 }
