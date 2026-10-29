@@ -510,6 +510,12 @@ func TestMissionRace(t *testing.T) {
 	}
 	wg.Wait()
 
+	// Журнал миссии открыт по дизайну до конца сеанса: закрывает его выход из gcli.
+	// Тест — тот же «сеанс»: закрываем явно, иначе на Windows t.TempDir
+	// не удаляет каталог с открытым mission_journal.log — уборка падает
+	// уже после зелёной проверки.
+	a.closeMissionJournal()
+
 	if job := a.missionJob(); job.Objective == "" {
 		t.Error("после 100 записей задание не может быть пустым")
 	}

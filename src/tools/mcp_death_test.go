@@ -53,7 +53,10 @@ func TestMCPConnDeathReaps(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(proj), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := `{"servers":{"fake":{"command":"python3","args":["` + srvPath + `"]}}}`
+	// filepath.ToSlash: на Windows путь C:\Users\... в JSON — невалидный
+	// escape \U, конфиг не парсится, предупреждение роняет тест.
+	// Прямой слэш Windows-программы принимают наравне с обратным.
+	cfg := `{"servers":{"fake":{"command":"python3","args":["` + filepath.ToSlash(srvPath) + `"]}}}`
 	if err := os.WriteFile(proj, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -443,8 +444,14 @@ func TestMultiBashSignalKillNotSuccess(t *testing.T) {
 	if !strings.Contains(res.Summary, "1 с ошибкой") || strings.Contains(res.Summary, "1 успешно") {
 		t.Errorf("убитая сигналом команда не в провалах: %s", res.Summary)
 	}
-	if !strings.Contains(res.Text, "[код выхода: -1]") {
-		t.Errorf("код -1 не показан:\n%s", res.Text)
+	// Код -1 — POSIX-семантика «убит сигналом». На Windows убитый Git
+	// Bash отчитывается кодом 2304, и текстового «-1» не будет;
+	// проверяемое свойство — «убитая команда не считается успешной» —
+	// покрыто сводкой выше на всех платформах.
+	if runtime.GOOS != "windows" {
+		if !strings.Contains(res.Text, "[код выхода: -1]") {
+			t.Errorf("код -1 не показан:\n%s", res.Text)
+		}
 	}
 }
 
