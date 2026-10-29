@@ -74,8 +74,14 @@ func ParseSkill(p, scope string) (Skill, error) {
 	}
 	s := Skill{Path: p, Scope: scope}
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	// hadFM — front matter найден и разобран. Нужен ниже: без него
+	// запасной путь «тело = весь файл» срабатывал и для файла, где
+	// front matter есть, а тела нет — тогда в тело попадал сырой
+	// front matter вместе с разделителями.
+	hadFM := false
 	if strings.HasPrefix(text, "---") {
 		if end := strings.Index(text[3:], "\n---"); end >= 0 {
+			hadFM = true
 			fm := text[3 : 3+end]
 			s.Body = strings.TrimSpace(text[3+end+4:])
 			for _, line := range strings.Split(fm, "\n") {
@@ -95,7 +101,11 @@ func ParseSkill(p, scope string) (Skill, error) {
 	if s.Name == "" {
 		s.Name = strings.TrimSuffix(filepath.Base(p), ".md")
 	}
-	if s.Body == "" {
+	// Тело пусто, но front matter разобран — значит тело действительно
+	// пустое (закрывающий «---» последняя строка): так и оставляем.
+	// Без !hadFM сюда попадал весь файл, и без description в описание
+	// навыка шёл мусор — первая строка «---».
+	if s.Body == "" && !hadFM {
 		s.Body = strings.TrimSpace(text)
 	}
 	if s.Desc == "" {

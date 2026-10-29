@@ -102,3 +102,53 @@ func mustParse(t *testing.T, dir, name string) Skill {
 	}
 	return s
 }
+
+// TestParseSkillFrontMatterOnly — навык из одного front matter: закрывающий
+// «---» последняя строка (с переводом строки и без). Раньше запасной путь
+// «тело = весь файл» засовывал в тело сырой front matter, а без description
+// в описание шёл мусор — первая строка «---».
+func TestParseSkillFrontMatterOnly(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"fence-eof", "---\nname: probe\ndescription: только шапка\n---"},
+		{"fence-newline", "---\nname: probe2\n---\n"},
+		{"fence-blank", "---\nname: probe3\ndescription: пусто\n---\n\n \t\n"},
+	}
+	for _, tc := range cases {
+		if err := os.WriteFile(filepath.Join(dir, tc.name+".md"), []byte(tc.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		s := mustParse(t, dir, tc.name)
+		if s.Body != "" {
+			t.Errorf("%s: тело = %q, ждали пустоту (front matter не должен попадать в тело)", tc.name, s.Body)
+		}
+		if strings.Contains(s.Desc, "---") {
+			t.Errorf("%s: описание %q — мусор из разделителя front matter", tc.name, s.Desc)
+		}
+		if s.Name == "" {
+			t.Errorf("%s: имя потеряно", tc.name)
+		}
+	}
+	// С description описание остаётся на месте.
+	s := mustParse(t, dir, "fence-eof")
+	if s.Desc != "только шапка" {
+		t.Errorf("desc = %q, ждали «только шапка»", s.Desc)
+	}
+}
+
+// TestParseSkillNoFrontMatter — файл без front matter: тело = весь текст,
+// запасной путь не сломан фиксом.
+func TestParseSkillNoFrontMatter(t *testing.T) {
+	dir := t.TempDir()
+	text := "# Инструкция\n\nШаги агента.\n"
+	if err := os.WriteFile(filepath.Join(dir, "plain.md"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := mustParse(t, dir, "plain")
+	if s.Body != strings.TrimSpace(text) {
+		t.Errorf("body = %q, ждали весь текст", s.Body)
+	}
+}
