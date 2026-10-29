@@ -172,3 +172,19 @@ func TestStripANSINonSGR(t *testing.T) {
 		}
 	}
 }
+
+// ZWJ перед ESC не должен втягивать escape внутрь кластера: иначе ширина
+// строки расходится с очищенным текстом ровно на один символ («00000» +
+// ZWJ + ESC + «0» считалась как 6 против 5 после чистки). Нашлось
+// фаззингом FuzzWidthInvariants на CI.
+func TestZWJBeforeESCBreaksCluster(t *testing.T) {
+	for _, s := range []string{
+		"00000\u200d\x1b0",
+		"\u200d\x1b[3;2uхвост",
+		"привет\u200d\x1b]8;;https://example.com\x1b\\ссылка",
+	} {
+		if got, want := cellWidth(s), cellWidth(stripANSI(s)); got != want {
+			t.Errorf("ширина %q: с escape %d, без %d", s, got, want)
+		}
+	}
+}

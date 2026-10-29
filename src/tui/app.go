@@ -461,7 +461,7 @@ func (a *App) keyLocked(ev Event) {
 			return
 		case ev.Ctrl && ev.R == 'd':
 			// Непустое поле — Ctrl+D отправляет (второй способ после
-			// alt+enter). Пустое — выход, но только на простое: иначе сессия
+			// shift+enter). Пустое — выход, но только на простое: иначе сессия
 			// закрылась бы посреди хода, оставив инструменты и журнал
 			// недописанными.
 			if !a.comp.Empty() {
@@ -545,8 +545,10 @@ func (a *App) keyLocked(ev Event) {
 	fileOpen := a.filePaletteOpen()
 	switch ev.Key {
 	case KeyEnter:
-		if ev.Alt || ev.Ctrl {
-			// Alt+Enter и Ctrl+Enter отправляют: обычный Enter переносит
+		if ev.Shift || ev.Alt || ev.Ctrl {
+			// Shift+Enter отправляет — главный аккорд: Alt+Enter занят
+			// самим терминалом (в Windows Terminal это полный экран),
+			// Ctrl+Enter остаётся запасным. Обычный Enter переносит
 			// строку, отправке нужен отдельный аккорд.
 			a.submitLocked()
 			return
@@ -1878,6 +1880,11 @@ func (a *App) buildLocked() *Screen {
 	if a.modal != nil {
 		a.drawModal(s)
 	}
+	if !a.opt.Unicode {
+		// ASCII-режим: фирменные знаки меняются на читаемые везде,
+		// клетки остаются на своих местах.
+		asciiFallback(s)
+	}
 	return s
 }
 
@@ -2058,7 +2065,7 @@ func (a *App) drawWelcome(s *Screen, top, h int) {
 // welcomeLines — содержимое заставки.
 func (a *App) welcomeLines() []Line {
 	t := a.th
-	wide := !a.opt.HideMascot && a.w >= 86 && a.h >= 20
+	wide := !a.opt.HideMascot && a.opt.Unicode && a.w >= 86 && a.h >= 20
 	state := a.mascotState()
 	var left []Line
 	if wide {
@@ -2124,7 +2131,7 @@ func (a *App) welcomeLines() []Line {
 	right = append(right, Line{
 		{Text: "/help", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
-		{Text: "alt+enter", S: Style{FG: t.Gold, BG: t.Bg}},
+		{Text: "shift+enter", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — отправить   ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: "ctrl+o", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — размышления", S: Style{FG: t.Dim, BG: t.Bg}},
@@ -2134,7 +2141,7 @@ func (a *App) welcomeLines() []Line {
 		// Узкий экран: маскот сверху, текст под ним. На низком окне
 		// маскот уступает место подсказкам: обрезанная заставка хуже
 		// полной, но без маскота.
-		if !a.opt.HideMascot && a.h >= 30 {
+		if !a.opt.HideMascot && a.opt.Unicode && a.h >= 30 {
 			art := NewScreen(24, 11, t.Bg)
 			drawMascot(art, 0, 0, state, t.Bg)
 			for y := 0; y < 11; y++ {
@@ -2440,7 +2447,7 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		// Витрина: пустое поле — приглашение по центру рамки.
 		py := top + 1 + (maxLines-1)/2
 		s.Text(boxX+2, py, "❯ ", Style{FG: t.Accent, BG: t.Panel, Bold: true})
-		s.Text(boxX+4, py, "спроси что-нибудь… alt+enter — отправить", Style{FG: t.Dim, BG: t.Panel})
+		s.Text(boxX+4, py, "спроси что-нибудь… shift+enter — отправить", Style{FG: t.Dim, BG: t.Panel})
 	} else {
 		for i := 0; i < maxLines; i++ {
 			idx := start + i
@@ -2477,7 +2484,7 @@ func (a *App) drawHints(s *Screen, y int) {
 	}
 	t := a.th
 	s.FillLine(y, Style{BG: t.Bg})
-	left := " /help — команды · /mascot demo — все состояния Искры · alt+enter — отправить"
+	left := " /help — команды · /mascot demo — все состояния Искры · shift+enter — отправить"
 	if a.paletteOpen() {
 		left = " ↑↓ выбор · tab вставить · esc закрыть"
 	}
@@ -2485,7 +2492,7 @@ func (a *App) drawHints(s *Screen, y int) {
 		left = " ↑↓ файл · tab/enter подставить · esc закрыть"
 	}
 	if a.busy {
-		left = " alt+enter в очередь · esc остановить · pgup/pgdn прокрутка"
+		left = " shift+enter в очередь · esc остановить · pgup/pgdn прокрутка"
 	}
 	if a.scroll > 0 {
 		left = " pgup/pgdn прокрутка · ctrl+end — вниз"

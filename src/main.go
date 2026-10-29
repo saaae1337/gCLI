@@ -62,6 +62,9 @@ type app struct {
 	// tuiWanted — интерфейс выбран при старте; создаётся после загрузки
 	// сессии и модели (имя модели нужно шапке).
 	tuiWanted bool
+	// uniOK — терминал умеет юникодную псевдографику. Влияет только на
+	// убранство TUI: сам интерфейс запускается и в ASCII-режиме.
+	uniOK bool
 
 	// lsp — хаб language servers: один на процесс, переживает пересборки
 	// реестра. Создаётся лениво по первому .go/.ts/… файлу; Shutdown — перед
@@ -343,7 +346,7 @@ func main() {
 		flagJSON         = flag.Bool("json", false, "машиночитаемый вывод (только ответ, без UI)")
 		flagColor        = flag.String("color", "", "уровень цвета: auto | 16 | 256 | truecolor | none")
 		flagNoColor      = flag.Bool("no-color", false, "без цвета")
-		flagUnicode      = flag.Bool("ascii", false, "только ASCII-псевдографика")
+		flagUnicode      = flag.Bool("ascii", false, "ASCII-псевдографика: TUI без юникодных знаков")
 		flagPlain        = flag.Bool("plain", false, "обычный построчный интерфейс (без полноэкранного TUI)")
 		flagCompact      = flag.Bool("compact", false, "компактный вывод")
 		flagSubagent     = flag.String("subagent", "", "разрешить субагентов: on | off")
@@ -391,7 +394,7 @@ func main() {
 	a.store.Ensure()
 
 	a.setupUI(*flagNoColor, *flagUnicode, *flagCompact, *flagJSON, *flagColor)
-	a.tuiWanted = a.tuiReady(isTerminal(), !*flagUnicode && unicodeOK, *flagJSON)
+	a.tuiWanted = a.tuiReady(isTerminal(), *flagJSON)
 	// mintty (Git Bash) не даёт нативной программе консольных хэндлов:
 	// stdin/stdout приходят пайпами, и полноэкранный интерфейс там
 	// недостижим в принципе. Перезапускаем себя под winpty — он входит
@@ -701,6 +704,7 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 	// Решение принято один раз, до первого вывода: ascii — явное требование
 	// пользователя, а unicodeOK к этому моменту уже известно.
 	useUnicode := !ascii && unicodeOK
+	a.uniOK = useUnicode
 
 	// Уровень цвета: флаг -color важнее GCLI_COLOR, тот важнее автоопределения.
 	mode := colorMode

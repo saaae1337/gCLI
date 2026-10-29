@@ -444,16 +444,67 @@ func parseCSI(b []byte, forced bool) (Event, int, bool) {
 			return Event{Key: KeyPgUp}, next, false
 		case "6":
 			return Event{Key: KeyPgDn}, next, false
+		case "27":
+			// modifyOtherKeys (xterm): ESC[27;<мод>;13~ — Enter с
+			// модификатором: Shift+Enter отправляет, Alt+Enter тоже.
+			parts := strings.Split(seq, ";")
+			if len(parts) < 3 {
+				return Event{}, next, false
+			}
+			key, err := strconv.Atoi(parts[2])
+			if err != nil {
+				return Event{}, next, false
+			}
+			mod, _ := strconv.Atoi(parts[1])
+			switch key {
+			case 13:
+				ev := Event{Key: KeyEnter}
+				applyMods(&ev, mod)
+				return ev, next, false
+			case 9:
+				ev := Event{}
+				applyMods(&ev, mod)
+				if ev.Shift {
+					ev.Key = KeyBacktab
+				} else {
+					ev.Key = KeyTab
+				}
+				return ev, next, false
+			}
+			return Event{}, next, false
 		}
 		return Event{}, next, false
 	case 'u':
-		// Kitty-протокол: ESC[13;2u — Shift+Enter.
+		// Kitty-протокол: Enter и Tab с модификаторами приходят как
+		// ESC[<код>;<мод>u — Shift+Enter 13;2 (отправка), Ctrl+Enter
+		// 13;5, Alt+Enter 13;3, Shift+Tab 9;2. Обычные Enter, Tab и Esc
+		// остаются прежними байтами: disambiguate меняет только
+		// неоднозначные сочетания. Ответ на запрос флагов («?1u»)
+		// событием не считается.
 		parts := strings.Split(seq, ";")
-		if parts[0] == "13" {
+		code, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return Event{}, next, false
+		}
+		mod := 0
+		if len(parts) > 1 {
+			if i := strings.IndexByte(parts[1], ':'); i >= 0 {
+				parts[1] = parts[1][:i]
+			}
+			mod, _ = strconv.Atoi(parts[1])
+		}
+		switch code {
+		case 13:
 			ev := Event{Key: KeyEnter}
-			if len(parts) > 1 {
-				mod, _ := strconv.Atoi(parts[1])
-				applyMods(&ev, mod)
+			applyMods(&ev, mod)
+			return ev, next, false
+		case 9:
+			ev := Event{}
+			applyMods(&ev, mod)
+			if ev.Shift {
+				ev.Key = KeyBacktab
+			} else {
+				ev.Key = KeyTab
 			}
 			return ev, next, false
 		}

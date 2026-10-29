@@ -136,8 +136,8 @@ func tuiColors(l ui.ColorLevel) int {
 var tuiBlocked bool
 
 // tuiReady — стоит ли включать полноэкранный интерфейс.
-func (a *app) tuiReady(tty, useUnicode, machine bool) bool {
-	if machine || !tty || !useUnicode || tuiBlocked {
+func (a *app) tuiReady(tty, machine bool) bool {
+	if machine || !tty || tuiBlocked {
 		return false
 	}
 	if os.Getenv("GCLI_TUI") == "0" {
@@ -163,7 +163,9 @@ func (a *app) startTUI() bool {
 		Commands: tuiCommands,
 		Color:    a.ui.ColorLevel() != 0,
 		Colors:   tuiColors(a.ui.ColorLevel()),
-		Unicode:  true,
+		// ASCII-режим (-ascii, GCLI_ASCII, слабый терминал): TUI сам
+		// подменяет фирменные знаки на читаемые везде.
+		Unicode: a.uniOK,
 		// GCLI_MASCOT=0 и настройка mascot в конфиге действуют и здесь:
 		// заставка — единственное место, где кот виден в TUI.
 		HideMascot: !a.ui.Mascot(),

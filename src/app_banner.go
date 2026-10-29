@@ -133,7 +133,7 @@ func usage() {
 	fmt.Println("  -compact          компактный вывод (меньше пустых строк)")
 	fmt.Println("  -no-color         без цвета")
 	fmt.Println("  -color <уровень>  auto | 16 | 256 | truecolor | none")
-	fmt.Println("  -ascii            только ASCII-псевдографика")
+	fmt.Println("  -ascii            ASCII-псевдографика: TUI без юникодных знаков")
 	fmt.Println("  -json             машинный вывод: только ответ, без UI")
 	fmt.Println("  -v                версия и платформа")
 	fmt.Println()

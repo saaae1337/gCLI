@@ -289,6 +289,13 @@ func nextCluster(s string, i int) (w, size int) {
 	for i < len(s) {
 		n, nsz := utf8.DecodeRuneInString(s[i:])
 		if joined {
+			// ESC разрывает кластер. Разбор escape-последовательностей
+			// (skipANSI, stripANSI) начинается с этого байта; уйди ESC
+			// внутрь кластера — и ширина разошлась бы с очищенным
+			// текстом на символ. Нашлось фаззингом: «00000 ZWJ ESC 0».
+			if n == 0x1B {
+				break
+			}
 			// После ZWJ базовый символ продолжает кластер; повторный ZWJ
 			// просто останется соединением.
 			if n != zwj {
@@ -297,6 +304,11 @@ func nextCluster(s string, i int) (w, size int) {
 				}
 				joined = false
 				i += nsz
+				// База после ZWJ — часть рисунка, но её ширина входит
+				// в кластер: иначе текст после ZWJ исчезал бы из
+				// подсчёта и вёрстка разъезжалась с очищенным текстом.
+				// У эмодзи итог всё равно переопределяется флагом pic.
+				w += baseWidth(n)
 				// Модификатор может стоять сразу после базы («👍🏽»).
 				if isSkinTone(n) || isRegionalIndicator(n) {
 					pic = true

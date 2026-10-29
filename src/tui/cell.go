@@ -356,7 +356,7 @@ func (r *Renderer) Start(unicode bool) error {
 	r.ready = false
 	// 1049 — альтернативный экран; 25 — спрятать курсор; 2004 — вставка;
 	// 1000/1006 — колесо мыши и его координаты.
-	seq := "\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+	seq := "\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[>1u\x1b[>4;1m"
 	// В крайнем случае (нет VT) последовательности просто не сработают.
 	if _, err := io.WriteString(r.w, seq); err != nil {
 		return err
@@ -373,7 +373,9 @@ func (r *Renderer) Close() error {
 		return nil
 	}
 	r.ready = false
-	_, err := io.WriteString(r.w, "\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l")
+	// Снимаем всё, что включил Start, в обратном порядке: modifyOtherKeys,
+	// kitty-протокол, мышь, вставка, курсор, альтернативный экран.
+	_, err := io.WriteString(r.w, "\x1b[0m\x1b[>4;0m\x1b[<u\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l")
 	return err
 }
 
