@@ -177,6 +177,12 @@ const (
 func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (*mcpConn, error) {
 	cmd := exec.CommandContext(ctx, srv.Command, srv.Args...)
 	cmd.Dir = srv.Workdir
+	// Серверы MCP часто запускаются обёрткой (npx, uvx, shell-скрипт),
+	// а настоящий node/python — её потомком. Собственная группа позволяет
+	// stop() добить всё дерево: без неё после остановки обёртки потомок
+	// оставался жить, держал stdout-канал (читатель не видел EOF —
+	// утекала горутина) и доживал до конца сессии на каждый рестарт.
+	PGroup(cmd)
 	cmd.Env = os.Environ()
 	for k, v := range srv.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -341,7 +347,8 @@ func (c *mcpConn) stop() {
 		// done, а не close(stdin): отправка в закрытый канал паникует, а
 		// зависший в call() отправитель в этот момент — обычное дело.
 		close(c.done)
-		_ = c.cmd.Process.Kill()
+		// Дерево, а не только обёртка: см. PGroup в mcpStart.
+		_ = KillTree(c.cmd)
 		// Wait обязателен даже если читатель уже увидел EOF: иначе процесс
 		// остаётся зомби, а на Windows не освобождаются его дескрипторы.
 		// Единственный Wait в проекте — здесь: параллельный Wait из чужой

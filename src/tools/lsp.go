@@ -370,6 +370,9 @@ type lspConn struct {
 func startLSPExec(workDir string, args []string, lang string) (*lspConn, error) {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = workDir
+	// Сервер LSP тоже бывает обёрткой: потомок пережил бы Process.Kill
+	// и держал stdout-канал — readLoop не видел EOF, горутина текла.
+	PGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -430,7 +433,8 @@ func (c *lspConn) stop() {
 		c.pending = map[int64]chan lspResponse{}
 		c.mu.Unlock()
 		if c.cmd != nil && c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
+			// Дерево, а не только прямой потомок: см. PGroup в startLSPExec.
+			_ = KillTree(c.cmd)
 			// Wait обязателен и когда readLoop уже увидел EOF: иначе
 			// процесс остаётся зомби (Unix) и течёт дескрипторами (Windows).
 			_ = c.cmd.Wait()
