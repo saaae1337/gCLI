@@ -297,6 +297,10 @@ type Job struct {
 	Err string
 	// Stopped — задачу остановили вручную.
 	Stopped bool
+	// launchErr — процесс не стартовал вовсе (ошибка Start:
+	// каталог запуска не существует, бинарник оболочки не найден). hJob по нему
+	// отличает «не запустилась» от «запустилась и упала».
+	launchErr bool
 
 	mu sync.Mutex
 	// stop — убить процесс. Отдельное поле, а не поле Job целиком: иначе
@@ -348,6 +352,30 @@ func (j *Job) Exit() (int, bool) {
 		return 0, false
 	}
 	return j.ExitCode, true
+}
+
+// finishedAt — момент завершения под мьютексом.
+//
+// FinishedAt пишет горутина ce.Wait() под j.mu, а читают его
+// регистр (вытеснение) и список задач без блокировки.
+// time.Time — это три машинных слова, и рваное чтение давало
+// мусорную продолжительность в списке и ловилось -race.
+func (j *Job) finishedAt() time.Time {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.FinishedAt
+}
+
+// launchFailed — процесс не стартовал, и его ошибка.
+//
+// Читается под тем же мьютексом, что и пишется: стартовая
+// ошибка записывается synchronously в startJob, но контракт
+// «поле Job — только под j.mu» проще держать в одном месте,
+// чем объяснять, когда именно можно читать напрямую.
+func (j *Job) launchFailed() (bool, string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.launchErr, j.Err
 }
 
 // jobRegistry — реестр фоновых задач.
@@ -430,6 +458,7 @@ func startJob(cmd, dir string, timeout int) *Job {
 		_, _ = f.WriteString(fmt.Sprintf("[не запустилась: %v]\n", err))
 		_ = f.Close()
 		j.mu.Lock()
+		j.launchErr = true
 		j.Err = err.Error()
 		j.ExitCode = -1
 		j.FinishedAt = time.Now()
@@ -483,8 +512,8 @@ func registerJob(j *Job) {
 			continue
 		}
 		t := jj.Started
-		if !jj.FinishedAt.IsZero() {
-			t = jj.FinishedAt
+		if fa := jj.finishedAt(); !fa.IsZero() {
+			t = fa
 		}
 		list = append(list, aged{id: id, age: t})
 	}
@@ -526,9 +555,10 @@ func jobListText() (string, string) {
 		if j.Status() == jobRunning {
 			running++
 		}
+		fa := j.finishedAt()
 		elapsed := core.HumanDuration(time.Since(j.Started))
-		if !j.FinishedAt.IsZero() {
-			elapsed = core.HumanDuration(j.FinishedAt.Sub(j.Started))
+		if !fa.IsZero() {
+			elapsed = core.HumanDuration(fa.Sub(j.Started))
 		}
 		fmt.Fprintf(&b, "- %s  [%s]  %s  (вела %s)\n", j.ID, j.Status(),
 			core.Truncate(core.OneLine(j.Command), 70), elapsed)
@@ -564,8 +594,13 @@ func (r *Registry) hJob(_ context.Context, m map[string]any) (Result, error) {
 			}
 		}
 		j := startJob(cmd, dir, ArgInt(m, "timeout_sec", 0))
-		if j.Err != "" && j.OutPath == "" {
-			return Result{}, fmt.Errorf("не удалось запустить в фоне: %s", j.Err)
+		// Неуданный старт (каталог cmd.Dir не существует и т.п.)
+		// раньше выдавался за успех: модель получала
+		// «Запущено в фоне» и тратила круг на job output, чтобы
+		// узнать о провале из лога. Оба пути ошибки возвращают
+		// ошибку сразу.
+		if launchErr, errText := j.launchFailed(); launchErr || (errText != "" && j.OutPath == "") {
+			return Result{}, fmt.Errorf("не удалось запустить в фоне: %s", errText)
 		}
 		return Result{
 			Text: fmt.Sprintf("Запущено в фоне: %s\nID: %s\nЛог: %s\n\n"+

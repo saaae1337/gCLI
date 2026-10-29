@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -319,4 +320,91 @@ func TestJobConcurrentStatusIsSafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestJobListReadsFinishedAtUnderLock — регистр и список задач
+// читают FinishedAt под мьютексом: горутина ce.Wait()
+// пишет его параллельно, и без замка это гонка
+// (ловится go test -race на старом коде).
+func TestJobListReadsFinishedAtUnderLock(t *testing.T) {
+	home := t.TempDir()
+	t.Cleanup(overrideHome(home))
+
+	// Очищаем регистр и забиваем до предела:
+	// только при переполнении registerJob
+	// сканирует FinishedAt чужих задач.
+	jobRegistry.mu.Lock()
+	jobRegistry.jobs = map[string]*Job{}
+	jobRegistry.mu.Unlock()
+	for i := 0; i < maxJobs; i++ {
+		registerJob(&Job{
+			ID:      fmt.Sprintf("fill%d", i),
+			Command: "x",
+			Started: time.Now().Add(-time.Duration(i) * time.Minute),
+		})
+	}
+
+	// Живая задача: она в реестре, и её
+	// FinishedAt появится позже начала чтений —
+	// перекрытие обеспечено циклом ниже.
+	j := startJob("sleep 0.3", t.TempDir(), 0)
+
+	// Читатели крутятся до завершения
+	// задачи и после него: запись
+	// FinishedAt гарантированно пересекается
+	// с чтениями без замка.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for k := 0; ; k++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Давитель старше живой задачи: вытеснение
+				// убирает самые старые, и живая задача
+				// (новейшая) остается в реестре до
+				// конца теста — её FinishedAt читается
+				// вплоть до записи горутиной Wait.
+				registerJob(&Job{
+					ID:      fmt.Sprintf("press%d-%d", i, k),
+					Command: "x",
+					Started: time.Now().Add(-time.Minute),
+				})
+				_, _ = jobListText()
+			}
+		}(i)
+	}
+	waitJob(t, j)
+	close(stop)
+	wg.Wait()
+}
+
+// TestJobRunReportsLaunchFailure — несуществующий workdir:
+// запуск не состоялся, и модель должна узнать
+// об этом сразу, а не получать «Запущено
+// в фоне» и тратить круг на job output.
+func TestJobRunReportsLaunchFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Cleanup(overrideHome(home))
+
+	r := newTestReg(t, t.TempDir())
+	_, err := run(t, r, "job", map[string]any{
+		"action": "run", "command": "echo x", "workdir": "нет-такого-каталога",
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка запуска, получен успех")
+	}
+	if !strings.Contains(err.Error(), "не удалось запустить") {
+		t.Errorf("ошибка не называет причину: %v", err)
+	}
+	// Задача в реестре: её можно посмотреть
+	// в job status/output — провал запуска не пропадает молча.
+	if list := jobList(); len(list) == 0 {
+		t.Error("задача с ошибкой старта не попала в реестр")
+	}
 }
