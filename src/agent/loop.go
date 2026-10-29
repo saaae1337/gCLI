@@ -122,6 +122,10 @@ type LoopDetector struct {
 	order []string
 	// errCounts — счётчик подряд идущих одинаковых ошибок.
 	errCounts map[string]int
+	// lastStreakErr — ошибка текущей полосы. Смена главной ошибки обрывает
+	// счёт: без этого чередование A,B,A,B копило бы счёт A и давало ложное
+	// «N ходов подряд» — предупреждение, сбивающее модель с толку.
+	lastStreakErr string
 	// warned — о чём уже предупреждали (чтобы не повторять одно и то же).
 	warned map[string]bool
 	// dropped — сколько вызовов вытеснено из окна.
@@ -174,11 +178,17 @@ func (d *LoopDetector) Record(calls []core.ToolCall, results []toolResult) strin
 	}
 
 	// Самая частая ошибка в итерации — считаем её повтор, если такие ошибки
-	// шли подряд несколько итераций.
+	// шли подряд несколько итераций. «Подряд» — строго: если в следующей
+	// итерации главной стала другая ошибка, прежний счёт обрывается.
 	if err := dominantError(results); err != "" {
+		if d.lastStreakErr != err {
+			d.errCounts = map[string]int{}
+		}
 		d.errCounts[err]++
+		d.lastStreakErr = err
 	} else {
 		d.errCounts = map[string]int{}
+		d.lastStreakErr = ""
 	}
 
 	return d.diagnose(calls)
@@ -242,7 +252,10 @@ func dominantError(results []toolResult) string {
 	}
 	best, bestN := "", 0
 	for k, n := range counts {
-		if n > bestN {
+		// При равном счёте — лексикографически меньший ключ: перебор карты
+		// рандомизирован, и без правила выбор «главной ошибки» плавал бы
+		// от запуска к запуску, ломая счёт полосы.
+		if n > bestN || (n == bestN && k < best) {
 			best, bestN = k, n
 		}
 	}

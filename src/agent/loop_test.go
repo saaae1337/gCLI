@@ -215,3 +215,44 @@ func TestErrKeyMatchesExecOneMarkers(t *testing.T) {
 		t.Errorf("успешный вывод принят за ошибку")
 	}
 }
+
+// TestLoopDetectorAlternatingErrorsAreNotStreak — чередование разных
+// ошибок не полоса: счётчик «одной и той же ошибки N ходов подряд»
+// обязан обрываться при смене главной ошибки. Раньше счёт копился с
+// последнего полного успеха, и к третьему «A» в последовательности
+// A,B,A,B,A модель получала ложное «3 хода подряд одна ошибка».
+func TestLoopDetectorAlternatingErrorsAreNotStreak(t *testing.T) {
+	d := NewLoopDetector()
+	for i := 0; i < loopSameErrAfter+2; i++ {
+		text := "Ошибка: нет файла A"
+		if i%2 == 1 {
+			text = "Ошибка: нет файла B"
+		}
+		w := d.Record(
+			[]core.ToolCall{tc("edit_file", `{"attempt":"`+string(rune('a'+i))+`"}`)},
+			[]toolResult{tr("edit_file", text)},
+		)
+		if w != "" {
+			t.Fatalf("чередование разных ошибок дало предупреждение: %s", w)
+		}
+	}
+}
+
+// TestDominantErrorTieIsDeterministic — при равном счёте двух ошибок
+// выбор «главной» не зависит от рандомизации перебора карты: иначе
+// счёт полосы дёргался бы от запуска к запуску.
+func TestDominantErrorTieIsDeterministic(t *testing.T) {
+	res := []toolResult{
+		tr("bash", "Ошибка: альфа"),
+		tr("bash", "Ошибка: бета"),
+	}
+	first := dominantError(res)
+	if first == "" {
+		t.Fatal("dominantError не выбрал ни одной ошибки")
+	}
+	for i := 0; i < 100; i++ {
+		if got := dominantError(res); got != first {
+			t.Fatalf("выбор при равном счёте плавает: %q != %q", got, first)
+		}
+	}
+}
