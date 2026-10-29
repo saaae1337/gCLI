@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"gcli/core"
+	"gcli/tools"
 )
 
 type mcpSrvRequest struct {
@@ -262,11 +263,15 @@ func mcpSrvToolCall(name string, args json.RawMessage) (string, error) {
 	}
 }
 
+// mcpSrvExecutable — точка подмены в тестах: регрессия дерева процессов
+// запускает скрипт вместо собственного бинарника (см. tools.collectFilesFn).
+var mcpSrvExecutable = os.Executable
+
 // mcpSrvPrompt — разовый ход агента в дочернем процессе собственного
 // бинарника. Изоляция важна: MCP-сервер живёт в stdio хоста, и любой
 // вывод/паника агентского цикла внутри этого процесса сломали бы протокол.
 func mcpSrvPrompt(workdir, prompt string, timeout time.Duration) (string, error) {
-	exe, err := os.Executable()
+	exe, err := mcpSrvExecutable()
 	if err != nil {
 		return "", fmt.Errorf("не найти собственный бинарник: %v", err)
 	}
@@ -290,6 +295,11 @@ func mcpSrvPrompt(workdir, prompt string, timeout time.Duration) (string, error)
 	}
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = workdir
+	// Своя группа и KillTree по таймауту — как в app_watch и tools.hBash:
+	// без них отмена убивала только прямого ребёнка, а фоновые потомки
+	// агента (dev-сервер, sleep) жили дальше сиротами и держали вывод.
+	tools.PGroup(cmd)
+	cmd.Cancel = func() error { return tools.KillTree(cmd) }
 	// Дочерний агент может запустить фоновый процесс, держащий вывод:
 	// без WaitDelay CombinedOutput ждал бы его вечно поверх таймаута.
 	cmd.WaitDelay = 2 * time.Second
