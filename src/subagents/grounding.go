@@ -823,10 +823,6 @@ func (g *Grounding) Report(rep *GroundingReport) string {
 	if rep == nil {
 		return ""
 	}
-	// Нечего проверять и нечего подтверждать.
-	if rep.Checked == 0 && len(rep.Phantoms) == 0 && len(rep.Unread) == 0 {
-		return ""
-	}
 	// Проверять было нечего: ни одной ссылки «файл:строка» и ни одного фантома.
 	// Вердикт «чисто» о фантомах не сообщает, а блок был бы пустым шумом.
 	//
