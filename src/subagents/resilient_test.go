@@ -54,6 +54,8 @@ func TestAssessReport(t *testing.T) {
 		{"мысль с кодовым словом", "Let me get the remaining pieces…", ReportNarrative},
 		{"обрыв на полуслове", "- Проверил файлы\n- Дальше посмотрю", ReportTruncated},
 		{"обрыв многоточием", "- Нашёл два места в коде...", ReportTruncated},
+		{"обрыв с точкой на намерении", "- Сделано: раз\n- Проверено: два\nТеперь попробую.", ReportTruncated},
+		{"обрыв let me с точкой", "- Сделано: раз\n- Проверено: два\nLet me.", ReportTruncated},
 		{"честная неудача", "Субагент не смог сформулировать отчёт: закончил работу без результата.", ReportOK},
 		{"ошибка сети", "Ошибка: stream error: STREAM_CLOSED", ReportOK},
 		{"длинный отчёт с выводом", strings.Repeat("Строка вывода по проекту.\n", 30) + "Итог: готово.", ReportOK},

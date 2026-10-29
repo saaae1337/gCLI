@@ -163,10 +163,21 @@ func hasStructure(s string) bool {
 }
 
 // unfinishedTail — хвост, характерный для мысли на полуслове.
+// unfinishedTail — наречия-хвосты, характерные для мысли на полуслове.
+// С пунктуацией на конце не проверяются: «Итог: можно идти дальше.» —
+// легальное завершённое предложение, а не обрыв.
 var unfinishedTail = []string{
 	"сейчас", "далее", "теперь", "затем", "потом", "дальше",
+	"now i", "next,",
+}
+
+// unfinishedVerbs — глаголы намерения в будущем времени. Отчёт,
+// оканчивающийся на такой глагол, оборван независимо от пунктуации:
+// «Теперь попробую.» и «Let me.» — то же незаконченное обещание, что
+// и голое «попробую».
+var unfinishedVerbs = []string{
 	"посмотрю", "проверю", "сделаю", "начну", "попробую",
-	"let me", "now i", "next,", "i'll",
+	"let me", "i'll",
 }
 
 // endsSettled — выглядит ли отчёт завершённым.
@@ -186,13 +197,20 @@ func endsSettled(s string) bool {
 		return false
 	}
 	// Последняя строка не должна быть ударной фразой о намерении.
+	// «Сделаю» в середине отчёта — нормально; в самом конце — нет.
 	for _, u := range unfinishedTail {
-		if strings.HasSuffix(tail, u) || strings.Contains(tail, u+" ") && len([]rune(tail)) < 90 {
-			// «сделаю» в середине отчёта — нормально; в самом конце — нет.
-			if strings.HasSuffix(tail, u) || strings.HasSuffix(tail, u+",") ||
-				strings.HasSuffix(tail, u+".") || strings.HasSuffix(tail, u+"…") {
-				return false
-			}
+		if strings.HasSuffix(tail, u) {
+			return false
+		}
+	}
+	// Глаголы намерения жёстче: пунктуация на конце не спасает. Раньше
+	// проверка суффиксов с пунктуацией была спрятана за условием без неё
+	// и не срабатывала никогда: «Теперь попробую.» проходило за
+	// завершённый отчёт и уходило в кеш повторов.
+	for _, u := range unfinishedVerbs {
+		if strings.HasSuffix(tail, u) || strings.HasSuffix(tail, u+",") ||
+			strings.HasSuffix(tail, u+".") || strings.HasSuffix(tail, u+"…") {
+			return false
 		}
 	}
 	// Оборванное многоточием без завершённого знака.
