@@ -780,14 +780,22 @@ func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 	return a.repo.NewSession(a.prov.ID, a.model, a.workDir)
 }
 
+// saveSession — записать сессию на диск. Под sessMu — только снимок:
+// marshal + fsync идут за пределами замка, иначе медленный диск
+// останавливал бы всё — историю, confirm'ы, учёт субагентов, метрики.
 func (a *app) saveSession() {
 	if a.sess == nil {
 		return
 	}
 	sessMu.Lock()
 	a.sess.Updated = time.Now()
-	err := a.repo.SaveSession(a.sess)
+	snap := a.sessionSnapshotLocked()
 	sessMu.Unlock()
+	// MarshalIndent + fsync — не мгновение: на подвисшем диске это
+	// секунды. Диск ждёт готовый снимок; параллельные записи файлов
+	// безопасны — WriteAtomic пишет во временный файл с уникальным
+	// именем и переименовывает атомарно.
+	err := a.repo.SaveSession(snap)
 	// Ошибка записи молча глоталась: полный диск или недоступный путь
 	// означали, что сессия перестаёт переживать перезапуск без единого
 	// слова — история потеряна, а пользователь уверен в обратном.
@@ -796,6 +804,24 @@ func (a *app) saveSession() {
 	if err != nil && !a.saveErrShown.Swap(true) {
 		a.ui.Warn("сессия не сохраняется, история не переживёт перезапуск: " + err.Error())
 	}
+}
+
+// sessionSnapshotLocked — глубокая копия сессии для записи на диск;
+// зовётся под sessMu. Копируются все срезы, которые писатели дописывают
+// (Messages, Todos, Checkpoints, SubagentRuns), и карта грантов
+// (Perms.Clone): marshal снимка идёт за пределами замка, и общий массив
+// с append'ом писателя был бы гонкой чтения с записью. Элементы истории
+// на месте не правит никто — только append и замена целиком (AddMessage,
+// ReplaceMessages), поэтому поэлементной копии не требуется; при
+// появлении такого письма копировать придётся и элементы.
+func (a *app) sessionSnapshotLocked() *core.Session {
+	c := *a.sess
+	c.Messages = append([]core.Message(nil), a.sess.Messages...)
+	c.Todos = append([]core.Todo(nil), a.sess.Todos...)
+	c.Checkpoints = append([]core.CheckpointMeta(nil), a.sess.Checkpoints...)
+	c.SubagentRuns = append([]core.SubagentRecord(nil), a.sess.SubagentRuns...)
+	c.Perms = a.sess.Perms.Clone()
+	return &c
 }
 
 // shutdown — закрыть всё, что переживёт процесс: дочерние MCP-серверы и
