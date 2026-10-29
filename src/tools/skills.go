@@ -73,7 +73,10 @@ func ParseSkill(p, scope string) (Skill, error) {
 		return Skill{}, err
 	}
 	s := Skill{Path: p, Scope: scope}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	// BOM появляется от редакторов Windows и ломал front matter: файл
+	// начинался бы с «\ufeff---», и весь блок с name/description/when оставался
+	// в теле навыка. То же сделано в ParseCustomAgent.
+	text := strings.TrimPrefix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\ufeff")
 	// hadFM — front matter найден и разобран. Нужен ниже: без него
 	// запасной путь «тело = весь файл» срабатывал и для файла, где
 	// front matter есть, а тела нет — тогда в тело попадал сырой
