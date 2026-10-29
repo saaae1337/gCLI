@@ -1845,7 +1845,14 @@ func (a *app) onProgress(ev tools.ProgressEvent) {
 
 // onToolStart — показать карточку инструмента.
 func (a *app) onToolStart(tc core.ToolCall, tool *tools.Tool) {
+	// Счётчик — под sessMu: OnToolStart приходит из параллельных горутин
+	// инструментов (execTools при Parallel, пачка spawn_agent), и без
+	// блокировки s.Tools++ гоняли бы друг с другом — потерянные
+	// инкременты в /status и гонка, которую ловит -race. Тот же
+	// паттерн, что у RecordRequest в onUsage и RecordError в AddError.
+	sessMu.Lock()
 	a.sess.Stats.RecordTool(false)
+	sessMu.Unlock()
 	cat := tool.Category
 	if cat == "" {
 		cat = "exec"
@@ -1885,7 +1892,11 @@ func serveToolStatus(res tools.Result, err error) (string, string) {
 func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
 	status, detail := serveToolStatus(res, err)
 	if status == "fail" {
+		// sessMu: колбэк из паралельной горутины инструмента
+		// (см. onToolStart) — без замка это гонка на Tools/ToolsFailed.
+		sessMu.Lock()
 		a.sess.Stats.RecordTool(true)
+		sessMu.Unlock()
 	}
 	if a.quiet {
 		return

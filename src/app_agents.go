@@ -816,6 +816,15 @@ func (a *app) cmdExport() {
 }
 
 func (a *app) cmdCompact() {
+	if a.turnActive() {
+		// Как /fork, /resume и /clear: команда подменяет историю
+		// целиком (replaceMessages), а busy-очередь TUI не видит
+		// фоновый ход cron/watch — без проверки /compact резал
+		// историю под ногами идущего хода, и newAgent писал
+		// a.stream параллельно с его чтением в AddMessage.
+		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /compact подменяет историю под ногами хода")
+		return
+	}
 	a.ui.SpinnerStart("Сжимаю историю")
 	ag := a.newAgent(true)
 	ag.WithAgentMode(false)

@@ -623,3 +623,50 @@ func TestContextCmdRace(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// TestOnToolCallbacksParallelStatsNoRace — OnToolStart/OnToolDone
+// приходят из параллельных горутин инструментов,
+// и RecordTool без sessMu гонял s.Tools++ между собой:
+// потерянные инкременты в /status и гонка, которую
+// ловит go test -race.
+func TestOnToolCallbacksParallelStatsNoRace(t *testing.T) {
+	a := testApp(t)
+	a.quiet = true // счетчик крутится до quiet-выхода: UI не нужен
+
+	const n = 64
+	tool := &tools.Tool{Category: "read", Def: tools.ToolDef{Name: "read_file"}}
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.onToolStart(core.ToolCall{Name: "read_file"}, tool)
+			a.onToolDone(core.ToolCall{Name: "read_file"}, tool, tools.Result{Text: "ок"}, nil, time.Second)
+		}()
+	}
+	wg.Wait()
+
+	if a.sess.Stats.Tools != n {
+		t.Errorf("Stats.Tools = %d, ожидалось %d (потерянные инкременты — гонка)",
+			a.sess.Stats.Tools, n)
+	}
+}
+
+// TestCmdCompactRefusesDuringTurn — /compact подменяет историю
+// целиком, поэтому во время хода (в том числе
+// фонового cron, которого busy-очередь TUI не видит)
+// он обязан отказаться, а не резать историю под
+// ногами: newAgent писал бы a.stream параллельно
+// с его чтением в AddMessage идущего хода.
+func TestCmdCompactRefusesDuringTurn(t *testing.T) {
+	a := testApp(t)
+	a.mu.Lock()
+	a.running = true
+	a.mu.Unlock()
+
+	a.cmdCompact() // обязан молча отказаться с предупреждением
+
+	if a.lastAgent != nil {
+		t.Fatal("/compact выполнился во время хода: агент создан, история подменяется под ногами хода")
+	}
+}
