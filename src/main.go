@@ -328,6 +328,14 @@ func (a *app) setProvider(p *providers.Provider) {
 const reasonHint = "(Ctrl+O — показать размышления)"
 
 func main() {
+	// Паника до входа в TUI/REPL не должна вываливать пользователю
+	// сырой стек Go: короткое сообщение и код ошибки.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintln(os.Stderr, "gcli: внутренняя ошибка:", r)
+			os.Exit(1)
+		}
+	}()
 	flag.Usage = usage
 	var (
 		flagPrompt       = flag.String("p", "", "один запрос: выполнить и выйти")
@@ -359,7 +367,7 @@ func main() {
 		flagMCPServe     = flag.Bool("mcp-serve", false, "работать MCP-сервером по stdio (для MCP-хостов: Claude Desktop и др.)")
 		flagBench        = flag.String("bench", "", "self-bench: каталог задач (по умолчанию .gcli/bench); прогон и счёт")
 		flagCron         = flag.String("cron", "", "автономные итерации: on | off (агент сам находит и чинит баги, проблемы, уязвимости, когда пользователь молчит)")
-		flagCronInterval = flag.Duration("cron-interval", 0, "интервал между автономными итерациями: 15m-20m (по умолчанию 15–20 мин со случайным сдвигом)")
+		flagCronInterval = flag.Duration("cron-interval", 0, "интервал между автономными итерациями, например 15m (по умолчанию 15–20 мин со случайным сдвигом)")
 	)
 	flag.Parse()
 
@@ -534,6 +542,11 @@ func main() {
 	if err := a.setupMission(*flagMission, *flagDeadline, *flagBudget, *flagObjective, ""); err != nil {
 		if !a.quiet {
 			a.ui.Err(err.Error())
+		} else {
+			// Машинный режим (-p/-json): stdout остаётся чистым,
+			// но ошибка обязана дойти до stderr — иначе CI получает
+			// код 1 без единого слова о причине.
+			fmt.Fprintln(os.Stderr, "gcli:", err)
 		}
 		a.shutdown()
 		os.Exit(1)
@@ -556,6 +569,8 @@ func main() {
 		if err != nil {
 			if !a.quiet {
 				a.ui.Err(err.Error())
+			} else {
+				fmt.Fprintln(os.Stderr, "gcli:", err)
 			}
 			a.shutdown()
 			os.Exit(1)

@@ -358,6 +358,11 @@ func (u *UI) Panel(content string, o PanelOpts) {
 	top := tl + h + u.c(u.pal.Muted, head) + u.c(u.pal.Muted, strings.Repeat(h, fill)) + tr
 	// Убираем двойную рамку, если заголовок съел всё место.
 	if visibleWidth(StripANSI(top)) > inner+2 {
+		// Если заголовок сам шире рамки, одна его обрезка не спасает:
+		// режем и его, иначе верхняя граница всё равно вылезает.
+		if inner > 2 && visibleWidth(head) > inner-2 {
+			head = truncate(head, inner-2)
+		}
 		top = tl + u.c(u.pal.Muted, head) + u.c(u.pal.Muted, strings.Repeat(h, maxInt(inner-visibleWidth(StripANSI(head)), 0))) + tr
 	}
 
