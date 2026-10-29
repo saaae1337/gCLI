@@ -419,6 +419,19 @@ func parseCSI(b []byte, forced bool) (Event, int, bool) {
 		}
 		return Event{}, next, false
 	case 'M', 'm':
+		if b[fin] == 'M' && !strings.HasPrefix(seq, "<") {
+			// X10-мышь: ESC [ M b x y — три сырых байта. Раньше съедался
+			// только заголовок, а координаты уходили в поле ввода рунами:
+			// терминалы без SGR-мыши (например, консоль Linux с 1000h, но
+			// без 1006h) засоряли composer при каждом клике и прокрутке.
+			if len(b) < next+3 {
+				if forced {
+					return Event{Key: KeyEsc}, 1, false
+				}
+				return Event{}, 0, true
+			}
+			return parseX10Mouse(b[next], b[next+1], b[next+2]), next + 3, false
+		}
 		return parseMouse(seq, next), next, false
 	}
 	return Event{}, next, false
@@ -450,6 +463,34 @@ func parseMouse(seq string, n int) Event {
 		ev.Alt = true
 	}
 	if btn&16 != 0 {
+		ev.Ctrl = true
+	}
+	return ev
+}
+
+// parseX10Mouse — старый формат X10: код кнопки и координаты со смещением 32.
+// Битовая раскладка та же, что у SGR: 64/65 — колесо, 4/8/16 — Shift/Alt/Ctrl.
+func parseX10Mouse(btn, xb, yb byte) Event {
+	b := int(btn) - 32
+	x := int(xb) - 32
+	y := int(yb) - 32
+	if b < 0 || x < 0 || y < 0 {
+		return Event{}
+	}
+	ev := Event{X: x, Y: y}
+	switch b & 0x43 {
+	case 64: // колесо вверх
+		ev.Wheel = -1
+	case 65: // колесо вниз
+		ev.Wheel = 1
+	}
+	if b&4 != 0 {
+		ev.Shift = true
+	}
+	if b&8 != 0 {
+		ev.Alt = true
+	}
+	if b&16 != 0 {
 		ev.Ctrl = true
 	}
 	return ev
