@@ -856,7 +856,17 @@ func (a *app) askUser(question string, options []string) (string, error) {
 // ---------- Чекпоинты ----------
 
 // recordCheckpoint — сохранить копию файла перед изменением.
+//
+// Под sessMu: чекпоинты дописывают параллельные горутины инструментов —
+// multi_edit без atomic зовёт editFileLabeled пачкой (runTargets), и каждая
+// правка делает record до записи файла; ходы из cron/serve идут параллельно
+// с командами. Append в общий слайс сессии без блокировки теряет записи и
+// рвёт снимок saveSession, который копирует Checkpoints под sessMu. Все
+// прочие писатели сессии (Messages, Todos, SubagentRuns, Usage) уже берут
+// sessMu — чекпоинты просто опоздали.
 func (a *app) recordCheckpoint(path, label string) {
+	sessMu.Lock()
+	defer sessMu.Unlock()
 	a.repo.RecordCheckpoint(a.sess, path, label)
 }
 

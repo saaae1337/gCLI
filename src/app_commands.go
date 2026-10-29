@@ -1778,7 +1778,11 @@ func (a *app) cmdMemory() {
 }
 
 func (a *app) cmdUndo() {
+	// Под sessMu: /undo режет слайс чекпоинтов из горутины команд, пока ход
+	// (multi_edit, субагенты, cron) дописывает чекпоинты через recordCheckpoint.
+	sessMu.Lock()
 	cp, ok, err := a.repo.UndoCheckpoint(a.sess)
+	sessMu.Unlock()
 	a.saveSession()
 	if !ok {
 		if err != nil {

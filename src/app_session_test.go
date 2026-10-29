@@ -12,6 +12,7 @@ package main
 // блокировки, а чтение кода — нет.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -480,4 +481,74 @@ func TestSelfReportHistoryIsCopy(t *testing.T) {
 	if got := a.Messages()[0].Content; got != "первое" {
 		t.Fatalf("правка снимка изменила сессию: %q", got)
 	}
+}
+
+// TestRecordCheckpointConcurrentNoRace — чекпоинты пишут параллельные
+// горутины, а снимок сессии в это же время копирует слайс на диск.
+//
+// Сценарий — multi_edit без atomic: runTargets зовёт editFileLabeled пачкой,
+// у каждой правки своя горутина, и каждая правка делает record. Снимок
+// saveSession копирует Checkpoints под sessMu; если append идёт мимо sessMu,
+// -race падает и на паре «append против копии», и на «append против append»,
+// а в проде это потерянные чекпоинты: /undo откатывает не то или ничего.
+func TestRecordCheckpointConcurrentNoRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	// 4 воркера по 10 чекпоинтов = 40 < maxCheckpoints (50): усадка в тест
+	// не включается, и каждый записанный чекпоинт обязан остаться в слайсе.
+	const workers, each = 4, 10
+	paths := make([]string, 0, workers)
+	for w := 0; w < workers; w++ {
+		paths = append(paths, writeTemp(t, a.workDir, "f"+fmt.Sprint(w)+".txt", "старое"))
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		p := paths[w]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				a.recordCheckpoint(p, "multi_edit")
+			}
+		}()
+	}
+	// Читатель: saveSession снимает сессию на диск, копируя Checkpoints
+	// под sessMu, — та же пара, что у реального хода.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < workers*each; i++ {
+			a.saveSession()
+		}
+	}()
+	wg.Wait()
+	// После wg.Wait() happens-before гарантирован: чтение слайса без замка
+	// здесь безопасно и показывает, что append ничего не потерял.
+	if got := len(a.sess.Checkpoints); got != workers*each {
+		t.Errorf("чекпоинтов %d, ждали %d — append терял записи", got, workers*each)
+	}
+}
+
+// TestUndoCheckpointConcurrentNoRace — /undo режет слайс чекпоинтов из
+// горутины команд, пока ход (multi_edit, субагенты, cron) дописывает новые.
+// Количество здесь не проверяется: оно недетерминировано по построению;
+// тест ловит саму гонку под -race.
+func TestUndoCheckpointConcurrentNoRace(t *testing.T) {
+	a, _ := cmdApp(t)
+	p := writeTemp(t, a.workDir, "undo.txt", "старое")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 40; i++ {
+			a.recordCheckpoint(p, "правка")
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		select {
+		case <-done:
+			return
+		default:
+			a.cmdUndo()
+		}
+	}
+	<-done
 }
