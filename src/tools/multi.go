@@ -793,6 +793,13 @@ func (r *Registry) hMultiBash(ctx context.Context, m map[string]any) (Result, er
 				if err != nil {
 					return res, err
 				}
+				if strings.Contains(res.Summary, "отклонено") {
+					// Отклонённая команда не выполнялась — она не «успешна».
+					// Без этой пометы она получала бы фальшивый
+					// «[код выхода: 0]» и попадала в сводку как успешная.
+					res.Error = "команда отклонена пользователем"
+					return res, nil
+				}
 				// Код возврата — часть результата, а не украшение: без него
 				// модель читает пустой вывод как успех. hBash дописывает
 				// метку только при ненулевом коде, поэтому нулевой добавляем
@@ -833,7 +840,7 @@ func renderBashBatch(items []batchItem, maxOut int) (string, string) {
 		case strings.TrimSpace(it.warn) != "":
 			failed++
 			fmt.Fprintf(&b, "%s\n\n", it.warn)
-		case exitCodeFrom(it.res.Text) > 0:
+		case exitCodeFrom(it.res.Text) != 0:
 			// Вывод печатаем целиком (кроме усечения): именно stderr
 			// объясняет, почему код ненулевой. Бросать его ценой одного
 			// абзаца ошибки — значит отдать модели «упало» без причины.
@@ -892,6 +899,8 @@ func printBashOut(b *strings.Builder, text string, maxOut int) {
 }
 
 // exitCodeFrom — достать код выхода из текста команды, -1 если неизвестен.
+// -1 это и код процесса, убитого сигналом: для сводки оба случая
+// провал — команда без числа не может считаться успешной.
 func exitCodeFrom(text string) int {
 	i := strings.LastIndex(text, "[код выхода:")
 	if i < 0 {

@@ -431,3 +431,35 @@ func TestMultiRegisteredAsBuiltins(t *testing.T) {
 		}
 	}
 }
+
+// TestMultiBashSignalKillNotSuccess — команда, убитая сигналом (код -1),
+// не попадает в «успешно»: сводка — первое, что читает модель, и
+// «N успешно» про убитый процесс уводит её не туда.
+func TestMultiBashSignalKillNotSuccess(t *testing.T) {
+	r, _ := newMultiReg(t)
+	res := callTool(t, r, "multi_bash", map[string]any{
+		"commands": []any{"kill -9 $$"},
+	})
+	if !strings.Contains(res.Summary, "1 с ошибкой") || strings.Contains(res.Summary, "1 успешно") {
+		t.Errorf("убитая сигналом команда не в провалах: %s", res.Summary)
+	}
+	if !strings.Contains(res.Text, "[код выхода: -1]") {
+		t.Errorf("код -1 не показан:\n%s", res.Text)
+	}
+}
+
+// TestMultiBashDeniedNotSuccess — отклонённая пользователем команда не
+// считается успешной и не получает фальшивую метку «код выхода: 0».
+func TestMultiBashDeniedNotSuccess(t *testing.T) {
+	dir := t.TempDir()
+	r := New(Env{WorkDir: dir, Confirm: func(ConfirmReq) bool { return false }})
+	res := callTool(t, r, "multi_bash", map[string]any{
+		"commands": []any{"echo nope"},
+	})
+	if !strings.Contains(res.Summary, "1 с ошибкой") || strings.Contains(res.Summary, "1 успешно") {
+		t.Errorf("отклонённая команда не в провалах: %s", res.Summary)
+	}
+	if strings.Contains(res.Text, "[код выхода: 0]") {
+		t.Errorf("отклонённой команде приписан код выхода 0:\n%s", res.Text)
+	}
+}
