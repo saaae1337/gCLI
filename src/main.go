@@ -542,12 +542,12 @@ func main() {
 	if err := a.setupMission(*flagMission, *flagDeadline, *flagBudget, *flagObjective, ""); err != nil {
 		if !a.quiet {
 			a.ui.Err(err.Error())
-		} else {
-			// Машинный режим (-p/-json): stdout остаётся чистым,
-			// но ошибка обязана дойти до stderr — иначе CI получает
-			// код 1 без единого слова о причине.
-			fmt.Fprintln(os.Stderr, "gcli:", err)
 		}
+		// Ошибка обязана дойти до stderr при любом режиме — иначе CI
+		// получает код 1 без единого слова о причине. Раньше stderr
+		// писала только -json (a.quiet ставится одним флагом -json):
+		// голый -p выводил ✖ в stdout, и обещание держалось наполовину.
+		fmt.Fprintln(os.Stderr, "gcli:", err)
 		a.shutdown()
 		os.Exit(1)
 	}
@@ -569,9 +569,11 @@ func main() {
 		if err != nil {
 			if !a.quiet {
 				a.ui.Err(err.Error())
-			} else {
-				fmt.Fprintln(os.Stderr, "gcli:", err)
 			}
+			// stderr при любом режиме: -json держит stdout чистым,
+			// голый -p оставляет человеку ✖ в stdout, но причину CI
+			// в обоих случаях читает из stderr.
+			fmt.Fprintln(os.Stderr, "gcli:", err)
 			a.shutdown()
 			os.Exit(1)
 		}
