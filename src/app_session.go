@@ -398,7 +398,12 @@ func (a *app) permDecision(req tools.ConfirmReq) (core.Permission, core.Rule, bo
 	// Решение по группе целиком: внутри неё действует «последнее совпавшее
 	// правило выигрывает», а правила без имени инструмента проверяются
 	// только в самом конце — см. core.Rules.DecideAny.
-	return a.rules.DecideAny(group, subject)
+	// Снимок правил под cfgMu: /rules и setup меняют a.rules из очереди
+	// ввода, пока cron-ход подтверждает инструменты.
+	cfgMu.Lock()
+	rules := a.rules
+	cfgMu.Unlock()
+	return rules.DecideAny(group, subject)
 }
 
 // confirm — единая точка подтверждений пользователя.

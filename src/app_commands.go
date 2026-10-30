@@ -687,8 +687,12 @@ func (a *app) switchProvider(p *providers.Provider) {
 	cfgMu.Lock()
 	a.repo.Cfg.Provider = p.ID
 	cfgMu.Unlock()
+	// Поле сессии — под sessMu: ход из cron строит снимок под тем же
+	// замком, запись из очереди ввода не должна с ним пересекаться.
+	sessMu.Lock()
 	a.sess.Provider = p.ID
 	a.sess.Model = next
+	sessMu.Unlock()
 	a.saveConfig()
 	a.saveSession()
 	a.syncMetrics()
@@ -746,7 +750,9 @@ func (a *app) setModel(m string) {
 	cfgMu.Lock()
 	a.repo.Cfg.Model = m
 	cfgMu.Unlock()
+	sessMu.Lock()
 	a.sess.Model = m
+	sessMu.Unlock()
 	a.saveConfig()
 	a.saveSession()
 	a.syncMetrics()
@@ -1229,7 +1235,10 @@ func (a *app) permsInit() {
 		a.ui.Warn("не создал gcli.json: " + err.Error())
 		return
 	}
-	a.rules = a.setupRules()
+	rules := a.setupRules()
+	cfgMu.Lock()
+	a.rules = rules
+	cfgMu.Unlock()
 	a.ui.Ok("создал gcli.json с заготовкой правил: " + core.RelToWD(a.workDir, path))
 	a.ui.Hint("правила применятся в следующем запуске — сейчас перезапусти gcli")
 }
@@ -1305,7 +1314,11 @@ func (a *app) cmdPerms(rest string) {
 		}
 	}
 	if strings.TrimSpace(rest) == "reset" {
+		// Сброс грантов — под sessMu: ход в это время может выдавать
+		// новые гранты в ту же карту.
+		sessMu.Lock()
 		a.sess.Perms = core.Perms{BashExact: map[string]bool{}}
+		sessMu.Unlock()
 		cfgMu.Lock()
 		a.repo.Cfg.Autopilot = false
 		a.repo.Cfg.AutopilotAll = false
@@ -1675,7 +1688,10 @@ func (a *app) cmdInit(arg string) {
 			a.ui.Warn("GCLI.md создан, но gcli.json не записался: " + err.Error())
 		} else {
 			a.ui.Ok("создан gcli.json — правила разрешений под этот проект")
-			a.rules = a.setupRules()
+			nrules := a.setupRules()
+			cfgMu.Lock()
+			a.rules = nrules
+			cfgMu.Unlock()
 		}
 	}
 
@@ -1778,6 +1794,10 @@ func (a *app) cmdMemory() {
 }
 
 func (a *app) cmdUndo() {
+	if a.turnActive() {
+		a.ui.Warn("ход ещё идёт — откат вернул бы файл, который ход правит прямо сейчас; прерви ход (Esc) и повтори")
+		return
+	}
 	// Под sessMu: /undo режет слайс чекпоинтов из горутины команд, пока ход
 	// (multi_edit, субагенты, cron) дописывает чекпоинты через recordCheckpoint.
 	sessMu.Lock()
@@ -1835,6 +1855,10 @@ func (a *app) cmdSnapshots() {
 // Откат сам откатываем: текущее состояние фиксируется снимком,
 // а точка ухода остаётся на ветке keep/pre-revert (тоже видна в списке).
 func (a *app) cmdRevert(rest string) {
+	if a.turnActive() {
+		a.ui.Warn("ход ещё идёт — откат дерева под ним сломал бы его правки; прерви ход (Esc) и повтори")
+		return
+	}
 	n, err := strconv.Atoi(strings.TrimSpace(rest))
 	if err != nil || n < 1 {
 		a.ui.Warn("укажи номер снимка из /snapshots: /revert 3")

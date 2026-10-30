@@ -150,10 +150,9 @@ func asExitError(err error, target **exec.ExitError) bool {
 // отдать агенту на починку (до maxFixes подряд) → снова проверить.
 // Изменения, сделанные самим агентом, — часть цикла: после успешной
 // проверки они просто не приводят к вызову агента.
-func (a *app) runWatch(command string, maxFixes int) {
+func (a *app) runWatch(command string, maxFixes int) error {
 	if strings.TrimSpace(command) == "" {
-		a.ui.Err("укажи команду проверки: gcli -watch \"go test ./...\"")
-		return
+		return fmt.Errorf("укажи команду проверки: gcli -watch \"go test ./...\"")
 	}
 	a.ui.Info("watch: слежу за " + core.RelToWD(a.workDir, a.workDir) + " · проверка: " + command)
 	a.ui.Info("остановка: Ctrl+C · починок подряд не более " + fmt.Sprint(maxFixes))
@@ -186,16 +185,14 @@ func (a *app) runWatch(command string, maxFixes int) {
 
 		fixes++
 		if fixes > maxFixes {
-			a.ui.Err("watch: подряд " + fmt.Sprint(maxFixes) + " починок не помогли — останавливаюсь, смотри вывод выше")
-			return
+			return fmt.Errorf("watch: подряд %d починок не помогли — проверка всё ещё красная, смотри вывод выше", maxFixes)
 		}
 
 		prompt := "Watch: проверка проекта упала. Команда: " + command + "\n" +
 			"Почини код проекта так, чтобы эта команда снова проходила. Правь код, а не команду: команда — эталон.\n" +
 			"Вывод команды:\n```\n" + tailChars(out, 6000) + "\n```"
 		if err := a.turn(prompt); err != nil {
-			a.ui.Err("watch: ход агента не удался: " + err.Error())
-			return
+			return fmt.Errorf("watch: ход агента не удался: %w", err)
 		}
 		// После хода агент мог изменить файлы: переснимаем состояние,
 		// чтобы эти правки не считались новыми на следующем проходе.

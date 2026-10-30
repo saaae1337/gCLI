@@ -331,9 +331,22 @@ const reasonHint = "(Ctrl+O — показать размышления)"
 func main() {
 	// Паника до входа в TUI/REPL не должна вываливать пользователю
 	// сырой стек Go: короткое сообщение и код ошибки.
+	var live *app
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintln(os.Stderr, "gcli: внутренняя ошибка:", r)
+			// Паника на главной горутине пропускает все defer: терминал
+			// остался бы в raw-режиме без эха («слепой» экран), сессия —
+			// несохранённой, дети — осиротевшими. Чистим по возможности;
+			// новая паника внутри чистки чистке не помеха.
+			if live != nil {
+				func() {
+					defer func() { _ = recover() }()
+					live.stdin.disableRaw()
+					live.saveSession()
+					live.shutdown()
+				}()
+			}
 			os.Exit(1)
 		}
 	}()
@@ -396,6 +409,7 @@ func main() {
 	}
 
 	a := &app{workDir: must(os.Getwd())}
+	live = a
 	// Начало сессии: в панели метрик видно, сколько времени идёт работа.
 	a.sessionStart = time.Now()
 	a.repo = core.Open()
@@ -583,9 +597,16 @@ func main() {
 
 	// Watch: слежение за файлами и автопочинка проверки.
 	if *flagWatch != "" {
-		a.runWatch(*flagWatch, 5)
+		err := a.runWatch(*flagWatch, 5)
 		a.closeMissionJournal()
 		a.saveSession()
+		if err != nil {
+			// CI обязан отличать «watch здоров» от «сдался, проверка всё
+			// ещё красная» — как это уже делает -bench рядом.
+			fmt.Fprintln(os.Stderr, "gcli:", err)
+			a.shutdown()
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -780,15 +801,26 @@ func (a *app) cfgShowTime() bool {
 
 // loadInitialSession — определить стартовую сессию по флагам.
 func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
+	warn := func(format string, args ...any) {
+		// -json/-p держат stdout машинным: диагностика — в stderr.
+		if a.quiet {
+			fmt.Fprintf(os.Stderr, "gcli: "+format+"\n", args...)
+			return
+		}
+		a.ui.Warn(fmt.Sprintf(format, args...))
+	}
 	if resume > 0 {
 		ss := a.repo.ListSessionInfos()
 		if resume <= len(ss) {
 			if s, err := a.repo.LoadSession(ss[resume-1].ID); err == nil {
 				return s
+			} else {
+				// Файл найден, но не читается: «не найдена» вводит в
+				// заблуждение — история была, а стала пустой.
+				warn("файл сессии №%d повреждён (%v) — создаю новую", resume, err)
 			}
-		}
-		if !a.quiet {
-			a.ui.Warn(fmt.Sprintf("сессия №%d не найдена — создаю новую", resume))
+		} else {
+			warn("сессия №%d не найдена — создаю новую", resume)
 		}
 	}
 	if cont {
@@ -796,6 +828,8 @@ func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 		if len(ss) > 0 {
 			if s, err := a.repo.LoadSession(ss[0].ID); err == nil {
 				return s
+			} else {
+				warn("файл последней сессии повреждён (%v) — создаю новую", err)
 			}
 		}
 	}
@@ -824,7 +858,13 @@ func (a *app) saveSession() {
 	// Показываем один раз за прогон: сессию пишут на каждый ход, и спам
 	// хуже одной honest-строки.
 	if err != nil && !a.saveErrShown.Swap(true) {
-		a.ui.Warn("сессия не сохраняется, история не переживёт перезапуск: " + err.Error())
+		// Машинный stdout (-json/-p) должен оставаться чистым: там идёт
+		// ответ, а не наши огорчения. Диагностика — в stderr.
+		if a.quiet {
+			fmt.Fprintln(os.Stderr, "gcli: сессия не сохраняется, история не переживёт перезапуск:", err)
+		} else {
+			a.ui.Warn("сессия не сохраняется, история не переживёт перезапуск: " + err.Error())
+		}
 	}
 }
 
