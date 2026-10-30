@@ -128,6 +128,10 @@ func (r *Reader) loop() {
 	pasteStart := []byte("\x1b[200~")
 	pasteEnd := []byte("\x1b[201~")
 	pasteOpen := false
+	// startStall — длина pending на момент последней отсрочки разбора
+	// разрезанного стартового маркера вставки: рост буфера продлевает
+	// ожидание, стоячее место отдаёт байты как обычные клавиши.
+	startStall := 0
 	emitPaste := func(text []byte) bool {
 		t := strings.ReplaceAll(string(text), "\r\n", "\n")
 		t = strings.ReplaceAll(t, "\r", "\n")
@@ -151,6 +155,12 @@ func (r *Reader) loop() {
 			}
 		}
 		return 0
+	}
+	// pasteStartPrefix — pending похож на разрезанный стартовый маркер
+	// вставки: строго короче целого ESC[200~ и совпадает с его началом.
+	// Одиночный Esc (ровно \x1b) под это не подпадает и ждёт свои 35 мс.
+	pasteStartPrefix := func(p []byte) bool {
+		return len(p) >= 2 && len(p) < len(pasteStart) && bytes.HasPrefix(pasteStart, p)
 	}
 	for {
 		// Пока в буфере есть полные события — отдаём их без задержки.
@@ -203,7 +213,7 @@ func (r *Reader) loop() {
 			// Вставке ждём дольше: её куски следуют друг за другом, и
 			// пауза между ними — не признак одиночного Esc.
 			wait := 35 * time.Millisecond
-			if pasteOpen {
+			if pasteOpen || pasteStartPrefix(pending) {
 				wait = 250 * time.Millisecond
 			}
 			timer := time.NewTimer(wait)
@@ -224,6 +234,16 @@ func (r *Reader) loop() {
 					timer.Stop()
 					continue
 				}
+				if pasteStartPrefix(pending) && len(pending) > startStall {
+					// Похоже на разрезанный стартовый маркер вставки:
+					// чтение догоняет — каждое пополнение продлевает
+					// ожидание. Зависший без пополнения кусок ниже
+					// отдаётся как клавиши, как раньше.
+					startStall = len(pending)
+					timer.Stop()
+					continue
+				}
+				startStall = 0
 				ev, n, _ := parseKey(pending, true)
 				if n > 0 {
 					if !emit(ev) {

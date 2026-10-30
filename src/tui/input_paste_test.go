@@ -97,3 +97,27 @@ func TestReaderPasteComplete(t *testing.T) {
 		t.Fatalf("потом «к», получили %#v", evs[2])
 	}
 }
+
+// TestReaderSplitPasteStartMarker — разрезан сам стартовый маркер
+// ESC[200~: чтение вернуло только «\x1b[2», продолжение пришло после
+// паузы. Раньше форс-таймер выдавал из недо CSI одиночный Esc — ход
+// прерывался, а «00~текст» печатался в поле как клавиши, включая
+// Enter и Backspace внутри вставки.
+func TestReaderSplitPasteStartMarker(t *testing.T) {
+	pr, pw := io.Pipe()
+	r := NewReader(pr)
+	defer r.Close()
+	go func() {
+		pw.Write([]byte("\x1b[2"))
+		time.Sleep(60 * time.Millisecond)
+		pw.Write([]byte("00~hello\x1b[201~"))
+		pw.Close()
+	}()
+	evs := collectEvents(t, r, 1)
+	if !evs[0].Paste {
+		t.Fatalf("ждали вставку, получили %#v (ложный Esc?)", evs[0])
+	}
+	if evs[0].Text != "hello" {
+		t.Fatalf("текст вставки = %q", evs[0].Text)
+	}
+}
