@@ -630,6 +630,11 @@ func main() {
 	// -stats: дашборд и выход, до входа в REPL. Данные из sessions/*.json,
 	// поэтому достаточно ui и репо — агент и провайдеры не нужны.
 	if *flagStats {
+		// Витрина только читает sessions/*.json, и файл после себя
+		// оставлять не должна: отложенный saveSession иначе писал бы
+		// пустую сессию при каждом запуске -stats, и дашборд добавлял
+		// бы фантомную строку «сессий» в собственный отчёт.
+		a.sess = nil
 		a.printStats(a.repo.ListSessionInfos(), 30)
 		return
 	}
@@ -1843,6 +1848,7 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 			a.onToolDone(tc, tool, res, err, elapsed)
 		},
 		OnUsage: a.onUsage,
+		OnError: a.AddError,
 	}, a.workDir)
 	ag.WithAgentMode(a.agentMode())
 	ag.Notes = a.notesText()

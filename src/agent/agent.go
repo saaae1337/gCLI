@@ -87,6 +87,9 @@ type Deps struct {
 	OnToolDone func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration)
 	// OnUsage — расход токенов за вызов.
 	OnUsage func(u core.Usage, d time.Duration)
+	// OnError — ход завершился ошибкой (обрыв потока, отказ провайдера):
+	// докручивает счётчик ошибок хоста, чтобы доля успеха не приукрашивала.
+	OnError func()
 	// Memory — собрать память проекта для промпта.
 	Memory func() string
 	// SkillsPrompt — блок со списком навыков.
@@ -545,6 +548,13 @@ func (a *Agent) callModel(ctx context.Context, creq core.ChatRequest, quiet bool
 		a.d.Session.AddUsage(usage)
 		if a.d.OnUsage != nil {
 			a.d.OnUsage(usage, time.Since(t0))
+		}
+		// Ошибка хода — тоже обращение к модели, но раньше она попадала
+		// только в Requests: обращение к серверу, которого нет, выглядело
+		// в /usage и дашборде -stats как «запросов 1 (ошибок: 0)». OnError
+		// докручивает Errors — доля успеха перестаёт приукрашивать.
+		if err != nil && a.d.OnError != nil {
+			a.d.OnError()
 		}
 	}()
 

@@ -236,6 +236,55 @@ func TestUsageCountedOnFailedStream(t *testing.T) {
 	}
 }
 
+// TestErrorCountedOnFailedTurn — провальный ход увеличивает Errors, а не
+// только Requests. Раньше неудачный запрос попадал в статистику как
+// успешный: /usage и дашборд -stats рисовали «запросов 1 (ошибок: 0)»
+// даже на сервере, который вообще не отвечает, и доля успеха врала.
+func TestErrorCountedOnFailedTurn(t *testing.T) {
+	sess := &usageSession{}
+	sp := &scriptProvider{steps: [][]string{textStep("")}}
+
+	errs := 0
+	a := New(Deps{
+		Session:   sess,
+		Providers: providers.NewClient(),
+		Provider:  sp.provider(t),
+		Model:     "test-model",
+		OnError:   func() { errs++ },
+	}, ".")
+
+	if _, err := a.callModel(context.Background(), core.ChatRequest{Model: "test-model"}, false); err == nil {
+		t.Fatalf("пустой ход должен вернуть ошибку")
+	}
+	if errs != 1 {
+		t.Errorf("ошибка хода не учтена: Errors=%d, ожидался 1", errs)
+	}
+}
+
+// TestErrorNotCountedOnSuccess — на успешном пути OnError молчит: счётчик
+// ошибок остаётся нулевым, и доля успеха считается только по настоящим
+// сбоям.
+func TestErrorNotCountedOnSuccess(t *testing.T) {
+	sess := &usageSession{}
+	sp := &scriptProvider{steps: [][]string{textStep("ответ")}}
+
+	errs := 0
+	a := New(Deps{
+		Session:   sess,
+		Providers: providers.NewClient(),
+		Provider:  sp.provider(t),
+		Model:     "test-model",
+		OnError:   func() { errs++ },
+	}, ".")
+
+	if _, err := a.callModel(context.Background(), core.ChatRequest{Model: "test-model"}, false); err != nil {
+		t.Fatalf("успешный ход вернул ошибку: %v", err)
+	}
+	if errs != 0 {
+		t.Errorf("успешный ход увеличил Errors: %d", errs)
+	}
+}
+
 // TestUsageNotDoubleCountedOnSuccess — на успешном пути расход списывается
 // ровно один раз: перенос учёта в defer легко дал бы двойной счёт.
 func TestUsageNotDoubleCountedOnSuccess(t *testing.T) {
