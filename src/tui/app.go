@@ -169,6 +169,7 @@ type App struct {
 	filesAt   time.Time
 	filesBusy bool
 	fileHide  string // @-токен, для которого список закрыли по Esc
+	palHide   string // текст, для которого подсказку команд закрыли по Esc
 
 	// Выделение мышью: якорь и подвижный край в клетках экрана. Текст
 	// выделения снимается с последнего собранного кадра (lastScreen).
@@ -317,10 +318,14 @@ func (a *App) Run(h Handlers) error {
 				// оставить горутину инструмента навсегда ждать ответа.
 				a.mu.Lock()
 				a.closed = true
+				interrupt := a.handle.Interrupt
 				if a.modal != nil {
 					a.cancelModalLocked(ChoiceNo)
 				}
 				a.mu.Unlock()
+				if interrupt != nil {
+					interrupt()
+				}
 				return nil
 			}
 			a.handleEvent(ev)
@@ -355,10 +360,17 @@ func (a *App) Quit() {
 	a.quitOnce.Do(func() {
 		a.mu.Lock()
 		a.closed = true
+		interrupt := a.handle.Interrupt
 		if a.modal != nil {
 			a.cancelModalLocked(ChoiceNo)
 		}
 		a.mu.Unlock()
+		// Активный ход не должен переживать интерфейс: без отмены
+		// горутина хода досиживала бы до конца процесса — жгла токены
+		// и печатала в уже восстановленный терминал.
+		if interrupt != nil {
+			interrupt()
+		}
 	})
 }
 
@@ -506,7 +518,7 @@ func (a *App) keyLocked(ev Event) {
 			// Ctrl+Shift+C работает только там, где выделение не
 			// перехвачено мышью.
 			a.comp.SetText("/copy")
-			a.submitLocked()
+			a.submitServiceLocked()
 			return
 		case ev.Ctrl && ev.R == 'l':
 			a.rend.Invalidate()
@@ -643,7 +655,11 @@ func (a *App) keyLocked(ev Event) {
 			return
 		}
 		if palOpen {
-			a.comp.Clear()
+			// Esc закрывает подсказку, а не стирает черновик: текст,
+			// с которого открылась палитра, мог быть началом длинного
+			// сообщения. Второй Esc (уже без палитры) очистит поле,
+			// как и раньше.
+			a.palHide = a.comp.Text()
 			return
 		}
 		if a.busy {
@@ -964,7 +980,16 @@ func absDiff(a, b int) int {
 
 // submitLocked — отправить введённое.
 func (a *App) submitLocked() {
-	text := a.comp.Submit()
+	a.submitTextLocked(a.comp.Submit())
+}
+
+// submitServiceLocked — служебный сабмит (Ctrl+Y шлёт «/copy»): в общую
+// очередь команд, но без записи в историю поля.
+func (a *App) submitServiceLocked() {
+	a.submitTextLocked(a.comp.SubmitNoHistory())
+}
+
+func (a *App) submitTextLocked(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -1594,6 +1619,11 @@ func (a *App) composerInner() int {
 func (a *App) paletteItems() []Command {
 	text := a.comp.Text()
 	if !strings.HasPrefix(text, "/") || a.comp.Len() > 40 {
+		return nil
+	}
+	// Подсказку закрыли по Esc — она молчит, пока текст не изменится:
+	// любая правка даёт другой текст, и подсказка возвращается сама.
+	if text == a.palHide {
 		return nil
 	}
 	if strings.ContainsAny(text, " \n") {

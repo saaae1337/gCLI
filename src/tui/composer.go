@@ -457,6 +457,15 @@ func (c *Composer) HistoryNext() {
 	c.cur = len(c.text)
 }
 
+// SubmitNoHistory — забрать текст и очистить поле, не пиша в историю:
+// служебные сабмиты (Ctrl+Y отправляет «/copy») не должны забивать
+// листинг истории Ctrl+P/Ctrl+Up.
+func (c *Composer) SubmitNoHistory() string {
+	s := strings.TrimRight(string(c.text), " \n")
+	c.Clear()
+	return s
+}
+
 // Submit — забрать текст и очистить поле (с записью в историю).
 func (c *Composer) Submit() string {
 	s := strings.TrimRight(string(c.text), " \n")
