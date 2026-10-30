@@ -298,11 +298,21 @@ func (r *Registry) TrustCode(w ProjectCodeWarning) {
 	if r.env.Trust == nil {
 		return
 	}
-	data, err := os.ReadFile(w.Path)
-	if err != nil {
-		return
+	// Подтверждаем ровно то, что показано человеку: хеш из предупреждения.
+	// Перечитывать файл с диска — дыра TOCTOU: между показом и нажатием
+	// «доверять» манифест могли подменить, и одобрение ушло бы коду,
+	// который никто не видел.
+	hash := w.Hash
+	if hash == "" {
+		// Старые предупреждения без хеша: показанного нет, берём то, что
+		// на диске сейчас, — другого источника правды не осталось.
+		data, err := os.ReadFile(w.Path)
+		if err != nil {
+			return
+		}
+		hash = hashSources(map[string]string{w.Path: string(data)})
 	}
-	r.env.Trust.Approve(w.Kind, w.Name, hashSources(map[string]string{w.Path: string(data)}))
+	r.env.Trust.Approve(w.Kind, w.Name, hash)
 }
 
 // FindPendingCode — найти недоверенный код по имени (для /ext trust x).

@@ -200,13 +200,18 @@ func gitOut(dir string, args ...string) (string, error) {
 		"GIT_PAGER=cat", "GIT_OPTIONAL_LOCKS=0", "GCLI=1", "GIT_TERMINAL_PROMPT=0")
 	var stderr strings.Builder
 	ce.Stderr = &stderr
-	out, err := ce.Output()
+	// Потолок памяти: git diff против большого рефа может выдать сотни
+	// мегабайт, и Output() читал бы их весь в память. Capture держит
+	// O(limit): голову и хвост, середину заменяет пометкой.
+	captured := core.NewCapture(1024 * 1024)
+	ce.Stdout = captured
+	err := ce.Run()
 	if err != nil && ctx.Err() != nil {
 		// Убит по потолку: ExitError «signal: killed» или DeadlineExceeded.
 		// Наружу нужна причина, а не молчаливый «код 137».
 		err = fmt.Errorf("git не ответил за %v: %w", gitTimeout, err)
 	}
-	return string(out), err
+	return captured.String(), err
 }
 
 // gitRepoRoot — корень git-репозитория ("" — не репозиторий).

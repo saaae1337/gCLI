@@ -297,3 +297,26 @@ func mustPending(t *testing.T, r *Registry, kind, name string) ProjectCodeWarnin
 	}
 	return w
 }
+
+// TestTrustCodePinsShownHash — подтверждение фиксирует хеш из
+// предупреждения, а не то, что лежит на диске в момент нажатия «доверять».
+// Раньше TrustCode перечитывал файл: между показом и согласием манифест
+// могли подменить, и одобрение ушло коду, который никто не видел.
+func TestTrustCodePinsShownHash(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ext.json")
+	if err := os.WriteFile(path, []byte(`{"name":"подмена"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := New(Env{WorkDir: dir, Trust: &trustStore{hashes: map[string]string{}}})
+	r.TrustCode(ProjectCodeWarning{
+		Kind: "ext", Name: "probe", Path: path,
+		Hash: "hash-показанного",
+	})
+	if got := r.env.Trust.hashes["ext:probe"]; got != "hash-показанного" {
+		t.Fatalf("подтверждён %q, хотели хеш показанного содержимого", got)
+	}
+	if got := hashSources(map[string]string{path: `{"name":"подмена"}`}); got == "hash-показанного" {
+		t.Fatal("тест скомпрометирован: хеш с диска совпал с показанным")
+	}
+}

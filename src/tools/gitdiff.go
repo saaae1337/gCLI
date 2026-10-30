@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"gcli/core"
 )
@@ -104,7 +105,9 @@ func (r *Registry) hGitDiff(_ context.Context, m map[string]any) (Result, error)
 	}
 	cut := false
 	if len(out) > gitDiffMaxBytes {
-		out = out[:gitDiffMaxBytes]
+		// Режем по границе руны: байтовый срез рвал UTF-8 посреди
+		// кириллицы, и в контекст модели уходил сломанный символ.
+		out = cutRuneSafe(out, gitDiffMaxBytes)
 		cut = true
 	}
 	tail := ""
@@ -116,4 +119,17 @@ func (r *Registry) hGitDiff(_ context.Context, m map[string]any) (Result, error)
 		Text:    "```diff\n" + out + "\n```" + tail,
 		Summary: fmt.Sprintf("diff: %s", what),
 	}, nil
+}
+
+// cutRuneSafe — обрезать s до max байт, не рвя UTF-8 посреди символа:
+// граница отступает назад до начала руны. Кодовые точки дифа с кириллицей
+// и эмодзи регулярно попадали на байтовый срез.
+func cutRuneSafe(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }

@@ -262,10 +262,14 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 				return Result{Text: "Команда отклонена пользователем", Summary: "отклонено"}, nil
 			}
 		}
-		timeout := core.Clamp(t.TimeoutSec, 5, 600)
+		// Дефолт до Clamp: Clamp(0,…)=5, и ветка ниже была мёртвой —
+		// расширение без timeout_sec убивалось через 5 секунд вместо
+		// обещанных 60 (у MCP-серверов тот же порядок сделан верно).
+		timeout := t.TimeoutSec
 		if timeout == 0 {
 			timeout = 60
 		}
+		timeout = core.Clamp(timeout, 5, 600)
 		workdir := r.workDir
 		if t.Workdir != "" {
 			// Каталог расширения — это путь, который задал не пользователь
@@ -354,10 +358,13 @@ func (r *Registry) extHTTPHandler(ext Extension, t ExtTool) Handler {
 		if body != "" {
 			rdr = strings.NewReader(body)
 		}
-		timeout := core.Clamp(t.TimeoutSec, 5, 300)
+		// Тот же мёртвый дефолт, что и у exec-расширений: без него
+		// HTTP-расширение без timeout_sec жило 5 секунд вместо 30.
+		timeout := t.TimeoutSec
 		if timeout == 0 {
 			timeout = 30
 		}
+		timeout = core.Clamp(timeout, 5, 300)
 		hctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
 

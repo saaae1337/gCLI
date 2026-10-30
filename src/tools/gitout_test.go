@@ -162,3 +162,27 @@ func TestGitOutBoundedByTimeout(t *testing.T) {
 		t.Fatal("gitOut висит сверх потолка — таймаут не работает")
 	}
 }
+
+// TestCutRuneSafe — обрезка diff не рвёт руны: граница уходит назад до
+// начала символа, кириллица на стыке не превращается в сломанный байт.
+func TestCutRuneSafe(t *testing.T) {
+	s := "привет" // 12 байт, по 2 на букву
+	if got := cutRuneSafe(s, 12); got != s {
+		t.Errorf("короткая строка искажена: %q", got)
+	}
+	if got := cutRuneSafe(s, 13); got != s {
+		t.Errorf("запас не должен резать: %q", got)
+	}
+	if got := cutRuneSafe(s, 4); got != "пр" {
+		t.Errorf("точная граница: %q", got)
+	}
+	if got := cutRuneSafe(s, 5); got != "пр" {
+		t.Errorf("граница посреди руны: %q", got)
+	}
+	if got := cutRuneSafe(s, 6); got != "при" {
+		t.Errorf("граница после третьей руны: %q", got)
+	}
+	if got := cutRuneSafe("", 5); got != "" {
+		t.Errorf("пустая строка искажена: %q", got)
+	}
+}

@@ -52,3 +52,22 @@ func TestRegisterExtReportsCollision(t *testing.T) {
 		t.Error("пропуск коллизии не отражён предупреждением")
 	}
 }
+
+// TestExtCmdDefaultTimeout — расширение без timeout_sec живёт обещанные
+// 60 секунд, а не 5: Clamp(0,…)=5 делал ветку дефолта мёртвой, и любую
+// долгую команду (go build, npm install) убивало сразу после запуска.
+func TestExtCmdDefaultTimeout(t *testing.T) {
+	r := New(Env{WorkDir: t.TempDir()})
+	ext := Extension{Name: "slow"}
+	h := r.extCmdHandler(ext, ExtTool{Name: "sleeper", Command: "sleep 6; echo дожил"})
+	res, err := h(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("выполнение сорвалось: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("команда убита по таймауту вместо дефолтных 60s: %q", res.Error)
+	}
+	if !strings.Contains(res.Text, "дожил") {
+		t.Errorf("вывод потерян: %q", res.Text)
+	}
+}
