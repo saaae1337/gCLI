@@ -241,23 +241,29 @@ func (e *missionEngine) tracker() *core.Tracker {
 // Ошибка сохранения не убивает прогон: работа продолжается, а потеря
 // страховки — не повод остановиться. Пропущенное сохранение не должно
 // превращаться в тишину, поэтому о нём говорит вызывающий.
-func (e *missionEngine) checkpoint() bool {
+//
+// Ошибка возвращается вызывающему только когда сохранение реально
+// выполнялось и сорвалось. Нет миссии, нет колбека или очередь не
+// подошла — это не ошибка, а (false, nil): раньше false от «не подошло»
+// не отличался от false от «сорвалось», и обычный ход без миссии получал
+// заметку «не удалось сохранить» на каждой итерации с инструментами.
+func (e *missionEngine) checkpoint() (bool, error) {
 	if e == nil || e.deps.Checkpoint == nil {
-		return false
+		return false, nil
 	}
 	if !e.deps.Tracker.CheckpointDue() {
-		return false
+		return false, nil
 	}
 	summary := e.summary("чекпоинт")
 	if err := e.deps.Checkpoint(summary); err != nil {
-		return false
+		return false, err
 	}
 	// Журнал пишется после снимка: снимок переживает сжатие контекста,
 	// журнал — падение процесса. Ошибка снимка важнее, потому что без
 	// него продолжение после перезапуска вообще не о чем.
 	e.journalCheckpoint(summary)
 	e.deps.Tracker.CountCheckpoint()
-	return true
+	return true, nil
 }
 
 // journalCheckpoint — дописать чекпоинт в журнал.

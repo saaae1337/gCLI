@@ -1,12 +1,16 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"gcli/core"
 )
+
+// errBoom — sentinel для проверки доставки ошибки снимка.
+var errBoom = errors.New("диск переполнен")
 
 // ---------- Движок прогона ----------
 
@@ -211,16 +215,37 @@ func TestMissionCheckpointCadence(t *testing.T) {
 	}
 	for i := 0; i < every-1; i++ {
 		e.tick(1)
-		if e.checkpoint() {
+		if saved, _ := e.checkpoint(); saved {
 			t.Fatalf("на итерации %d сохранять рано", i+1)
 		}
 	}
 	e.tick(1)
-	if !e.checkpoint() {
-		t.Fatalf("на итерации %d сохранять пора", every)
+	if saved, err := e.checkpoint(); !saved || err != nil {
+		t.Fatalf("на итерации %d сохранять пора: saved=%v err=%v", every, saved, err)
 	}
 	if *calls != 1 {
 		t.Errorf("сохранений %d, хотели 1", *calls)
+	}
+}
+
+// TestMissionCheckpointErrorDistinguishing — ошибка снимка возвращается
+// вызывающему, а отсутствие миссии ошибкой не является. Раньше nil-движок
+// возвращал false неотличимо от сорванного сохранения, и обычный ход без
+// миссии на каждой итерации писал заметку «не удалось сохранить».
+func TestMissionCheckpointErrorDistinguishing(t *testing.T) {
+	tr := core.NewTracker(core.Mission{Mode: core.MissionLongTime, CheckpointEvery: 1}.Apply(), 0, 0)
+	e := newMissionEngine(MissionDeps{
+		Tracker:    tr,
+		Spent:      func() int { return 0 },
+		Checkpoint: func(string) error { return errBoom },
+	})
+	e.tick(1)
+	if _, err := e.checkpoint(); err != errBoom {
+		t.Errorf("ошибка снимка потеряна: %v", err)
+	}
+	var nilEngine *missionEngine
+	if saved, err := nilEngine.checkpoint(); saved || err != nil {
+		t.Errorf("nil-движок: saved=%v err=%v, хотели false, nil", saved, err)
 	}
 }
 
@@ -262,7 +287,7 @@ func TestMissionNilSafe(t *testing.T) {
 		t.Errorf("nil-движок вернул %q", got)
 	}
 	e.countTools(5)
-	if e.checkpoint() {
+	if saved, _ := e.checkpoint(); saved {
 		t.Error("nil-движок не должен сохранять")
 	}
 	if e.systemBlock() != "" || e.stopMessage() != "" || e.verifyMessage() != "" ||

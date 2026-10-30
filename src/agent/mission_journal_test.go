@@ -170,8 +170,8 @@ func TestMissionJournalsCheckpoints(t *testing.T) {
 	})
 	for i := 0; i < 3; i++ {
 		e.tick(1)
-		if !e.checkpoint() {
-			t.Fatalf("чекпоинт на итерации %d не сделан", i+1)
+		if saved, err := e.checkpoint(); !saved || err != nil {
+			t.Fatalf("чекпоинт на итерации %d не сделан: saved=%v err=%v", i+1, saved, err)
 		}
 	}
 	if saved != 3 {
@@ -208,7 +208,7 @@ func TestMissionJournalNilIsSafe(t *testing.T) {
 	})
 	e.tick(1)
 	e.journalCheckpoint("чекпоинт")
-	if !e.checkpoint() {
+	if saved, err := e.checkpoint(); !saved || err != nil {
 		t.Error("чекпоинт без журнала всё равно должен делаться")
 	}
 }
@@ -241,7 +241,7 @@ func TestMissionCheckpointSurvivesFailingJournal(t *testing.T) {
 		Checkpoint: func(string) error { saved++; return nil },
 	})
 	e.tick(1)
-	if !e.checkpoint() {
+	if saved, err := e.checkpoint(); !saved || err != nil {
 		t.Error("снимок состояния обязан делаться даже при битом журнале")
 	}
 	if saved != 1 {

@@ -259,3 +259,53 @@ func TestUsageNotDoubleCountedOnSuccess(t *testing.T) {
 		t.Errorf("расход посчитан неверно: %+v (ожидалось 53)", sess.usage)
 	}
 }
+
+// TestParallelCancelDoesNotDeadlock — прерванный слот не пишет в канал
+// результатов, и сборщик обязан ждать только реально запущенные горутины.
+// Раньше сборщик делал ровно len(parallel) приёмов: если Ctrl+C застал
+// часть вызовов в очереди на запуск, ход навсегда зависал вместе с turnMu.
+func TestParallelCancelDoesNotDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	sess := &fakeSession{}
+	reg := tools.New(tools.Env{WorkDir: dir, Session: sess})
+
+	release := make(chan struct{})
+	reg.Register(&tools.Tool{
+		Def: tools.ToolDef{Name: "held", Description: "держит слот"},
+		Handler: func(ctx context.Context, m map[string]any) (tools.Result, error) {
+			<-release
+			return tools.Result{Text: "отпущен"}, nil
+		},
+	})
+
+	a := New(Deps{Registry: reg, Session: sess, Parallel: true, MaxParallelTools: 1}, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan []toolResult, 1)
+	go func() {
+		done <- a.execTools(ctx, []core.ToolCall{
+			{ID: "c1", Name: "held"},
+			{ID: "c2", Name: "held"},
+		})
+	}()
+
+	// Первый вызов держит единственный слот; отмена приходит, пока второй
+	// стоит в очереди — его select обязан уйти по ctx.Done() и не запуститься.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	close(release)
+
+	select {
+	case res := <-done:
+		if len(res) != 2 {
+			t.Fatalf("результатов %d, ожидалось 2", len(res))
+		}
+		for i, r := range res {
+			if strings.TrimSpace(r.text) == "" {
+				t.Errorf("вызов %d остался без ответа — провайдер отверг бы такой ход", i)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("execTools не завершился после отмены — сборщик результатов завис")
+	}
+}
