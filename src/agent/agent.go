@@ -1391,12 +1391,22 @@ func (a *Agent) Compact(ctx context.Context, auto bool) bool {
 	if auto && !a.autoCompactDue(msgs) {
 		return false
 	}
+	// Запрос выжимки собирается по тем же правилам, что и обычный ход:
+	// Data картинки не переживает сохранение сессии (остаётся только
+	// путь), старые снимки выжимке не нужны. Без этого после resume
+	// сессии со скриншотом запрос уходил с пустым base64, провайдер
+	// отвечал 400, и компакция молча ломалась навсегда. Копия среза:
+	// чистка и дозаполнение не трогают историю сессии.
+	cmsgs := make([]core.Message, len(msgs))
+	copy(cmsgs, msgs)
+	dropOldImages(cmsgs)
+	fillImages(cmsgs)
 	creq := core.ChatRequest{
 		Model:     a.d.Model,
 		MaxTokens: 4096,
 		Temp:      0.2,
 		System:    compactPrompt,
-		Messages:  msgs,
+		Messages:  cmsgs,
 	}
 	summary, err := a.callModel(ctx, creq, true)
 	if err != nil || strings.TrimSpace(summary.Content) == "" {
