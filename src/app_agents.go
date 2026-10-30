@@ -825,6 +825,13 @@ func (a *app) cmdCompact() {
 		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /compact подменяет историю под ногами хода")
 		return
 	}
+	// Ход мог начаться между проверкой и сжатием (cron/watch по
+	// таймеру). turnMu — тот же замок, что у turn/cronTurn: держим его
+	// до конца сжатия, чтобы replaceMessages не резал историю под
+	// ногами начавшегося хода, а ход, начавшийся во время сетевой
+	// фазы, встанет в очередь и пойдёт по уже сжатой истории.
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
 	a.ui.SpinnerStart("Сжимаю историю")
 	ag := a.newAgent(true)
 	ag.WithAgentMode(false)
