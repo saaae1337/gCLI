@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"gcli/agent"
@@ -1062,9 +1063,31 @@ func (a *app) buildPool() {
 // installSignalHandler — Ctrl+C: прервать генерацию, повторное — выход.
 func (a *app) installSignalHandler() {
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		for range ch {
+		for sig := range ch {
+			if sig != os.Interrupt {
+				// TERM/HUP: процесс убивают внешне (systemd stop,
+				// pkill, IDE). Это не «первый Ctrl+C» — сразу уборка
+				// и выход, иначе деферры чужой горутины не выполнятся
+				// и терминал останется в raw + альтернативном экране.
+				a.mu.Lock()
+				tuiApp := a.tui
+				a.mu.Unlock()
+				if tuiApp != nil {
+					tuiApp.Quit()
+					continue
+				}
+				if a.stdin != nil {
+					a.stdin.disableRaw()
+				}
+				a.shutdown()
+				a.saveSession()
+				if s, ok := sig.(syscall.Signal); ok {
+					os.Exit(128 + int(s))
+				}
+				os.Exit(1)
+			}
 			a.mu.Lock()
 			c := a.cancel
 			running := a.running
