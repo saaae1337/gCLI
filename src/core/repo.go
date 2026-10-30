@@ -441,6 +441,9 @@ func (r *Repo) RecordCheckpoint(s *Session, path, label string) {
 		return
 	}
 	meta := CheckpointMeta{Path: path, Time: time.Now(), Label: label}
+	if info, err := os.Stat(path); err == nil {
+		meta.Mode = uint32(info.Mode().Perm())
+	}
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -497,7 +500,11 @@ func (r *Repo) UndoCheckpoint(s *Session) (CheckpointMeta, bool, error) {
 	if err := os.MkdirAll(filepath.Dir(cp.Path), 0o755); err != nil {
 		return cp, false, err
 	}
-	if err := WriteAtomic(cp.Path, data, 0o644); err != nil {
+	mode := os.FileMode(0o644)
+	if cp.Mode != 0 {
+		mode = os.FileMode(cp.Mode)
+	}
+	if err := WriteAtomic(cp.Path, data, mode); err != nil {
 		return cp, false, err
 	}
 	s.Checkpoints = s.Checkpoints[:len(s.Checkpoints)-1]

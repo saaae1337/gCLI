@@ -552,3 +552,28 @@ func TestUndoCheckpointConcurrentNoRace(t *testing.T) {
 	}
 	<-done
 }
+
+// TestUndoRestoresFileMode — откат возвращает файлу прежние права, а не
+// молча расширяет их до 0644: секретный .env с 0600 после /undo не должен
+// стать читаемым всем.
+func TestUndoRestoresFileMode(t *testing.T) {
+	a, _ := cmdApp(t)
+	p := writeTemp(t, a.workDir, "secret.env", "TOKEN=1")
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.recordCheckpoint(p, "правка")
+	if err := os.WriteFile(p, []byte("TOKEN=2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := a.repo.UndoCheckpoint(a.sess); err != nil || !ok {
+		t.Fatalf("откат не прошёл: ok=%v err=%v", ok, err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("после отката права %v, ждали 0600", info.Mode().Perm())
+	}
+}

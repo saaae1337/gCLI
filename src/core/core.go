@@ -146,6 +146,11 @@ type CheckpointMeta struct {
 	Existed bool      `json:"existed"`
 	Time    time.Time `json:"time"`
 	Label   string    `json:"label,omitempty"` // какой инструмент изменил файл
+	// Mode — права исходного файла: откат возвращает их как были, а не
+	// молча расширяет до 0644 (agent-created .env с 0600 после undo
+	// оставался читаемым всем). 0 — старый чекпоинт без записи: берём
+	// прежний дефолт, совместимость со старыми сессиями сохранена.
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 // Perms — память разрешений текущей сессии.
