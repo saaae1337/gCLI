@@ -168,3 +168,36 @@ func FuzzStringWidth(f *testing.F) {
 		_ = StringWidth(s) // главное — не зависнуть и не паниковать
 	})
 }
+
+// TestNextClusterRunesMatchesStringEngine — руновый движок обязан давать те
+// же ширины, что строковый: редактор меряет курсор рунами, а терминал
+// рисует кластерами. Раньше база после ZWJ теряла ширину в NextClusterRunes
+// (в nextCluster её прибавляли), и текст вида «a‍日» съедал две колонки.
+func TestNextClusterRunesMatchesStringEngine(t *testing.T) {
+	inputs := []string{
+		"a‍日",
+		"👨‍👩‍👧 один вывод",
+		"👍🏽‍日",
+		"x‍y‍z конец",
+		"🇷🇺‍🇺🇸 флаги",
+	}
+	for _, s := range inputs {
+		rs := []rune(s)
+		total, size := 0, 0
+		for i := 0; i < len(rs); {
+			w, n := NextClusterRunes(rs, i)
+			if n == 0 {
+				t.Fatalf("%q: кластер на %d нулевой", s, i)
+			}
+			total += w
+			i += n
+			size += n
+		}
+		if want := StringWidth(s); total != want {
+			t.Errorf("%q: сумма ширин кластеров %d, StringWidth %d", s, total, want)
+		}
+		if size != len(rs) {
+			t.Errorf("%q: кластеры покрыли %d рун из %d", s, size, len(rs))
+		}
+	}
+}

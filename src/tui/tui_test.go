@@ -792,3 +792,43 @@ func TestSGRColonSubparams(t *testing.T) {
 		t.Fatalf("сброс не снял подчёркивание: %+v", l[1].S)
 	}
 }
+
+// TestParseStyledControlByteInCSI — управляющий байт внутри CSI заканчивает
+// последовательность, как у канонического skipANSI. Раньше сканер глотал
+// текст до ближайшего финального байта: обрезанный truecolor перед переводом
+// строки съедал «\n» и первый символ следующей строки.
+func TestParseStyledControlByteInCSI(t *testing.T) {
+	th := Dark()
+	base := Style{}
+	l := parseStyled("\x1b[38;2;\nabc\x1b[0mdef", th, base)
+	if got := l.Text(); got != "\nabcdef" {
+		t.Fatalf("текст после оборванного CSI: %q, хотели %q", got, "\nabcdef")
+	}
+	// Обычный SGR не сломан.
+	l = parseStyled("\x1b[1mbold\x1b[0m", th, base)
+	if got := l.Text(); got != "bold" {
+		t.Fatalf("обычный SGR: %q", got)
+	}
+}
+
+// TestParseX10MouseRelease — код 3 в X10 это отпускание кнопок (SGR-путь
+// на него шлёт «m»), а не нажатие. Раньше оно приходило как MDown: клик
+// давал два нажатия, MUp не приходил никогда, выделение не завершалось.
+func TestParseX10MouseRelease(t *testing.T) {
+	ev := parseX10Mouse(35, 72, 52) // кнопка 3 (отпускание), x=40, y=20
+	if !ev.MUp || ev.MDown || ev.MDrag {
+		t.Fatalf("отпускание разобрано как %+v", ev)
+	}
+	if ev.X != 40 || ev.Y != 20 {
+		t.Fatalf("координаты: %+v", ev)
+	}
+	// Нажатие не сломано.
+	ev = parseX10Mouse(32, 72, 52)
+	if !ev.MDown || ev.MUp || ev.MBtn != 0 {
+		t.Fatalf("нажатие разобрано как %+v", ev)
+	}
+	// Колесо не задето.
+	if ev := parseX10Mouse(96, 72, 52); ev.Wheel != -1 {
+		t.Fatalf("колесо вверх разобрано как %+v", ev)
+	}
+}

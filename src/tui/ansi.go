@@ -71,18 +71,31 @@ func parseStyled(s string, t Theme, base Style) Line {
 		if j < len(s) && s[j] == '[' {
 			k := j + 1
 			for k < len(s) && !(s[k] >= 0x40 && s[k] <= 0x7e) {
+				if s[k] < 0x20 {
+					// Управляющий байт внутри CSI — конец последовательности
+					// у канонического парсера (wcwidth.skipANSI). Без
+					// охраны сканер глотал текст до ближайшего финального
+					// байта — вместе с переводом строки и началом следующей.
+					break
+				}
 				k++
 			}
-			if k < len(s) {
-				if s[k] == 'm' {
-					flush()
-					st = applySGR(st, s[j+1:k], t, base)
-				}
+			if k < len(s) && s[k] == 'm' {
+				flush()
+				st = applySGR(st, s[j+1:k], t, base)
 				i = k + 1
 				continue
 			}
+			if k < len(s) && s[k] >= 0x20 {
+				i = k + 1
+				continue
+			}
+			// Оборванная последовательность: разбор отдаём каноническому
+			// skipEscape — он съедает только сам CSI, управляющий байт
+			// остаётся текстом, как и в очищенной строке. Сюда же попадает
+			// обрыв на конце ввода.
+			i = skipEscape(s, i)
 		}
-		i = skipEscape(s, i)
 	}
 	flush()
 	return out

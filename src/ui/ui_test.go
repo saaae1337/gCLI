@@ -600,3 +600,13 @@ func TestStatusLine(t *testing.T) {
 		t.Errorf("пустой элемент оставил лишний разделитель:\n%s", out)
 	}
 }
+
+// TestTerminalWidthColumnsFallback — без ioctl (в тестах stdout — труба)
+// ширина берётся из COLUMNS; раньше читалась только она, из-за чего в
+// 80-колоночном терминале панели верстались под дефолтные 100 колонок.
+func TestTerminalWidthColumnsFallback(t *testing.T) {
+	t.Setenv("COLUMNS", "77")
+	if w := terminalWidth(); w != 77 {
+		t.Fatalf("terminalWidth() = %d, хотели 77", w)
+	}
+}

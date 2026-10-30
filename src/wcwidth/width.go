@@ -394,12 +394,24 @@ func NextClusterRunes(text []rune, i int) (w, size int) {
 	for i < len(text) {
 		n := text[i]
 		if joined {
+			// ESC разрывает кластер — как в nextCluster: уйди ESC
+			// внутрь кластера, и ширина разошлась бы с очищенным
+			// текстом (нашлось фаззингом в строковом движке).
+			if n == 0x1B {
+				break
+			}
 			if n != zwj {
 				if isEmoji(n) {
 					pic = true
 				}
 				joined = false
 				i++
+				// База после ZWJ — часть рисунка, но её ширина
+				// входит в кластер, как в nextCluster: без неё
+				// текст после ZWJ исчезал бы из подсчёта, и
+				// курсор/перенос редактора разъезжались бы с
+				// тем, что рисует терминал.
+				w += baseWidth(n)
 				if isSkinTone(n) || isRegionalIndicator(n) {
 					pic = true
 				}
