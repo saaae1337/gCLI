@@ -321,9 +321,19 @@ func StreamAnthropic(ctx context.Context, c *Client, p *Provider, creq core.Chat
 		return err
 	}
 
+	parseFails := 0
 	return c.streamWithKeys(ctx, p, req, func(data string) error {
 		var e anEvent
 		if err := json.Unmarshal([]byte(data), &e); err != nil {
+			// Молча глотать нечитаемое нельзя: шлюз, отвечающий 200
+			// с HTML-заглушкой в data-событиях, маскировался под
+			// «пустой поток» и водил за нос диагностикой. Зеркало
+			// openai.go: первые события можно потерять, дальше —
+			// честная ошибка.
+			parseFails++
+			if parseFails > 8 {
+				return fmt.Errorf("не удалось разобрать ответ API (похоже, это не Anthropic Messages endpoint)")
+			}
 			return nil
 		}
 		switch e.Type {

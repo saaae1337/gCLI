@@ -381,7 +381,11 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 	}
 
 	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	// Потолок строки: base64 картинки на 4 МБ — это ~5,4 МБ в одной
+	// data-строке, а прокси любят слить большой кусок разом. Раньше
+	// длинная строка убивала поток посреди ответа (ErrTooLong), и
+	// ретрай был запрещён — часть ответа уже доставлена.
+	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
 
 	var dataLines []string
 	gotAny := false
