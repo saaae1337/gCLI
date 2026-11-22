@@ -197,14 +197,18 @@ func clipboardWrite(ctx context.Context, text string) error {
 	}
 	if x11 {
 		if _, err := exec.LookPath("xclip"); err == nil {
-			return runStdin(ctx, "xclip", "-selection", "clipboard", "-i")
+			return runStdin(ctx, "xclip", text, "-selection", "clipboard", "-i")
 		}
 	}
 	return fmt.Errorf("буфер обмена недоступен: не найден xclip или wl-copy (установи xclip или wl-clipboard)")
 }
 
 // runStdin — передать текст утилите через stdin (pbcopy, wl-copy, xclip -i).
-func runStdin(ctx context.Context, text, name string, args ...string) error {
+// Имя команды — первым аргументом, как в runCapture: раньше текст стоял
+// раньше имени, вызов runStdin(ctx, "pbcopy", text) пытался исполнить
+// текст буфера как программу (exec: «x»: executable file not found),
+// а до pbcopy строка не доходила вовсе.
+func runStdin(ctx context.Context, name, text string, args ...string) error {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, name, args...)

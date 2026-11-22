@@ -420,10 +420,17 @@ func TestResultCacheStampLivesLonger(t *testing.T) {
 	cacheStampTTL = time.Hour
 
 	c := newResultCache()
-	stamped := c.items
-	_ = stamped
 	// Без отпечатка: запись протухает сразу.
 	c.put("k1", "текст", "")
+	// Таймер Windows и macOS грубее наносекунды: time.Since сразу после
+	// put возвращает ноль, и «протухание» на живых часах не ловится
+	// (безотпечаточная запись пережила короткий TTL). Отводим метку записи
+	// в прошлое сами — детерминированно на любой ОС.
+	c.mu.Lock()
+	e := c.items["k1"]
+	e.at = e.at.Add(-time.Minute)
+	c.items["k1"] = e
+	c.mu.Unlock()
 	if _, ok := c.get("k1", ""); ok {
 		t.Error("безотпечаточная запись пережила короткий TTL")
 	}

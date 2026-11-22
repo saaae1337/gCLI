@@ -10,6 +10,7 @@ package tools
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -82,19 +83,39 @@ func TestClipboardValidation(t *testing.T) {
 }
 
 // TestClipboardWriteMissingTools — при отсутствии системных утилит
-// ошибка честно называет, что установить. На машине с утилитами запись
-// просто succeeds — тогда тест пропускается.
+// ошибка честно называет, что установить (xclip, wl-copy, pbcopy,
+// powershell). На машине с рабочей утилитой запись succeeds — проверяется
+// отчёт об успехе. Ошибка от стоящей, но не сработавшей утилиты (pbcopy
+// без WindowServer на CI) тоже годна: имя бэкенда в ней есть.
 func TestClipboardWriteMissingTools(t *testing.T) {
 	r := New(Env{WorkDir: t.TempDir()})
 	res, err := r.hClipboard(context.Background(), map[string]any{"action": "write", "text": "x"})
 	if err != nil {
-		if !strings.Contains(err.Error(), "буфер обмена недоступен") && !strings.Contains(err.Error(), "powershell") {
-			t.Fatalf("ошибка без подсказки: %v", err)
+		for _, hint := range []string{"буфер обмена недоступен", "powershell", "pbcopy", "wl-copy", "xclip"} {
+			if strings.Contains(err.Error(), hint) {
+				return
+			}
 		}
-		return
+		t.Fatalf("ошибка без подсказки: %v", err)
 	}
 	if !strings.Contains(res.Text, "записано") {
 		t.Errorf("запись отработала, но не отчиталась: %q", res.Text)
+	}
+}
+
+// TestRunStdinArgs — у runStdin имя команды идёт первым, текст уходит
+// в stdin. Регрессия на перепутанные аргументы: runStdin(ctx, text, name)
+// исполнял текст как программу (exec: «x»: executable file not found
+// в $PATH) и ломал запись в буфер обмена на macOS и Linux.
+func TestRunStdinArgs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cat есть только в unix-окружении")
+	}
+	if err := runStdin(context.Background(), "cat", "привет из stdin"); err != nil {
+		t.Fatalf("runStdin(name, text) упал: %v", err)
+	}
+	if err := runStdin(context.Background(), "cat", "строка", "-"); err != nil {
+		t.Fatalf("runStdin с лишними аргументами упал: %v", err)
 	}
 }
 
