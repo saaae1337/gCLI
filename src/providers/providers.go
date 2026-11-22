@@ -63,7 +63,7 @@ func Presets() []*Provider {
 			ID: "zai", Label: "Z.ai GLM", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4"),
 			KeyEnvs:      []string{"ZAI_API_KEY", "Z_AI_API_KEY", "ZHIPUAI_API_KEY", "GLM_API_KEY"},
-			Models:       []string{"glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4.5-flash"},
+			Models:       []string{"glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-4.7-flash"},
 			ContextLimit: 200_000,
 		},
 		{
@@ -71,8 +71,8 @@ func Presets() []*Provider {
 			BaseURL: EnvOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 			KeyEnvs: []string{"OPENROUTER_API_KEY"},
 			Models: []string{
-				"z-ai/glm-4.6", "anthropic/claude-sonnet-4.5", "openai/gpt-4o",
-				"google/gemini-2.0-flash-001", "deepseek/deepseek-chat", "qwen/qwen3-coder",
+				"z-ai/glm-5.3-flash", "anthropic/claude-sonnet-5.5", "openai/gpt-6-luna",
+				"deepseek/deepseek-v4.1-flash", "google/gemini-3.8-flash", "qwen/qwen3-coder-next",
 			},
 			ContextLimit: 128_000,
 			ExtraHeaders: map[string]string{
@@ -84,22 +84,22 @@ func Presets() []*Provider {
 			ID: "openai", Label: "OpenAI", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 			KeyEnvs:      []string{"OPENAI_API_KEY"},
-			Models:       []string{"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"},
+			Models:       []string{"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"},
 			ContextLimit: 128_000,
 		},
 		{
 			ID: "anthropic", Label: "Anthropic Claude", Kind: ProtoAnthropic,
 			BaseURL:      EnvOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
 			KeyEnvs:      []string{"ANTHROPIC_API_KEY"},
-			Models:       []string{"claude-sonnet-4-5", "claude-opus-4-1", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"},
+			Models:       []string{"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-haiku-5-5"},
 			ContextLimit: 200_000,
 		},
 		{
 			ID: "deepseek", Label: "DeepSeek", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 			KeyEnvs:      []string{"DEEPSEEK_API_KEY"},
-			Models:       []string{"deepseek-chat", "deepseek-reasoner"},
-			ContextLimit: 128_000,
+			Models:       []string{"deepseek-flash", "deepseek-v4-pro"},
+			ContextLimit: 1_000_000,
 		},
 		{
 			ID: "groq", Label: "Groq · быстрый инференс", Kind: ProtoOpenAI,
@@ -119,7 +119,7 @@ func Presets() []*Provider {
 			ID: "xai", Label: "xAI Grok", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("XAI_BASE_URL", "https://api.x.ai/v1"),
 			KeyEnvs:      []string{"XAI_API_KEY", "GROK_API_KEY"},
-			Models:       []string{"grok-4", "grok-3", "grok-3-mini"},
+			Models:       []string{"grok-4.7", "grok-4.6", "grok-4.5"},
 			ContextLimit: 128_000,
 		},
 		{

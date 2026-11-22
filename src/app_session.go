@@ -26,7 +26,7 @@ var sessMu sync.Mutex
 // cfgMu — защита a.repo.Cfg (config.json в памяти).
 //
 // Писатели — команды ввода: /think, /agents, /plan, /model, /provider,
-// /sandbox, /autopilot, /agent, /skills, /mascot, /cron, /setup. Читатели —
+// /sandbox, /autopilot, /agent, /skills, /cron, /setup. Читатели —
 // ход (в том числе cron-горутина) и горутины субагентов: newAgent копирует
 // весь конфиг в providers.ThinkState, колбэк Budget читает SubBudget на
 // каждой итерации, спавн субагентов берёт SubModel/SubRoute/SubBudget.

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gcli/core"
+
+	"gcli/ui"
 )
 
 // ---------- handoff ----------
@@ -75,7 +77,7 @@ func (h Handoff) Text() string {
 			case core.TodoInProgress:
 				mark = "▸"
 			case core.TodoCompleted:
-				mark = "✔"
+				mark = ui.Glyph("✔", "+")
 			}
 			fmt.Fprintf(&b, "%s %d. %s\n", mark, i+1, t.Content)
 		}

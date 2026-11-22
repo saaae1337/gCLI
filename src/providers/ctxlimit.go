@@ -25,12 +25,20 @@ type ctxRule struct {
 
 var ctxExact = map[string]int{
 	// Z.ai GLM
+	"glm-5.3":       1_000_000,
+	"glm-5.3-flash": 1_000_000,
+	"glm-5.2":       200_000, // осторожная оценка: окно официально не опубликовано
+	"glm-4.7-flash": 128_000,
 	"glm-4.6":       200_000,
 	"glm-4.5":       128_000,
 	"glm-4.5-air":   128_000,
 	"glm-4.5-flash": 128_000,
 	"glm-4.5v":      64_000,
 	// Anthropic
+	"claude-sonnet-5-5":        1_000_000,
+	"claude-opus-5-5":          1_000_000,
+	"claude-fable-5-2":         1_000_000,
+	"claude-haiku-5-5":         1_000_000,
 	"claude-sonnet-4-5":        200_000,
 	"claude-sonnet-4-20250514": 200_000,
 	"claude-opus-4-1":          200_000,
@@ -57,6 +65,8 @@ var ctxExact = map[string]int{
 	"gemini-2.5-flash-lite": 1_048_576,
 	"gemini-3-pro":          1_048_576,
 	// DeepSeek
+	"deepseek-flash":    1_000_000,
+	"deepseek-v4-pro":   1_000_000,
 	"deepseek-chat":     128_000,
 	"deepseek-reasoner": 128_000,
 	// Qwen
@@ -97,9 +107,17 @@ var ctxPrefix = []ctxRule{
 	{"gemini-2", 1_000_000},
 	{"gemini-3", 1_048_576},
 	{"gpt-4.1", 1_000_000},
+	{"glm-5", 1_000_000},
 	{"glm-4.6", 200_000},
 	{"glm-4.5", 128_000},
+	{"claude-sonnet-5", 1_000_000},
+	{"claude-opus-5", 1_000_000},
+	{"claude-haiku-5", 1_000_000},
+	{"claude-fable", 1_000_000},
+	{"claude-mythos", 1_000_000},
+	{"deepseek-v4", 1_000_000},
 	{"deepseek", 128_000},
+	{"gpt-6", 400_000},
 	{"qwen3", 256_000},
 	{"qwen/qwen3", 256_000},
 	{"grok-4", 256_000},

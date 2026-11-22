@@ -7,7 +7,11 @@ import (
 	"gcli/ui"
 )
 
-// ---------- Команда /mascot ----------
+// ---------- Маскот Искра ----------
+//
+// Сама команда /mascot убрана (итерация 1): Искра — часть интерфейса,
+// а не настройка в списке команд. Включение/выключение — config.json
+// ("mascot") или переменная окружения GCLI_MASCOT=0.
 
 // mascotPurr — реплики при успешном результате.
 var mascotPurr = []string{
@@ -37,110 +41,6 @@ var mascotFarewells = []string{
 	"свернулась калачиком — до связи!",
 	"zZ... иду спать. мяу",
 	"хвост на прощание помахал — пока!",
-}
-
-// mascotStates — все состояния кота по референсу: порядок, подпись и
-// реплика для /mascot demo. Первые шесть — основной жизненный цикл,
-// остальные — настроение и пасхалки.
-var mascotStates = []struct {
-	s    ui.MascotState
-	note string
-}{
-	{ui.MascotIdle, "ждёт команду"},
-	{ui.MascotThink, "думает — модель рассуждает"},
-	{ui.MascotWork, "работает — идут инструменты"},
-	{ui.MascotHappy, "радуется — задача выполнена"},
-	{ui.MascotOops, "хандрит — что-то сломалось"},
-	{ui.MascotSleep, "спит — сессия закрыта"},
-	{ui.MascotListen, "слушает — пользователь печатает"},
-	{ui.MascotSurprised, "удивлён — неожиданный результат"},
-	{ui.MascotBored, "скучает — долго нет команд"},
-	{ui.MascotEat, "ест — обрабатывает большой объём"},
-	{ui.MascotBlink, "моргает"},
-	{ui.MascotWink, "подмигивает"},
-	{ui.MascotContent, "доволен"},
-	{ui.MascotShy, "смущён"},
-	{ui.MascotCry, "плачет"},
-	{ui.MascotAngry, "сердится"},
-	{ui.MascotPensive, "задумчив"},
-	{ui.MascotScared, "испуган"},
-	{ui.MascotPurr, "мурлычет"},
-}
-
-// cmdMascot — /mascot [on|off|demo|say ...|wave].
-func (a *app) cmdMascot(rest string) {
-	parts := strings.Fields(rest)
-	sub := ""
-	if len(parts) > 0 {
-		sub = strings.ToLower(parts[0])
-	}
-	switch sub {
-	case "", "show", "показать":
-		a.mascotShow(strings.Join(parts[minInt(1, len(parts)):], " "))
-	case "on", "вкл":
-		a.setMascot(true)
-		a.ui.Ok("Искра оживает — встретит в баннере и будет сидеть над строкой состояния")
-		a.ui.MascotSpeak(ui.MascotHappy, "я снова в деле! муррр")
-	case "off", "выкл":
-		a.setMascot(false)
-		a.ui.Ok("маскот выключен — Искра ушла спать (вернуть: /mascot on)")
-	case "demo", "демо":
-		if t := a.tuiApp(); t != nil {
-			a.ui.Info("в полноэкранном режиме Искра живёт на заставке: /cls — вернуться к ней")
-			t.Toast("✦ мурр")
-			return
-		}
-		a.mascotDemo()
-	case "wave", "hand", "привет":
-		if t := a.tuiApp(); t != nil {
-			t.Toast("✦ Искра машет хвостом")
-			return
-		}
-		a.ui.MascotDance(ui.MascotWink, 1)
-		a.ui.MascotSayLine(ui.MascotPurr, "мурр... привет!")
-	case "say", "скажи":
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rest), sub))
-		if text == "" {
-			a.ui.Warn("формат: /mascot say <текст>")
-			return
-		}
-		if t := a.tuiApp(); t != nil {
-			t.Toast("✦ " + text)
-			return
-		}
-		a.ui.MascotSpeak(ui.MascotIdle, text)
-	default:
-		a.ui.Warn("формат: /mascot on|off|demo|say <текст>|wave (сейчас: " + yesNo(a.ui.Mascot()) + ")")
-	}
-}
-
-// mascotShow — текущий кадр маскота и краткая справка.
-func (a *app) mascotShow(text string) {
-	a.ui.Println("")
-	if text != "" {
-		a.ui.MascotSpeak(ui.MascotIdle, text)
-	} else {
-		a.ui.MascotDance(ui.MascotIdle, 1)
-	}
-	a.ui.KVPairs([][2]string{
-		{"Имя", "Искра — кот gcli, рыжая помощница из темы «Уголь»"},
-		{"Состояния", "19: ждёт, думает, работает, радуется, хандрит, спит и другие"},
-		{"Сейчас", yesNo(a.ui.Mascot()) + "  ·  вкл/выкл: /mascot on|off"},
-		{"Анимации", "demo — все состояния · say <текст> — реплика"},
-	})
-	a.ui.Println("")
-}
-
-// mascotDemo — проиграть все состояния Искры подряд.
-func (a *app) mascotDemo() {
-	a.ui.Println("")
-	a.ui.Section("Искра — все состояния")
-	for _, d := range mascotStates {
-		a.ui.Println("  " + a.ui.Gray(d.note))
-		a.ui.MascotDance(d.s, 1)
-		time.Sleep(120 * time.Millisecond)
-	}
-	a.ui.Println("")
 }
 
 // setMascot — включить/выключить маскота и сохранить настройку.
@@ -252,11 +152,3 @@ const planModeSystem = "" +
 	"4. Заверши ответ фразой «Одобри план (ок) — приступлю». Не начинай реализацию, пока " +
 	"пользователь не одобрит план явным «ок», «делай», «согласен» или своим текстом-подтверждением.\n" +
 	"5. Если пользователь одобрил план (следующее сообщение после твоего плана) — работай в обычном режиме."
-
-// minInt — минимум двух чисел (без зависимости от версии Go).
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

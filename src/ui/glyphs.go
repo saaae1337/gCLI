@@ -82,6 +82,31 @@ func GlyphsFor(theme string, unicodeOK bool) Glyphs {
 	return emberASCIIGlyphs()
 }
 
+// unicodeOutput — единое для всего процесса решение «можно ли печатать
+// юникод-глифы в вывод». Решает main при старте (кодовая страница
+// консоли, LANG/LC_ALL, флаг -ascii); здесь — общая точка для строк,
+// которые собираются вне UI-рендерера: отчёты инструментов, сводки
+// субагентов, вердикты проверок. Без неё эти строки печатали «✔» и
+// «█» напрямую, и на консоли без юникода вместо них выходил «?».
+var unicodeOutput = true
+
+// SetUnicodeOutput — зафиксировать решение о юникоде. Вызывается один
+// раз из main до первого вывода.
+func SetUnicodeOutput(ok bool) { unicodeOutput = ok }
+
+// UnicodeOutput — текущее решение о юникоде.
+func UnicodeOutput() bool { return unicodeOutput }
+
+// Glyph — глиф с ASCII-фолбэком для строк вне UI-рендерера: mark в
+// юникод-режиме, ascii — там, где юникод нельзя. Пары держим рядом с
+// местом печати: «✔»/«+», «✖»/«x», «█»/«#», «░»/«.», «◆»/«*», «⊘»/«-».
+func Glyph(mark, ascii string) string {
+	if unicodeOutput {
+		return mark
+	}
+	return ascii
+}
+
 // Символы блоков для заполнения полосы прогресса (двухуровневый).
 const (
 	barFull  = "█"

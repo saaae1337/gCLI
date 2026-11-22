@@ -96,8 +96,6 @@ func (a *app) handleCommand(line string) bool {
 		a.cmdInit(rest)
 	case "/memory":
 		a.cmdMemory()
-	case "/mascot":
-		a.cmdMascot(rest)
 	case "/mcp":
 		a.cmdMcp(rest)
 	case "/context":
@@ -141,7 +139,6 @@ func (a *app) cmdHelp() {
 			{"/models [фильтр]", "модели с endpoint-а провайдера"},
 			{"/model [имя]", "сменить модель"},
 			{"/think on|off|auto", "размышления модели"},
-			{"/mascot", "кот Искра: on|off, demo, say <текст>, wave"},
 		}},
 		{"Агент", [][2]string{
 			{"/agents", "субагенты: список, запуск, настройки"},
@@ -157,7 +154,6 @@ func (a *app) cmdHelp() {
 			{"/yolo", "без подтверждений (кроме опасных команд)"},
 			{"/tools", "список инструментов агента"},
 			{"/mission", "автономный прогон: start, stop, status, save, report"},
-			{"/cron on|off|status", "автономные итерации: поиск и исправление багов, уязвимости, проблемы при тишине 15–20 мин"},
 			{"/iters", "лимит итераций и продления хода; при прогоне — его расход"},
 			{"/todos", "план текущей задачи"},
 			{"/compact", "сжать историю диалога"},
@@ -181,10 +177,11 @@ func (a *app) cmdHelp() {
 			{"/undo", "отменить последнюю правку файла"},
 			{"/permissions [reset]", "разрешения сессии, доверие коду, сброс"},
 		}}, {"Сервис", [][2]string{
+			{"/help, /?", "эта справка (также /h)"},
 			{"/doctor [key]", "диагностика окружения и ключа"},
 			{"/copy", "скопировать последний ответ (OSC52)"},
-			{"/cls", "очистить экран"},
-			{"/quit", "выход (также Ctrl+D)"},
+			{"/cls, /clear-screen", "очистить экран"},
+			{"/quit, /exit, /q", "выход (также Ctrl+D)"},
 		}},
 	}
 	a.ui.Println("")

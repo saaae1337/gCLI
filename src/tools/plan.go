@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"gcli/core"
+
+	"gcli/ui"
 )
 
 // hTodoWrite — обновить план работ.
@@ -27,7 +29,7 @@ func (r *Registry) hTodoWrite(_ context.Context, m map[string]any) (Result, erro
 		case core.TodoInProgress:
 			mark = "▸"
 		case core.TodoCompleted:
-			mark = "✔"
+			mark = ui.Glyph("✔", "+")
 		}
 		fmt.Fprintf(&b, "%s %d. %s\n", mark, i+1, t.Content)
 	}

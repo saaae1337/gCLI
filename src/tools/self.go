@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gcli/core"
+
+	"gcli/ui"
 )
 
 // SelfReport — снимок собственного состояния агента.
@@ -221,7 +223,7 @@ func contextBar(total, limit int) (string, int) {
 	if filled > 10 {
 		filled = 10
 	}
-	bar := "[" + strings.Repeat("█", filled) + strings.Repeat("░", 10-filled) + "]"
+	bar := "[" + strings.Repeat(ui.Glyph("█", "#"), filled) + strings.Repeat(ui.Glyph("░", "."), 10-filled) + "]"
 	return bar, pct
 }
 

@@ -3,7 +3,7 @@
 <img src=".github/assets/iskra-banner.png" alt="gcli — ИИ-агент в терминале. Искра — маскот" width="100%">
 
 [![CI](https://github.com/saaae1337/gCLI/actions/workflows/ci.yml/badge.svg)](https://github.com/saaae1337/gCLI/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go&logoColor=white)](src/go.mod)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](src/go.mod)
 [![Лицензия](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Релиз](https://img.shields.io/github/v/release/saaae1337/gCLI?label=релиз)](https://github.com/saaae1337/gCLI/releases/latest)
 [![Баг-репорт](https://img.shields.io/badge/баг-red?logo=github)](https://github.com/saaae1337/gCLI/issues/new?template=bug_report.md)
@@ -72,7 +72,7 @@ shasum -a 256 -c SHA256SUMS.txt  # macOS
 gcli -v
 ```
 
-Из исходников — Go 1.21 или новее, зависимостей нет:
+Из исходников — Go 1.25 или новее, зависимостей нет:
 
 ```bash
 git clone https://github.com/saaae1337/gCLI.git
@@ -127,10 +127,12 @@ gcli -plain        # построчный REPL, если полноэкранн�
 Искра моргает, потом скучает и засыпает; при успехе мурчит, при ошибке
 фыркает, а после двух ошибок подряд ворчит «опять?!».
 
+Команда `/mascot` убрана — Искра часть интерфейса, а не настройка.
+Выключить её можно переменной окружения или одной строкой в конфиге:
+
 ```bash
-/mascot demo      # все состояния подряд
-/mascot say мяу   # реплика от кота
-/mascot off       # выключить (или GCLI_MASCOT=0)
+GCLI_MASCOT=0                # выключить Искру на этот запуск
+# или "mascot": false в ~/.gcli/config.json — выключить навсегда
 ```
 
 Галерея всех состояний — [docs/mascot.md](docs/mascot.md).
@@ -167,7 +169,6 @@ graph LR
 | `/agent on\|off` | агентный режим |
 | `/autopilot`, `/yolo` | автопилот подтверждений |
 | `/plan` | режим планирования: сначала план — потом действия |
-| `/mascot` | Искра: `on`, `off`, `demo`, `say`, `wave` |
 | `/mission` | автономный прогон: `start long-time 4h 1m «цель»` |
 | `/cron on\|off` | автономные итерации при тишине 15–20 мин |
 | `/mcp` | MCP-серверы, перезагрузка конфигурации |
@@ -227,9 +228,9 @@ gcli -mission long-time -deadline 4h -budget 500k,25 \
 
 | Провайдер | Переменная | Модели |
 |-----------|-----------|--------|
-| Z.ai (GLM) | `ZAI_API_KEY` | `glm-4.6` и другие GLM |
+| Z.ai (GLM) | `ZAI_API_KEY` | `glm-5.3` и другие GLM |
 | OpenRouter | `OPENROUTER_API_KEY` | 300+ моделей одним ключом |
-| OpenAI и совместимые | `OPENAI_API_KEY` | `gpt-4o`, свой `OPENAI_BASE_URL` |
+| OpenAI и совместимые | `OPENAI_API_KEY` | `gpt-6.2-astra`, свой `OPENAI_BASE_URL` |
 | Anthropic | `ANTHROPIC_API_KEY` | Claude, свой `ANTHROPIC_BASE_URL` |
 | Ollama | — | локальные модели, без ключа |
 | Любой другой | `/provider add` | свой endpoint по OpenAI/Anthropic-протоколу |

@@ -5,7 +5,7 @@
 > [README](../README.md), про маскота Искру — в [docs/mascot.md](mascot.md).
 
 [![CI](https://github.com/saaae1337/gCLI/actions/workflows/ci.yml/badge.svg)](https://github.com/saaae1337/gCLI/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go&logoColor=white)](../src/go.mod)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](../src/go.mod)
 [![Лицензия](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 [![Релиз](https://img.shields.io/github/v/release/saaae1337/gCLI?label=релиз)](https://github.com/saaae1337/gCLI/releases/latest)
 [![Баг-репорт](https://img.shields.io/badge/баг-red?logo=github)](https://github.com/saaae1337/gCLI/issues/new?template=bug_report.md)
@@ -77,7 +77,7 @@ shasum -a 256 -c SHA256SUMS.txt  # macOS
 gcli -v
 ```
 
-Из исходников — Go 1.21 или новее, зависимостей нет:
+Из исходников — Go 1.25 или новее, зависимостей нет:
 
 ```bash
 git clone https://github.com/saaae1337/gCLI.git
@@ -154,9 +154,9 @@ gcli — полноэкранный терминальный интерфейс,
 | Ввод | Что делает |
 |---|---|
 | `Enter` | грамотный перенос строки: хвост уезжает вниз, отступ строки повторяется |
-| `Alt+Enter` или `Ctrl+Enter` | отправить запрос; во время хода — поставить в очередь |
+| `Ctrl+Enter` | отправить запрос; во время хода — поставить в очередь. Терминалы без kitty-аккорда `13;5u` шлют Ctrl+Enter обычным `\n` — и он тоже отправляет; `Alt+Enter` ведёт себя как `Enter` |
 | `текст` + `Ctrl+D` | отправить запрос (второй способ) |
-| `Ctrl+J` или `Shift+Enter` | перенос строки (как `Enter`) |
+| `Shift+Enter` | перенос строки (как `Enter`) |
 | `Esc` | прервать ход; закрыть окно или палитру |
 | `Ctrl+C` | скопировать выделение; без выделения — прервать ход, очистить ввод, дважды на пустом — выход |
 | `Ctrl+V` | вставить из системного буфера обмена |
@@ -201,7 +201,7 @@ raw-режим, gcli честно откатывается в построчны
 
 Провайдер и модель:
   -provider <id>         zai | openrouter | openai | anthropic | ollama | свой id
-  -model <имя>           модель, например glm-4.6 или openai/gpt-4o
+  -model <имя>           модель, например glm-5.3 или openai/gpt-6-luna
   -setup                 мастер настройки
   -subagent on|off       разрешить субагентов
 
@@ -262,7 +262,6 @@ Watch:
 | `/models [фильтр]` | модели с endpoint-а провайдера |
 | `/model [имя]` | сменить модель |
 | `/think on\|off\|auto` | размышления модели |
-| `/mascot` | кот Искра: `on\|off`, `demo`, `say <текст>`, `wave` |
 
 ### Агент
 
@@ -665,14 +664,14 @@ exit-код при провалах — для CI.
 
 | id | Провайдер | Переменная ключа | Протокол | Модели по умолчанию |
 |---|---|---|---|---|
-| `zai` | Z.ai GLM | `ZAI_API_KEY` | OpenAI | glm-4.6, glm-4.5, glm-4.5-air, glm-4.5-flash |
+| `zai` | Z.ai GLM | `ZAI_API_KEY` | OpenAI | glm-5.3, glm-5.3-flash, glm-5.2, glm-4.7-flash |
 | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | OpenAI | 300+ моделей, лимит 128k |
-| `openai` | OpenAI | `OPENAI_API_KEY` | OpenAI | gpt-4o, gpt-4o-mini, gpt-4.1, o4-mini |
-| `anthropic` | Anthropic Claude | `ANTHROPIC_API_KEY` | Anthropic | claude-sonnet-4-5, claude-opus-4-1, claude-3-7-sonnet-latest, claude-3-5-haiku-latest |
-| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY` | OpenAI | deepseek-chat, deepseek-reasoner |
+| `openai` | OpenAI | `OPENAI_API_KEY` | OpenAI | gpt-6.2-astra, gpt-6.2-sol, gpt-6.1-terra, gpt-6-luna |
+| `anthropic` | Anthropic Claude | `ANTHROPIC_API_KEY` | Anthropic | claude-fable-5-2, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5 |
+| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY` | OpenAI | deepseek-flash, deepseek-v4-pro |
 | `groq` | Groq · быстрый инференс | `GROQ_API_KEY` | OpenAI | llama-3.3-70b-versatile, llama-3.1-8b-instant, qwen/qwen3-32b |
 | `mistral` | Mistral AI | `MISTRAL_API_KEY` | OpenAI | mistral-large-latest, codestral-latest |
-| `xai` | xAI Grok | `XAI_API_KEY` | OpenAI | grok-4, grok-3, grok-3-mini |
+| `xai` | xAI Grok | `XAI_API_KEY` | OpenAI | grok-4.7, grok-4.6, grok-4.5 |
 | `together` | Together AI | `TOGETHER_API_KEY` | OpenAI | Qwen/Qwen3-Coder, deepseek-ai/DeepSeek-V3, meta-llama/Llama-3.3-70B-Instruct-Turbo |
 | `ollama` | Ollama, локально | не нужен | OpenAI | qwen3, llama3.1, deepseek-r1, gpt-oss:20b |
 | `lmstudio` | LM Studio, локально | не нужен | OpenAI | список моделей сервера |
@@ -737,7 +736,7 @@ exit-код при провалах — для CI.
 ```json
 {
   "provider": "zai",
-  "model": "glm-4.6",
+  "model": "glm-5.3",
   "agent": true,
   "think": "auto",
 

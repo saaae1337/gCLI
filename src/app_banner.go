@@ -79,7 +79,7 @@ func (a *app) PrintNoKeyHint() {
 	}
 	// В «УГЛЕ» подсказка — ещё одна строка потока: ромб-маркер акцентом,
 	// зубец продолжения — как у результатов инструментов.
-	a.ui.Println("  " + a.ui.Yellow("▲ ") +
+	a.ui.Println("  " + a.ui.Yellow(a.ui.Glyphs().Excl+" ") +
 		"Нет ключа для " + a.prov.Label + " — настройка: " + a.ui.Accent("/setup") +
 		a.ui.Gray("  ·  или свой endpoint: /provider add <id> <base_url>"))
 }
@@ -115,7 +115,7 @@ func usage() {
 	fmt.Println()
 	fmt.Println("Провайдер и модель:")
 	fmt.Println("  -provider <id>    zai | openrouter | openai | anthropic | ollama | свой id")
-	fmt.Println("  -model <имя>      модель, напр. glm-4.6 или openai/gpt-4o")
+	fmt.Println("  -model <имя>      модель, напр. glm-5.3 или openai/gpt-6-luna")
 	fmt.Println("  -setup            мастер настройки: провайдер → ключ → модель")
 	fmt.Println("  -subagent on|off  разрешить субагентов")
 	fmt.Println()
@@ -142,7 +142,7 @@ func usage() {
 	fmt.Println("  скучает и засыпает, если долго не писать, думает («thinking...»")
 	fmt.Println("  переливается цветом) и работает вместе с ИИ, мурчит от результата")
 	fmt.Println("  и фыркает на ошибках.")
-	fmt.Println("  /mascot on|off|demo|say|wave · GCLI_MASCOT=0 — выключить")
+	fmt.Println("  GCLI_MASCOT=0 или \"mascot\": false в config.json — выключить")
 	fmt.Println()
 	fmt.Println("Переменные окружения:")
 	fmt.Println("  ZAI_API_KEY         Z.ai GLM (ZAI_BASE_URL)")

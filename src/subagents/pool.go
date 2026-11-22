@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gcli/core"
+
+	"gcli/ui"
 )
 
 // Status — состояние запуска субагента.
@@ -577,14 +579,14 @@ func (p *Pool) Summary() string {
 		fmt.Fprintf(&b, "Кеш повторов: попаданий %d, промахов %d\n", hits, miss)
 	}
 	for _, r := range runs {
-		mark := "✔"
+		mark := ui.Glyph("✔", "+")
 		switch r.Status {
 		case StatusRunning:
-			mark = "◆"
+			mark = ui.Glyph("◆", "*")
 		case StatusError:
-			mark = "✖"
+			mark = ui.Glyph("✖", "x")
 		case StatusCanceled:
-			mark = "⊘"
+			mark = ui.Glyph("⊘", "-")
 		}
 		fmt.Fprintf(&b, "%s %-16s %-10s %s\n", mark, r.Label(), r.statusLabel(), core.Truncate(core.OneLine(r.Task), 60))
 	}

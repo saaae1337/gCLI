@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           # Кэш выключен: setup-go ищет go.sum, которого в проекте нет —
           # зависимостей нет вообще. Ключ не собрать, setup-go пишет
           # «Dependencies file is not found» и ничего не кэширует.
@@ -64,12 +64,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-15]
-        # Нижняя граница совместимости — 1.22 (go.mod разрешает 1.21, но
-        # CI проверяет то, что реально ставят пользователи сборкой из
-        # исходников). Второй колонкой ubuntu на stable: релиз собирается
-        # свежим toolchain'ом, и его тесты обязаны идти в CI, а не
-        # вслепую.
-        go: ["1.22", "stable"]
+        # Нижняя граница совместимости — 1.25 (go.mod требует 1.25; с
+        # GOTOOLCHAIN=auto более старый Go сам скачает нужный toolchain).
+        # Второй колонкой ubuntu на stable: релиз собирается свежим
+        # toolchain'ом, и его тесты обязаны идти в CI, а не вслепую.
+        go: ["1.25", "stable"]
         exclude:
           - os: windows-latest
             go: "stable"
@@ -163,7 +162,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache: false
 
       # -covermode=atomic обязателен вместе с -race: иначе счётчики
@@ -208,7 +207,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache: false
 
       - name: по 12 секунд на цель

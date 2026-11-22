@@ -285,8 +285,11 @@ func parseKey(b []byte, forced bool) (ev Event, n int, need bool) {
 	case '\r':
 		return Event{Key: KeyEnter}, 1, false
 	case '\n':
-		// Ctrl+J: перевод строки внутри запроса. Enter приходит как \r.
-		return Event{Key: KeyRune, R: 'j', Ctrl: true}, 1, false
+		// Ctrl+Enter в терминалах без kitty-аккорда (13;5u): они шлют
+		// обычный \n, отличить Ctrl+Enter от Ctrl+J нельзя, и оба означают
+		// «отправить». Enter приходит как \r, перевод строки в поле даёт
+		// сам Enter — конфликтов с многострочностью нет.
+		return Event{Key: KeyEnter, Ctrl: true}, 1, false
 	case '\t':
 		return Event{Key: KeyTab}, 1, false
 	case 0x7f, 0x08:

@@ -195,6 +195,32 @@ func TestParseKeys(t *testing.T) {
 	}
 }
 
+// TestParseCtrlEnterPlainLF — Ctrl+Enter в терминалах без kitty-аккорда:
+// байт \n (0x0A) обязан дойти как KeyEnter с Ctrl — то есть как отправка.
+// Раньше он превращался в Ctrl+Rune 'j' и молча глотался обработчиком,
+// и отправка в таких терминалах не работала вовсе.
+func TestParseCtrlEnterPlainLF(t *testing.T) {
+	r := NewReader(strings.NewReader("\n"))
+	defer r.Close()
+	deadline := time.After(2 * time.Second)
+	var ev Event
+	var ok bool
+	for closed := false; !closed; {
+		select {
+		case ev, ok = <-r.Events():
+			if !ok {
+				t.Fatal("поток закрылся без события")
+			}
+			closed = true
+		case <-deadline:
+			t.Fatal("не дождались события")
+		}
+	}
+	if ev.Key != KeyEnter || !ev.Ctrl {
+		t.Fatalf("\n должен быть Ctrl+Enter, получили: %#v", ev)
+	}
+}
+
 // newTestApp — приложение с поддельным терминалом.
 func newTestApp(in io.Reader, out io.Writer) *App {
 	return New(Options{
@@ -238,7 +264,7 @@ func TestAppLoop(t *testing.T) {
 	}()
 
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "привет\x1b\r"); err != nil {
+	if _, err := io.WriteString(pw, "привет\x1b[13;5u"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -293,7 +319,7 @@ func TestAppQueue(t *testing.T) {
 		}})
 	}()
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "первый\x1b\r"); err != nil {
+	if _, err := io.WriteString(pw, "первый\x1b[13;5u"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -305,7 +331,7 @@ func TestAppQueue(t *testing.T) {
 		t.Fatal("первый ход не начался")
 	}
 	// Второй запрос уходит в очередь: ход ещё идёт.
-	if _, err := io.WriteString(pw, "второй\x1b\r"); err != nil {
+	if _, err := io.WriteString(pw, "второй\x1b[13;5u"); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -385,7 +411,7 @@ func testConfirmKey(t *testing.T, key string, want Choice) {
 		}})
 	}()
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "go\x1b\r"); err != nil {
+	if _, err := io.WriteString(pw, "go\x1b[13;5u"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -508,7 +534,7 @@ func TestAppCtrlDOnlyIdle(t *testing.T) {
 		}})
 	}()
 	waitFor(t, "запуск", app.Running)
-	if _, err := io.WriteString(pw, "долгий ход\x1b\r"); err != nil {
+	if _, err := io.WriteString(pw, "долгий ход\x1b[13;5u"); err != nil {
 		t.Fatal(err)
 	}
 	select {

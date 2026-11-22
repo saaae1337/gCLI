@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"gcli/core"
+
+	"gcli/ui"
 )
 
 // ---------- Верификация правок ----------
@@ -354,9 +356,9 @@ func failureKey(f Failure) string {
 // Text — отчёт для контекста модели.
 func (r *VerifyReport) Text() string {
 	var b strings.Builder
-	verdict := "✔ Проверка пройдена"
+	verdict := ui.Glyph("✔", "+") + " Проверка пройдена"
 	if !r.OK {
-		verdict = "✖ Проверка провалена"
+		verdict = ui.Glyph("✖", "x") + " Проверка провалена"
 	}
 	fmt.Fprintf(&b, "%s — %s (%s, код выхода %d)\n", verdict, r.Command, core.HumanDuration(r.Elapsed), r.ExitCode)
 	if r.Passed > 0 || r.Failed > 0 {

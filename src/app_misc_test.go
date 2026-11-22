@@ -1,11 +1,11 @@
 package main
 
-// Тесты команд-витрин: маскот, /plan, /skills, /ext, /export, /stats,
+// Тесты витринных команд: /plan, /skills, /ext, /export, /stats,
 // доверие коду проекта и вспомогательные функции состояния.
 //
 // Что здесь ловится на самом деле:
 //
-//   - /mascot и /plan пишут в config.json. Ошибка в них выглядит как «переключил,
+//   - /plan пишет в config.json. Ошибка выглядит как «переключил,
 //     а ничего не изменилось» — заметить трудно.
 //   - /skills и /ext работают с файлами проекта. Неверный путь или потерянный
 //     шаблон означают, что человек создал файл не там и не знает об этом.
@@ -31,19 +31,12 @@ import (
 
 // ---------- Мелкие чистые функции ----------
 
-// TestMinInt — минимум из двух чисел: маскот берёт кусок строки по этому
-// индексу, и отрицательный или слишком большой индекс уводил бы в панику.
-func TestMinInt(t *testing.T) {
-	if minInt(1, 3) != 1 || minInt(3, 1) != 1 || minInt(2, 2) != 2 {
-		t.Error("minInt считается неверно")
-	}
-}
-
 // TestMascotEnabledPriority — переменная окружения сильнее конфига, а отсутствие
 // обоих означает «включён».
 //
-// Обратный порядок здесь означал бы, что /mascot off не работает у того, кто
-// когда-то выставил GCLI_MASCOT=1, и кот продолжает жить вопреки команде.
+// Обратный порядок здесь означал бы, что "mascot": false в config.json не
+// работает у того, кто когда-то выставил GCLI_MASCOT=1, и кот продолжает
+// жить вопреки настройке.
 func TestMascotEnabledPriority(t *testing.T) {
 	off := false
 	on := true
@@ -68,21 +61,21 @@ func TestMascotEnabledPriority(t *testing.T) {
 	}
 }
 
-// TestApplyMascotFollowsEnv — команда /mascot off гасит кота, даже если
-// переменная окружения говорит обратное.
+// TestApplyMascotFollowsEnv — выключение маскота гасит кота в интерфейсе,
+// а решение сохраняется в config.json.
 func TestApplyMascotFollowsEnv(t *testing.T) {
 	a, _ := cmdApp(t)
 	t.Setenv("GCLI_MASCOT", "")
 	a.setMascot(false)
 	if a.ui.Mascot() {
-		t.Error("после /mascot off кот должен быть выключен в интерфейсе, а не только в конфиге")
+		t.Error("после выключения кот должен быть выключен в интерфейсе, а не только в конфиге")
 	}
 	if savedConfig(t, a).Mascot == nil || *savedConfig(t, a).Mascot {
-		t.Error("/mascot off должен записать решение в config.json")
+		t.Error("выключение маскота должно записать решение в config.json")
 	}
 	a.setMascot(true)
 	if !a.ui.Mascot() {
-		t.Error("/mascot on обязан включить кота в интерфейсе")
+		t.Error("включение маскота обязано включить кота в интерфейсе")
 	}
 }
 
@@ -101,50 +94,6 @@ func TestOsHelpers(t *testing.T) {
 	}
 	if fileExists(filepath.Join(dir, "нет.txt")) {
 		t.Error("несуществующий файл не должен считаться найденным")
-	}
-}
-
-// ---------- /mascot ----------
-
-// TestCmdMascotStates — все ветки команды: показ, вкл/выкл, реплика, приветствие.
-func TestCmdMascotStates(t *testing.T) {
-	a, buf := cmdApp(t)
-
-	// Без аргументов — справка с текущим состоянием.
-	a.cmdMascot("")
-	if got := out(buf); !strings.Contains(got, "Искра") || !strings.Contains(got, "/mascot on") {
-		t.Errorf("пустой вызов должен показать справку и подсказку: %q", got)
-	}
-
-	buf.Reset()
-	a.cmdMascot("say привет из теста")
-	if got := out(buf); !strings.Contains(got, "привет из теста") {
-		t.Errorf("say должен произнести текст: %q", got)
-	}
-
-	// say без текста — отказ с форматом, а не пустая реплика.
-	buf.Reset()
-	a.cmdMascot("say")
-	if got := out(buf); !strings.Contains(got, "формат") {
-		t.Errorf("пустой say должен объяснить формат: %q", got)
-	}
-
-	// Мусор — тоже отказ с подсказкой формата.
-	buf.Reset()
-	a.cmdMascot("покружиться")
-	if got := out(buf); !strings.Contains(got, "формат") {
-		t.Errorf("негодный аргумент должен быть назван: %q", got)
-	}
-
-	// Русские синонимы обязаны работать так же, как английские.
-	buf.Reset()
-	a.cmdMascot("выкл")
-	if a.ui.Mascot() {
-		t.Error("«выкл» должен выключать кота")
-	}
-	a.cmdMascot("вкл")
-	if !a.ui.Mascot() {
-		t.Error("«вкл» должен включать кота")
 	}
 }
 
@@ -170,7 +119,7 @@ func TestMascotResultReactions(t *testing.T) {
 		t.Error("повторная ошибка обязана что-то сказать")
 	}
 
-	// Выключенный кот молчит: иначе после /mascot off в вывод сыпется мусор.
+	// Выключенный кот молчит: иначе после отключения в вывод сыпется мусор.
 	buf.Reset()
 	a.ui.SetMascot(false)
 	a.mascotResult(true)
@@ -181,14 +130,13 @@ func TestMascotResultReactions(t *testing.T) {
 	_ = first
 }
 
-// TestMascotByeAndDemo — прощание и прогон всех состояний не падают.
-func TestMascotByeAndDemo(t *testing.T) {
+// TestMascotBye — прощание маскота при выходе не падает.
+func TestMascotBye(t *testing.T) {
 	a, buf := cmdApp(t)
 	a.ui.SetMascot(true)
 	a.mascotBye()
-	a.mascotDemo()
 	if out(buf) == "" {
-		t.Error("demo должен печатать состояния кота")
+		t.Error("прощание должно напечатать реплику кота")
 	}
 }
 

@@ -701,6 +701,9 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 	// Решение принято один раз, до первого вывода: ascii — явное требование
 	// пользователя, а unicodeOK к этому моменту уже известно.
 	useUnicode := !ascii && unicodeOK
+	// Единое решение для строк вне UI-рендерера: отчёты инструментов и
+	// субагентов берут глифы через ui.Glyph, а не печатают юникод напрямую.
+	ui.SetUnicodeOutput(useUnicode)
 
 	// Уровень цвета: флаг -color важнее GCLI_COLOR, тот важнее автоопределения.
 	mode := colorMode

@@ -461,7 +461,7 @@ func (a *App) keyLocked(ev Event) {
 			return
 		case ev.Ctrl && ev.R == 'd':
 			// Непустое поле — Ctrl+D отправляет (второй способ после
-			// alt+enter). Пустое — выход, но только на простое: иначе сессия
+			// ctrl+enter). Пустое — выход, но только на простое: иначе сессия
 			// закрылась бы посреди хода, оставив инструменты и журнал
 			// недописанными.
 			if !a.comp.Empty() {
@@ -545,9 +545,10 @@ func (a *App) keyLocked(ev Event) {
 	fileOpen := a.filePaletteOpen()
 	switch ev.Key {
 	case KeyEnter:
-		if ev.Alt || ev.Ctrl {
-			// Alt+Enter и Ctrl+Enter отправляют: обычный Enter переносит
-			// строку, отправке нужен отдельный аккорд.
+		if ev.Ctrl {
+			// Отправка — строго Ctrl+Enter: обычный Enter переносит строку,
+			// а Alt+Enter ведёт себя как обычный Enter, чтобы привычка с
+			// прежних версий не уводила ход раньше времени.
 			a.submitLocked()
 			return
 		}
@@ -2124,7 +2125,7 @@ func (a *App) welcomeLines() []Line {
 	right = append(right, Line{
 		{Text: "/help", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
-		{Text: "alt+enter", S: Style{FG: t.Gold, BG: t.Bg}},
+		{Text: "ctrl+enter", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — отправить   ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: "ctrl+o", S: Style{FG: t.Gold, BG: t.Bg}},
 		{Text: " — размышления", S: Style{FG: t.Dim, BG: t.Bg}},
@@ -2440,7 +2441,7 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		// Витрина: пустое поле — приглашение по центру рамки.
 		py := top + 1 + (maxLines-1)/2
 		s.Text(boxX+2, py, "❯ ", Style{FG: t.Accent, BG: t.Panel, Bold: true})
-		s.Text(boxX+4, py, "спроси что-нибудь… alt+enter — отправить", Style{FG: t.Dim, BG: t.Panel})
+		s.Text(boxX+4, py, "спроси что-нибудь… @файл — приложить", Style{FG: t.Dim, BG: t.Panel})
 	} else {
 		for i := 0; i < maxLines; i++ {
 			idx := start + i
@@ -2477,7 +2478,7 @@ func (a *App) drawHints(s *Screen, y int) {
 	}
 	t := a.th
 	s.FillLine(y, Style{BG: t.Bg})
-	left := " /help — команды · /mascot demo — все состояния Искры · alt+enter — отправить"
+	left := " /help — команды · ctrl+enter — отправить · Tab — автодополнение"
 	if a.paletteOpen() {
 		left = " ↑↓ выбор · tab вставить · esc закрыть"
 	}
@@ -2485,7 +2486,7 @@ func (a *App) drawHints(s *Screen, y int) {
 		left = " ↑↓ файл · tab/enter подставить · esc закрыть"
 	}
 	if a.busy {
-		left = " alt+enter в очередь · esc остановить · pgup/pgdn прокрутка"
+		left = " ctrl+enter в очередь · esc остановить · pgup/pgdn прокрутка"
 	}
 	if a.scroll > 0 {
 		left = " pgup/pgdn прокрутка · ctrl+end — вниз"
