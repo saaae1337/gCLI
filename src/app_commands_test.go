@@ -218,3 +218,122 @@ func TestSandboxStatus(t *testing.T) {
 		t.Errorf("включённая песочница должна называть корень %q: %q", abs, on)
 	}
 }
+
+// ---------- Итерация 2: каталог команд и подсказки при опечатке ----------
+
+// TestCommandCatalogIntegrity — у каждой команды каталога должны быть
+// обработчик, описание и группа, а имена не должны пересекаться между
+// собой. Каталог питает роутер, /help и палитру TUI: дыра в нём — дыра
+// во всех трёх сразу.
+func TestCommandCatalogIntegrity(t *testing.T) {
+	seen := map[string]bool{}
+	groups := 0
+	for i := range commandDefs {
+		d := &commandDefs[i]
+		if len(d.names) == 0 {
+			t.Fatalf("команда #%d без имени", i)
+		}
+		if d.run == nil {
+			t.Errorf("%s: нет обработчика", d.names[0])
+		}
+		if d.desc == "" {
+			t.Errorf("%s: нет описания — в палитре и /help будет пустая строка", d.names[0])
+		}
+		if d.group != "" {
+			groups++
+		}
+		for _, n := range d.names {
+			if seen[n] {
+				t.Errorf("имя %s повторяется в каталоге", n)
+			}
+			seen[n] = true
+		}
+	}
+	if groups == 0 {
+		t.Error("ни у одной команды нет группы — /help станет пустым")
+	}
+	// Индекс обязан покрывать все имена каталога.
+	for name := range seen {
+		if lookupCommand(name) == nil {
+			t.Errorf("lookupCommand(%s) = nil, а имя есть в каталоге", name)
+		}
+	}
+}
+
+// TestCatalogCoversRouter — каждый обработчик каталога реально
+// вызывается: выборочная проверка пары команд через handleCommand.
+func TestCatalogCoversRouter(t *testing.T) {
+	a, buf := cmdApp(t)
+	for _, line := range []string{"/todos", "/cls"} {
+		if !a.handleCommand(line) {
+			t.Errorf("%q прервал сеанс", line)
+		}
+	}
+	_ = buf
+}
+
+// TestLevenshtein — расстояние редактирования.
+func TestLevenshtein(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"", "", 0},
+		{"abc", "abc", 0},
+		{"kitten", "sitting", 3},
+		{"модель", "модели", 1},
+		{"models", "model", 1},
+		{"", "abc", 3},
+	}
+	for _, c := range cases {
+		if got := levenshtein(c.a, c.b); got != c.want {
+			t.Errorf("levenshtein(%q, %q) = %d, ждали %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// TestClosestCommands — опечатка получает подсказку, точное имя не
+// советует само себя.
+func TestClosestCommands(t *testing.T) {
+	a, _ := cmdApp(t)
+	sugg := a.closestCommands("/modles")
+	if len(sugg) == 0 {
+		t.Fatal("опечатка /modles не получила подсказок")
+	}
+	found := false
+	for _, s := range sugg {
+		if s == "/models" || s == "/model" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("среди подсказок нет /models: %v", sugg)
+	}
+	if sugg := a.closestCommands("/help"); len(sugg) != 0 {
+		t.Errorf("точное имя советует других: %v", sugg)
+	}
+}
+
+// TestContainsModel — сравнение имён моделей без учета регистра.
+func TestContainsModel(t *testing.T) {
+	if !containsModel([]string{"GLM-5.3"}, "glm-5.3") {
+		t.Error("регистр не должен иметь значения")
+	}
+	if containsModel([]string{"glm-5.2"}, "glm-5.3") {
+		t.Error("разные модели совпали")
+	}
+}
+
+// TestClosestNames — общий помощник подсказок.
+func TestClosestNames(t *testing.T) {
+	known := []string{"zai", "openai", "openrouter", "deepseek"}
+	got := closestNames("openaii", known)
+	if len(got) == 0 || got[0] != "openai" {
+		t.Errorf("openaii → %v, ждали openai первым", got)
+	}
+	// префиксные совпадения идут раньше левенштейна
+	got = closestNames("open", known)
+	if len(got) != 2 || got[0] != "openai" || got[1] != "openrouter" {
+		t.Errorf("open → %v", got)
+	}
+}

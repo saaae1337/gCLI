@@ -297,6 +297,73 @@ func TestAppLoop(t *testing.T) {
 	}
 }
 
+// TestAppCtrlEnterPlainTerminal — терминал БЕЗ kitty-протокола и
+// modifyOtherKeys (xterm, Terminal.app, legacy-консоль Windows) шлёт
+// Ctrl+Enter обычным байтом \n: в полном цикле приложения он обязан
+// отправлять, а \r (обычный Enter) — переносить строку и НЕ отправлять.
+//
+// Парсер-тест (TestParseCtrlEnterPlainLF) проверяет только разбор байта;
+// этот сценарий закрывает путь целиком, как того требовал анализ
+// итерации 1 (пункт C5).
+func TestAppCtrlEnterPlainTerminal(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	var out syncBuf
+	app := newTestApp(pr, &out)
+
+	got := make(chan string, 8)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run(Handlers{
+			Submit: func(text string) {
+				got <- text
+				if text == "/exit" {
+					app.Quit()
+				}
+			},
+		})
+	}()
+	waitFor(t, "запуск", app.Running)
+
+	// Обычный Enter (\r) — перенос строки, отправки нет.
+	if _, err := io.WriteString(pw, "строка"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(pw, "\r"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case s := <-got:
+		t.Fatalf("\r не должен отправлять, а Submit получил %q", s)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Ctrl+Enter без CSI-u — тот самый байт \n: отправка.
+	if _, err := io.WriteString(pw, "\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case s := <-got:
+		if s != "строка" {
+			t.Fatalf("Submit получил %q, ожидалось %q", s, "строка")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("\n не отправил ход — отправка сломана в терминале без CSI-u")
+	}
+
+	if _, err := io.WriteString(pw, "/exit\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run вернул ошибку: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("интерфейс не завершился")
+	}
+}
+
 // TestAppQueue — запрос во время хода ждёт очереди и появляется в ленте.
 func TestAppQueue(t *testing.T) {
 	pr, pw := io.Pipe()

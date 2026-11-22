@@ -27,7 +27,7 @@ const (
 
 	schemaGrep = `{"type":"object","properties":{"pattern":{"type":"string","description":"Регулярное выражение (Go/RE2)"},"path":{"type":"string","description":"Каталог поиска (по умолчанию текущий)"},"include":{"type":"string","description":"Фильтр имён файлов, например *.go"},"max_results":{"type":"integer","description":"Лимит совпадений (по умолчанию 50)"},"context":{"type":"integer","description":"Сколько строк вокруг совпадения показать (0-10). Контекст экономит отдельный вызов read_file."}},"required":["pattern"]}`
 
-	schemaBash = `{"type":"object","properties":{"command":{"type":"string","description":"Команда для выполнения в shell"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах (5-300, по умолчанию 60)"},"workdir":{"type":"string","description":"Рабочий каталог команды (по умолчанию текущий)"}},"required":["command"]}`
+	schemaBash = `{"type":"object","properties":{"command":{"type":"string","description":"Команда для выполнения в shell"},"input":{"type":"string","description":"Данные для stdin команды (до 64 КБ): скрипт для интерпретатора, тело письма, ответ на вопрос команды. Без него модель вынуждена городить heredoc и экранировать его содержимое"},"timeout_sec":{"type":"integer","description":"Таймаут в секундах (5-300, по умолчанию 60)"},"workdir":{"type":"string","description":"Рабочий каталог команды (по умолчанию текущий)"}},"required":["command"]}`
 
 	schemaSearch = `{"type":"object","properties":{"query":{"type":"string","description":"Поисковый запрос"},"max_results":{"type":"integer","description":"Сколько результатов (по умолчанию 8)"}},"required":["query"]}`
 
@@ -131,6 +131,9 @@ func (r *Registry) registerBuiltins() {
 	r.registerBound("ask_trace", "Что я спрашивал у пользователя и что получил в ответ. Проверяй, если кажется, что ждёшь ответа, которого не было: отсутствие следа означает, что вопрос не был задан.",
 		schemaAskTrace, "plan", false, func(r *Registry) Handler { return r.hAskTrace })
 	registerExtendTool(r)
+
+	// ---- Компьютер: буфер обмена, открытие, уведомления, экран ----
+	r.registerComputer()
 
 	// ---- Пакетный режим: одно действие вместо N ----
 	//

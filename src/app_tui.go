@@ -68,50 +68,31 @@ func tuiMetrics(m ui.Metrics) tui.Metrics {
 	}
 }
 
-// tuiCommands — палитра по «/»: только то, что действительно есть в
-// обработчике команд. Подсказки короткие — это не справка, а напоминание.
-var tuiCommands = []tui.Command{
-	cmd("/help", "справка по командам"),
-	cmd("/model", "сменить модель"),
-	cmd("/models", "список моделей провайдера"),
-	cmd("/provider", "провайдер и ключи"),
-	cmd("/setup", "мастер настройки"),
-	cmd("/status", "состояние сессии и ключей"),
-	cmd("/usage", "расход токенов и деньги"),
-	cmd("/stats", "дашборд по сессиям"),
-	cmd("/copy", "скопировать последний ответ"),
-	cmd("/think", "показ размышлений"),
-	cmd("/plan", "режим плана"),
-	cmd("/agent", "агентный режим"),
-	cmd("/agents", "субагенты"),
-	cmd("/ab", "один вопрос двум моделям"),
-	cmd("/autopilot", "автопилот"),
-	cmd("/yolo", "без подтверждений"),
-	cmd("/permissions", "правила разрешений"),
-	cmd("/sandbox", "песочница файлов"),
-	cmd("/snapshots", "снимки проекта"),
-	cmd("/mission", "автономный прогон"),
-	cmd("/cron", "автономные итерации: поиск и исправление багов"),
-	cmd("/todos", "план работ"),
-	cmd("/context", "что в контексте"),
-	cmd("/compact", "сжать историю"),
-	cmd("/iters", "лимит итераций хода"),
-	cmd("/sessions", "сессии"),
-	cmd("/fork", "ветка сессии"),
-	cmd("/resume", "возобновить сессию"),
-	cmd("/undo", "отменить правку"),
-	cmd("/revert", "откатить ход"),
-	cmd("/export", "экспорт диалога"),
-	cmd("/memory", "заметки и правила проекта"),
-	cmd("/skills", "навыки"),
-	cmd("/ext", "расширения"),
-	cmd("/tools", "инструменты"),
-	cmd("/mcp", "MCP-серверы"),
-	cmd("/doctor", "диагностика"),
-	cmd("/init", "создать GCLI.md"),
-	cmd("/clear", "новая сессия"),
-	cmd("/cls", "очистить экран"),
-	cmd("/quit", "выход"),
+// tuiCommandsList — палитра по «/».
+//
+// Собирается из каталога commandDefs — того же, что питает роутер и
+// /help: три списка раньше переписывались отдельно и расползались
+// (палитра предлагала команду, которой нет). Свои команды из
+// .gcli/commands идут после встроенных: имя, совпавшее со встроенным,
+// не показывается второй раз — роутер и палитра отдают приоритет
+// встроенным одинаково.
+func (a *app) tuiCommandsList() []tui.Command {
+	out := make([]tui.Command, 0, len(commandDefs)+4)
+	for i := range commandDefs {
+		d := &commandDefs[i]
+		if d.group == "" {
+			continue
+		}
+		out = append(out, cmd(d.names[0], d.desc))
+	}
+	for _, r := range a.customHelpRows() {
+		name := strings.TrimPrefix(r[0], "/")
+		if lookupCommand("/"+name) != nil {
+			continue
+		}
+		out = append(out, cmd("/"+name, r[1]))
+	}
+	return out
 }
 
 // cmd — элемент палитры.
@@ -162,7 +143,7 @@ func (a *app) startTUI() bool {
 		Provider: a.prov.Label,
 		WorkDir:  a.workDir,
 		Session:  a.sess.ID,
-		Commands: tuiCommands,
+		Commands: a.tuiCommandsList(),
 		Color:    a.ui.ColorLevel() != 0,
 		Colors:   tuiColors(a.ui.ColorLevel()),
 		Unicode:  true,

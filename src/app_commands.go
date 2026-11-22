@@ -17,6 +17,212 @@ import (
 	"gcli/ui"
 )
 
+// ---------- Каталог команд: один источник для роутера, /help и палитры ----------
+//
+// Раньше список команд жил в трёх местах — в switch роутера, в таблице
+// /help и в палитре TUI — и списки расползались: палитра предлагала
+// команду, которой нет в обработчике, /help не упоминал команду, которая
+// есть. Теперь команда описана один раз, и всё остальное собирается из
+// этой таблицы.
+
+// commandDef — описание slash-команды.
+type commandDef struct {
+	// names — имя и алиасы с ведущим слэшем; names[0] идёт в палитру.
+	names []string
+	// usage — строка для /help («/models [фильтр|N|refresh]»); пусто — names[0].
+	usage string
+	// desc — подпись в /help и палитре.
+	desc string
+	// group — заголовок группы в /help; пусто — команда не печатается
+	// в справке и не попадает в палитру (внутренние).
+	group string
+	// more — дополнительные строки справки под основной (подкоманды).
+	more [][2]string
+	// run — обработчик; false = завершить сеанс.
+	run func(a *app, rest, arg string) bool
+}
+
+// commandDefs — каталог всех команд в порядке справки.
+//
+// Заполняется в init, а не литералом: замыкание /help вызывает cmdHelp,
+// которая читает commandDefs, и литерал в var создаёт цикл
+// инициализации.
+var commandDefs []commandDef
+
+func init() {
+	commandDefs = buildCommandDefs()
+	commandIndex = buildCommandIndex(commandDefs)
+}
+
+// buildCommandDefs — таблица команд.
+func buildCommandDefs() []commandDef {
+	return []commandDef{
+		// ---- Настройка ----
+		{group: "Настройка", names: []string{"/setup"}, desc: "мастер: провайдер → ключ → модель",
+			run: func(a *app, rest, arg string) bool { a.runSetup(); return true }},
+		{group: "Настройка", names: []string{"/provider"},
+			usage: "/provider [id] · add · key · model · test · rm",
+			desc:  "провайдеры: свой endpoint (ctx= — окно), ключи, проверка",
+			more: [][2]string{
+				{"/provider add <id> <url> [openai|anthropic] [ctx=N]", "свой endpoint; ctx=N — окно контекста"},
+				{"/provider test [id]", "проверить endpoint: живой ответ и время"},
+			},
+			run: func(a *app, rest, arg string) bool { a.cmdProvider(rest); return true }},
+		{group: "Настройка", names: []string{"/models"},
+			usage: "/models [фильтр|N|refresh]",
+			desc:  "модели с endpoint-а; N — установить по номеру из таблицы",
+			run:   func(a *app, rest, arg string) bool { a.cmdModels(rest); return true }},
+		{group: "Настройка", names: []string{"/model"},
+			usage: "/model [имя]",
+			desc:  "сменить модель",
+			run:   func(a *app, rest, arg string) bool { a.cmdModel(rest); return true }},
+		{group: "Настройка", names: []string{"/think"},
+			usage: "/think on|off|auto",
+			desc:  "размышления модели",
+			run:   func(a *app, rest, arg string) bool { a.cmdThink(arg); return true }},
+
+		// ---- Агент ----
+		{group: "Агент", names: []string{"/agents"}, desc: "субагенты: список, запуск, настройки",
+			more: [][2]string{
+				{"/agents run <тип> <задача>", "запустить: explorer, planner, tester, frontend…"},
+				{"/agents types", "все типы + свои агенты"},
+				{"/agents new <имя>", "свой агент (.gcli/agents/*.md)"},
+			},
+			run: func(a *app, rest, arg string) bool { a.cmdAgents(rest); return true }},
+		{group: "Агент", names: []string{"/agent"},
+			usage: "/agent on|off",
+			desc:  "агентный режим (инструменты)",
+			run:   func(a *app, rest, arg string) bool { a.cmdAgent(arg); return true }},
+		{group: "Агент", names: []string{"/plan"},
+			usage: "/plan on|off",
+			desc:  "режим планирования: сначала план — потом код",
+			run:   func(a *app, rest, arg string) bool { a.cmdPlan(rest); return true }},
+		{group: "Агент", names: []string{"/ab"},
+			usage: "/ab <модель> <промпт>",
+			desc:  "один вопрос двум моделям: сравнить ответ, время, цену",
+			run:   func(a *app, rest, arg string) bool { a.cmdAb(rest); return true }},
+		{group: "Агент", names: []string{"/autopilot"},
+			usage: "/autopilot on|off|all",
+			desc:  "автопилот: одобрять безопасные действия самому",
+			run:   func(a *app, rest, arg string) bool { a.cmdAutopilot(rest); return true }},
+		{group: "Агент", names: []string{"/sandbox"},
+			usage: "/sandbox on|off",
+			desc:  "песочница файлов: пути вне рабочего каталога запрещены",
+			run:   func(a *app, rest, arg string) bool { a.cmdSandbox(rest); return true }},
+		{group: "Агент", names: []string{"/cron"},
+			usage: "/cron on|off|status",
+			desc:  "автономные итерации: сам ищет и чинит баги, уязвимости, проблемы",
+			run:   func(a *app, rest, arg string) bool { a.cmdCron(rest); return true }},
+		{group: "Агент", names: []string{"/yolo"}, desc: "без подтверждений (кроме опасных команд)",
+			run: func(a *app, rest, arg string) bool { a.cmdYolo(); return true }},
+		{group: "Агент", names: []string{"/tools"}, desc: "список инструментов агента",
+			run: func(a *app, rest, arg string) bool { a.cmdTools(); return true }},
+		{group: "Агент", names: []string{"/mission"},
+			usage: "/mission start|stop|status|save|report|chain",
+			desc:  "автономный прогон: задание, журнал, отчёт, цепочка прогонов",
+			run:   func(a *app, rest, arg string) bool { a.cmdMission(rest); return true }},
+		{group: "Агент", names: []string{"/iters"}, desc: "лимит итераций и продления хода; при прогоне — его расход",
+			run: func(a *app, rest, arg string) bool { a.cmdIters(); return true }},
+		{group: "Агент", names: []string{"/todos"}, desc: "план текущей задачи",
+			run: func(a *app, rest, arg string) bool {
+				a.ui.RenderTodos(a.sessionTodos())
+				a.ui.Println("")
+				return true
+			}},
+		{group: "Агент", names: []string{"/compact"}, desc: "сжать историю диалога",
+			run: func(a *app, rest, arg string) bool { a.cmdCompact(); return true }},
+		{group: "Агент", names: []string{"/snapshots"}, desc: "снимки проекта по ходам",
+			run: func(a *app, rest, arg string) bool { a.cmdSnapshots(); return true }},
+		{group: "Агент", names: []string{"/revert"},
+			usage: "/revert N",
+			desc:  "откат к снимку N",
+			run:   func(a *app, rest, arg string) bool { a.cmdRevert(rest); return true }},
+
+		// ---- Расширение ----
+		{group: "Расширение", names: []string{"/skills", "/skill"}, desc: "навыки; new, on|off, показать",
+			run: func(a *app, rest, arg string) bool { a.cmdSkills(rest); return true }},
+		{group: "Расширение", names: []string{"/ext"}, desc: "расширения; new, trust, reload",
+			run: func(a *app, rest, arg string) bool { a.cmdExt(rest); return true }},
+		{group: "Расширение", names: []string{"/mcp"}, desc: "MCP-серверы; trust, reload, new, path",
+			run: func(a *app, rest, arg string) bool { a.cmdMcp(rest); return true }},
+		{group: "Расширение", names: []string{"/init"},
+			usage: "/init [show|force]",
+			desc:  "разобрать проект: GCLI.md + gcli.json",
+			run:   func(a *app, rest, arg string) bool { a.cmdInit(rest); return true }},
+		{group: "Расширение", names: []string{"/memory"}, desc: "файлы памяти проекта",
+			run: func(a *app, rest, arg string) bool { a.cmdMemory(); return true }},
+
+		// ---- Сессия ----
+		{group: "Сессия", names: []string{"/status"}, desc: "состояние сессии, ключей и окружения",
+			run: func(a *app, rest, arg string) bool { a.cmdStatus(); return true }},
+		{group: "Сессия", names: []string{"/usage"}, desc: "расход токенов и деньги",
+			run: func(a *app, rest, arg string) bool { a.cmdUsage(); return true }},
+		{group: "Сессия", names: []string{"/stats"},
+			usage: "/stats [дней]",
+			desc:  "дашборд расходов: по дням и моделям",
+			run:   func(a *app, rest, arg string) bool { a.cmdStats(rest); return true }},
+		{group: "Сессия", names: []string{"/context"}, desc: "разбивка контекста по частям",
+			run: func(a *app, rest, arg string) bool { a.cmdContext(); return true }},
+		{group: "Сессия", names: []string{"/sessions"}, desc: "сохранённые сессии",
+			run: func(a *app, rest, arg string) bool { a.cmdSessions(); return true }},
+		{group: "Сессия", names: []string{"/resume"},
+			usage: "/resume [N]",
+			desc:  "возобновить сессию по номеру из /sessions",
+			run:   func(a *app, rest, arg string) bool { a.cmdResume(arg); return true }},
+		{group: "Сессия", names: []string{"/fork"},
+			usage: "/fork [N]",
+			desc:  "новая сессия из истории текущей до сообщения N",
+			run:   func(a *app, rest, arg string) bool { a.cmdFork(rest); return true }},
+		{group: "Сессия", names: []string{"/clear"}, desc: "новая сессия",
+			run: func(a *app, rest, arg string) bool { a.cmdClear(); return true }},
+		{group: "Сессия", names: []string{"/export"}, desc: "экспорт диалога в Markdown",
+			run: func(a *app, rest, arg string) bool { a.cmdExport(); return true }},
+		{group: "Сессия", names: []string{"/undo"}, desc: "отменить последнюю правку файла",
+			run: func(a *app, rest, arg string) bool { a.cmdUndo(); return true }},
+		{group: "Сессия", names: []string{"/permissions"},
+			usage: "/permissions [reset]",
+			desc:  "разрешения сессии, доверие коду, сброс",
+			run:   func(a *app, rest, arg string) bool { a.cmdPerms(rest); return true }},
+
+		// ---- Сервис ----
+		{group: "Сервис", names: []string{"/help", "/?", "/h"}, desc: "эта справка",
+			run: func(a *app, rest, arg string) bool { a.cmdHelp(); return true }},
+		{group: "Сервис", names: []string{"/doctor"},
+			usage: "/doctor [key]",
+			desc:  "диагностика окружения и ключа",
+			run:   func(a *app, rest, arg string) bool { a.cmdDoctor(rest); return true }},
+		{group: "Сервис", names: []string{"/copy"}, desc: "скопировать последний ответ (OSC52)",
+			run: func(a *app, rest, arg string) bool { a.cmdCopy(); return true }},
+		{group: "Сервис", names: []string{"/cls", "/clear-screen"}, desc: "очистить экран",
+			run: func(a *app, rest, arg string) bool { a.ui.ClearScreen(); return true }},
+		{group: "Сервис", names: []string{"/quit", "/exit", "/q"}, desc: "выход (также Ctrl+D)",
+			run: func(a *app, rest, arg string) bool { return false }},
+	}
+}
+
+// commandIndex — имя → описание; собирается в init рядом с каталогом.
+var commandIndex map[string]*commandDef
+
+// buildCommandIndex — индекс по всем именам и алиасам; дубликат в
+// каталоге — ошибка компоновки, а не молчаливая замена.
+func buildCommandIndex(defs []commandDef) map[string]*commandDef {
+	m := make(map[string]*commandDef, len(defs)*2)
+	for i := range defs {
+		for _, n := range defs[i].names {
+			if _, dup := m[n]; dup {
+				panic("дубликат команды в commandDefs: " + n)
+			}
+			m[n] = &defs[i]
+		}
+	}
+	return m
+}
+
+// lookupCommand — найти команду по имени (с алиасами). Не найдена — nil.
+func lookupCommand(name string) *commandDef {
+	return commandIndex[strings.ToLower(name)]
+}
+
 // handleCommand — обработать slash-команду. false = выход.
 func (a *app) handleCommand(line string) bool {
 	fields := strings.Fields(line)
@@ -29,169 +235,135 @@ func (a *app) handleCommand(line string) bool {
 	if len(fields) > 1 {
 		arg = fields[1]
 	}
-
-	switch cmd {
-	case "/quit", "/exit", "/q":
-		return false
-	case "/help", "/?", "/h":
-		a.cmdHelp()
-	case "/status":
-		a.cmdStatus()
-	case "/iters":
-		a.cmdIters()
-	case "/model":
-		a.cmdModel(rest)
-	case "/provider":
-		a.cmdProvider(rest)
-	case "/setup":
-		a.runSetup()
-	case "/models":
-		a.cmdModels(rest)
-	case "/think":
-		a.cmdThink(arg)
-	case "/skills", "/skill":
-		a.cmdSkills(rest)
-	case "/ext":
-		a.cmdExt(rest)
-	case "/agents":
-		a.cmdAgents(rest)
-	case "/agent":
-		a.cmdAgent(arg)
-	case "/yolo":
-		a.cmdYolo()
-	case "/autopilot":
-		a.cmdAutopilot(rest)
-	case "/mission":
-		a.cmdMission(rest)
-	case "/todos":
-		a.ui.RenderTodos(a.sessionTodos())
-		a.ui.Println("")
-	case "/compact":
-		a.cmdCompact()
-	case "/sessions":
-		a.cmdSessions()
-	case "/fork":
-		a.cmdFork(rest)
-	case "/resume":
-		a.cmdResume(arg)
-	case "/clear":
-		a.cmdClear()
-	case "/export":
-		a.cmdExport()
-	case "/permissions":
-		a.cmdPerms(rest)
-	case "/sandbox":
-		a.cmdSandbox(rest)
-	case "/cron":
-		a.cmdCron(rest)
-	case "/usage":
-		a.cmdUsage()
-	case "/stats":
-		a.cmdStats(rest)
-	case "/tools":
-		a.cmdTools()
-	case "/doctor":
-		a.cmdDoctor(rest)
-	case "/init":
-		a.cmdInit(rest)
-	case "/memory":
-		a.cmdMemory()
-	case "/mcp":
-		a.cmdMcp(rest)
-	case "/context":
-		a.cmdContext()
-	case "/plan":
-		a.cmdPlan(rest)
-	case "/ab":
-		a.cmdAb(rest)
-	case "/undo":
-		a.cmdUndo()
-	case "/snapshots":
-		a.cmdSnapshots()
-	case "/revert":
-		a.cmdRevert(rest)
-	case "/copy":
-		a.cmdCopy()
-	case "/cls", "/clear-screen":
-		a.ui.ClearScreen()
-	default:
-		// Кастомные slash-команды из .gcli/commands и ~/.gcli/commands:
-		// файл commit.md превращается в /commit.
-		if cmd, ok := a.findCustomCommand(cmd); ok {
-			a.runCustomCommand(cmd, rest)
-			return true
-		}
-		a.ui.Warn("неизвестная команда: " + cmd + " — /help для списка")
+	if d := lookupCommand(cmd); d != nil {
+		return d.run(a, rest, arg)
 	}
+	// Кастомные slash-команды из .gcli/commands и ~/.gcli/commands:
+	// файл commit.md превращается в /commit.
+	if c, ok := a.findCustomCommand(cmd); ok {
+		a.runCustomCommand(c, rest)
+		return true
+	}
+	a.warnUnknownCommand(cmd)
 	return true
 }
 
-// ---------- Справка и статус ----------
-
-func (a *app) cmdHelp() {
-	groups := []struct {
-		title string
-		rows  [][2]string
-	}{
-		{"Настройка", [][2]string{
-			{"/setup", "мастер: провайдер → ключ → модель"},
-			{"/provider", "провайдеры; add — свой endpoint, key, model, rm"},
-			{"/models [фильтр]", "модели с endpoint-а провайдера"},
-			{"/model [имя]", "сменить модель"},
-			{"/think on|off|auto", "размышления модели"},
-		}},
-		{"Агент", [][2]string{
-			{"/agents", "субагенты: список, запуск, настройки"},
-			{"/agents run <тип> <задача>", "запустить: explorer, planner, tester, frontend…"},
-			{"/agents types", "все типы + свои агенты"},
-			{"/agents new <имя>", "свой агент (.gcli/agents/*.md)"},
-			{"/agent on|off", "агентный режим (инструменты)"},
-			{"/plan on|off", "режим планирования: сначала план — потом код"},
-			{"/ab <модель> <промпт>", "один вопрос двум моделям: сравнить ответ, время, цену"},
-			{"/autopilot on|off|all", "автопилот: одобрять безопасные действия самому"},
-			{"/sandbox on|off", "песочница файлов: пути вне рабочего каталога запрещены"},
-			{"/cron on|off|status", "автономные итерации: сам ищет и чинит баги, уязвимости, проблемы"},
-			{"/yolo", "без подтверждений (кроме опасных команд)"},
-			{"/tools", "список инструментов агента"},
-			{"/mission", "автономный прогон: start, stop, status, save, report"},
-			{"/iters", "лимит итераций и продления хода; при прогоне — его расход"},
-			{"/todos", "план текущей задачи"},
-			{"/compact", "сжать историю диалога"},
-			{"/snapshots, /revert N", "снимки проекта по ходам; откат к снимку N"},
-		}},
-		{"Расширение", [][2]string{
-			{"/skills, /skill", "навыки; new, on|off, показать"},
-			{"/ext", "расширения; new, trust, reload"},
-			{"/mcp", "MCP-серверы; trust, reload, new, path"},
-			{"/init", "разобрать проект: GCLI.md + gcli.json; show, force"},
-			{"/memory", "файлы памяти проекта"},
-		}},
-		{"Сессия", [][2]string{
-			{"/status, /usage", "состояние, токены, контекст"},
-			{"/stats [дней]", "дашборд расходов: по дням и моделям"},
-			{"/context", "разбивка контекста по частям"},
-			{"/sessions, /resume", "сохранённые сессии"},
-			{"/fork [N]", "новая сессия из истории текущей до сообщения N"},
-			{"/clear", "новая сессия"},
-			{"/export", "экспорт диалога в Markdown"},
-			{"/undo", "отменить последнюю правку файла"},
-			{"/permissions [reset]", "разрешения сессии, доверие коду, сброс"},
-		}}, {"Сервис", [][2]string{
-			{"/help, /?", "эта справка (также /h)"},
-			{"/doctor [key]", "диагностика окружения и ключа"},
-			{"/copy", "скопировать последний ответ (OSC52)"},
-			{"/cls, /clear-screen", "очистить экран"},
-			{"/quit, /exit, /q", "выход (также Ctrl+D)"},
-		}},
+// warnUnknownCommand — сообщить об опечатке и предложить ближайшее.
+//
+// Голое «неизвестная команда» бесполезно: человек опечатался в /models и
+// должен сам открывать справку и искать похожую. Подсказка строится по
+// префиксу и расстоянию Левенштейна по всем именам каталога и своим
+// командам.
+func (a *app) warnUnknownCommand(cmd string) {
+	a.ui.Warn("неизвестная команда: " + cmd + " — /help для списка")
+	if sugg := a.closestCommands(cmd); len(sugg) > 0 {
+		a.ui.Hint("похожие: " + strings.Join(sugg, " · "))
 	}
+}
+
+// knownCommandNames — все имена каталога плюс свои команды.
+func (a *app) knownCommandNames() []string {
+	out := make([]string, 0, len(commandIndex)+8)
+	for name := range commandIndex {
+		out = append(out, name)
+	}
+	for _, r := range a.customHelpRows() {
+		if name := strings.TrimPrefix(r[0], "/"); lookupCommand("/"+name) == nil {
+			out = append(out, "/"+name)
+		}
+	}
+	return out
+}
+
+// closestCommands — до трёх самых похожих команд на опечатку.
+//
+// Сначала префиксные совпадения (человек начал печатать и промахнулся),
+// потом ближайшие по расстоянию Левенштейна. Сортировка по имени делает
+// результат воспроизводимым: одна и та же опечатка советует одно и то же.
+func (a *app) closestCommands(typo string) []string {
+	typo = strings.ToLower(typo)
+	if typo == "" {
+		return nil
+	}
+	known := a.knownCommandNames()
+	var byPrefix, byDistance []string
+	for _, name := range known {
+		lname := strings.ToLower(name)
+		if lname == typo {
+			// Точное совпадение не доходит сюда (маршрут уже найден),
+			// но перестраховаться честнее, чем советовать саму себя.
+			continue
+		}
+		switch {
+		case strings.HasPrefix(lname, typo):
+			byPrefix = append(byPrefix, name)
+		case levenshtein(typo, lname) <= 2:
+			byDistance = append(byDistance, name)
+		}
+	}
+	sort.Strings(byPrefix)
+	sort.Strings(byDistance)
+	out := append(byPrefix, byDistance...)
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
+// levenshtein — расстояние редактирования между двумя строками.
+//
+// Две строки в цикле команд — обычно имена до двадцати символов, поэтому
+// классическая матрица со свёрткой в одну строку достаточна и понятна.
+func levenshtein(a, b string) int {
+	ra, rb := []rune(strings.ToLower(a)), []rune(strings.ToLower(b))
+	if len(ra) == 0 {
+		return len(rb)
+	}
+	if len(rb) == 0 {
+		return len(ra)
+	}
+	prev := make([]int, len(rb)+1)
+	cur := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = core.Min(core.Min(cur[j-1]+1, prev[j]+1), prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(rb)]
+}
+
+// cmdHelp — справка из каталога команд.
+func (a *app) cmdHelp() {
 	a.ui.Println("")
-	for _, g := range groups {
-		a.ui.Println("  " + a.ui.Head(g.title))
-		for _, r := range g.rows {
+	group := ""
+	for i := range commandDefs {
+		d := &commandDefs[i]
+		if d.group == "" {
+			continue
+		}
+		if d.group != group {
+			group = d.group
+			a.ui.Println("  " + a.ui.Head(group))
+		}
+		usage := d.usage
+		if usage == "" {
+			usage = d.names[0]
+		}
+		a.ui.Println("    " + a.ui.Accent(ui.PadRight(usage, 28)) + a.ui.Gray(d.desc))
+		for _, r := range d.more {
 			a.ui.Println("    " + a.ui.Accent(ui.PadRight(r[0], 28)) + a.ui.Gray(r[1]))
 		}
-		a.ui.Println("")
 	}
+	a.ui.Println("")
 	// Кастомные команды из каталогов .gcli/commands.
 	if rows := a.customHelpRows(); len(rows) > 0 {
 		a.ui.Println("  " + a.ui.Head("Свои команды"))
@@ -203,6 +375,37 @@ func (a *app) cmdHelp() {
 	a.ui.Println("  " + a.ui.Gray("Подсказки: @файл — приложить файл · \\ в конце строки — перенос"))
 	a.ui.Println("  " + a.ui.Gray("#текст — записать факт в память проекта (GCLI.md) · Ctrl+C — прервать генерацию"))
 	a.ui.Println("")
+}
+
+// modelsCacheEntry — список моделей с endpoint-а провайдера.
+type modelsCacheEntry struct {
+	prov   string    // чей список
+	models []string  // полный каталог
+	shown  []string  // последняя показанная таблица (для «/models N»)
+	at     time.Time // когда получен
+}
+
+// modelsCacheTTL — сколько живёт список моделей.
+//
+// Каталог endpoint-а меняется днями, а не секундами; десять минут —
+// компромисс между свежестью и секундой ожидания на каждый вызов.
+// /models refresh игнорирует кеш.
+const modelsCacheTTL = 10 * time.Minute
+
+// fetchModelList — каталог моделей провайдера: из кеша или с endpoint-а.
+func (a *app) fetchModelList(refresh bool) ([]string, error) {
+	if !refresh && a.modelsCache.prov == a.prov.ID &&
+		len(a.modelsCache.models) > 0 && time.Since(a.modelsCache.at) < modelsCacheTTL {
+		return a.modelsCache.models, nil
+	}
+	a.ui.SpinnerStart("Получаю список моделей с " + a.prov.ID)
+	models, err := providers.FetchModels(context.Background(), a.client, a.prov)
+	a.ui.SpinnerStop()
+	if err != nil {
+		return nil, err
+	}
+	a.modelsCache = modelsCacheEntry{prov: a.prov.ID, models: models, at: time.Now()}
+	return models, nil
 }
 
 func (a *app) cmdStatus() {
@@ -287,17 +490,39 @@ func (a *app) cmdProvider(rest string) {
 		return
 	}
 	switch parts[0] {
+	case "test", "проверить", "ping":
+		a.cmdProviderTest(parts[1:])
+		return
 	case "add", "import":
 		if len(parts) < 3 {
-			a.ui.Err("формат: /provider add <id> <base_url> [openai|anthropic]")
-			a.ui.Hint("пример: /provider add myapi https://api.myservice.ru/v1")
+			a.ui.Err("формат: /provider add <id> <base_url> [openai|anthropic] [ctx=N]")
+			a.ui.Hint("пример: /provider add myapi https://api.myservice.ru/v1 openai ctx=200000")
 			return
 		}
 		id := strings.ToLower(parts[1])
 		base := parts[2]
+		// Остальные токены: протокол (openai|anthropic) и ctx=N — окно
+		// контекста своего endpoint-а. Раньше окно своего провайдера не
+		// задавалось вовсе, и порог авто-сжатия считался от дефолтных
+		// 128k — на endpoint-е с окном в миллион сжатие срабатывало в
+		// пять раз раньше нужного.
 		proto := providers.ProtoOpenAI
-		if len(parts) > 3 {
-			proto = strings.ToLower(parts[3])
+		ctxLimit := 0
+		protoSet := false
+		for _, tok := range parts[3:] {
+			if v, ok := strings.CutPrefix(strings.ToLower(tok), "ctx="); ok {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1000 {
+					a.ui.Err("ctx=N: число токенов, минимум 1000 — например ctx=200000")
+					return
+				}
+				ctxLimit = n
+				continue
+			}
+			if !protoSet {
+				proto = strings.ToLower(tok)
+				protoSet = true
+			}
 		}
 		if !providers.ValidID(id) {
 			a.ui.Err("id: латиница/цифры/_/-, 2–25 символов")
@@ -315,9 +540,13 @@ func (a *app) cmdProvider(rest string) {
 		pc.BaseURL = strings.TrimRight(base, "/")
 		pc.Protocol = proto
 		pc.Custom = true
+		pc.ContextLimit = ctxLimit
 		a.saveConfig()
 		a.registry = a.registry.Rebuild(a.repo.Cfg)
 		a.ui.Ok(fmt.Sprintf("провайдер «%s» → %s (%s)", id, base, proto))
+		if ctxLimit > 0 {
+			a.ui.Hint(fmt.Sprintf("окно контекста: %s ток. (поменять: /provider add %s %s ctx=N)", core.Kfmt(ctxLimit), id, base))
+		}
 		a.ui.Hint("далее: /provider key " + id + " <ключ> · /provider " + id)
 	case "key", "ключ", "keys", "ключи":
 		a.cmdProviderKey(parts)
@@ -327,6 +556,12 @@ func (a *app) cmdProvider(rest string) {
 			return
 		}
 		id := strings.ToLower(parts[1])
+		// Опечатка в имени модели раньше сохранялась молча: провайдер
+		// начинал отвечать «модель не найдена» на каждом запросе. Пресет
+		// известен — сверяемся с ним; своему endpoint-у верим на слово.
+		if p := a.registry.Find(id); p != nil && !p.Custom && len(p.Models) > 0 && !containsModel(p.Models, parts[2]) {
+			a.ui.Warn("модели «" + parts[2] + "» нет в списке «" + id + "» — сохраняю, но проверь: /models покажет точный каталог")
+		}
 		a.repo.EnsureProviderCfg(id).Model = parts[2]
 		a.saveConfig()
 		a.registry = a.registry.Rebuild(a.repo.Cfg)
@@ -355,8 +590,93 @@ func (a *app) cmdProvider(rest string) {
 			a.switchProvider(p)
 		} else {
 			a.ui.Warn("нет провайдера «" + parts[0] + "» — /provider list")
+			if sugg := closestNames(parts[0], a.providerIDs()); len(sugg) > 0 {
+				a.ui.Hint("похожие: " + strings.Join(sugg, " · "))
+			}
 		}
 	}
+}
+
+// cmdProviderTest — проверить endpoint провайдера: список моделей
+// отвечает, ключ годен, сколько занимает запрос. Полезно после add и
+// при диагностике «модель молчит»: отличает мёртвый ключ от мёртвой
+// сети одной командой.
+func (a *app) cmdProviderTest(args []string) {
+	id := a.prov.ID
+	if len(args) > 0 {
+		id = strings.ToLower(args[0])
+	}
+	p := a.registry.Find(id)
+	if p == nil {
+		a.ui.Err("провайдер «" + id + "» не найден — /provider list")
+		return
+	}
+	if !p.HasKey() && !p.NoKey {
+		a.ui.Warn("у «" + id + "» нет ключа — /provider key " + id + " <ключ>")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	a.ui.SpinnerStart("Проверяю " + p.BaseURL)
+	t0 := time.Now()
+	models, err := providers.FetchModels(ctx, a.client, p)
+	dt := time.Since(t0)
+	a.ui.SpinnerStop()
+	if err != nil {
+		a.ui.Err("endpoint не ответил: " + core.Truncate(core.OneLine(err.Error()), 120))
+		a.ui.Hint("проверь base_url и ключ; ключи и их статусы: /provider keys " + id)
+		return
+	}
+	a.ui.Ok(fmt.Sprintf("%s отвечает: %d моделей за %s", id, len(models), core.HumanDuration(dt)))
+	if len(models) == 0 {
+		a.ui.Hint("каталог пуст — endpoint может не поддерживать /models; задай модель вручную: /provider model " + id + " <имя>")
+	}
+}
+
+// providerIDs — все id провайдеров реестра.
+func (a *app) providerIDs() []string {
+	out := make([]string, 0, len(a.registry.All))
+	for _, p := range a.registry.All {
+		if p != nil {
+			out = append(out, p.ID)
+		}
+	}
+	return out
+}
+
+// containsModel — есть ли модель в списке провайдера.
+func containsModel(models []string, m string) bool {
+	for _, x := range models {
+		if strings.EqualFold(x, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// closestNames — до трёх ближайших имён по префиксу и Левенштейну.
+func closestNames(typo string, known []string) []string {
+	typo = strings.ToLower(typo)
+	if typo == "" {
+		return nil
+	}
+	var byPrefix, byDistance []string
+	for _, name := range known {
+		lname := strings.ToLower(name)
+		switch {
+		case strings.HasPrefix(lname, typo) && lname != typo:
+			byPrefix = append(byPrefix, name)
+		case levenshtein(typo, lname) <= 2:
+			byDistance = append(byDistance, name)
+		}
+	}
+	sort.Strings(byPrefix)
+	sort.Strings(byDistance)
+	out := append(byPrefix, byDistance...)
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
 }
 
 // cmdProviderKey — работа с ключами провайдера.
@@ -750,19 +1070,46 @@ func (a *app) setModel(m string) {
 	a.ui.Ok("модель: " + m)
 }
 
-func (a *app) cmdModels(filter string) {
+// cmdModels — каталог моделей endpoint-а.
+//
+//	/models           — таблица с окнами контекста
+//	/models фильтр    — подстрочный поиск по каталогу
+//	/models 3         — установить модель №3 из последней таблицы
+//	/models refresh   — перечитать каталог, сбросив кеш на 10 минут
+func (a *app) cmdModels(rest string) {
+	rest = strings.TrimSpace(rest)
+	refresh := false
+	switch strings.ToLower(rest) {
+	case "refresh", "обновить":
+		refresh = true
+		rest = ""
+	case "clear", "сброс":
+		a.modelsCache = modelsCacheEntry{}
+		a.ui.Ok("кеш списка моделей сброшен")
+		return
+	}
+	// «/models 3» — установить по номеру из последней показанной таблицы:
+	// длинные openrouter-слаги набирать целиком неудобно, а таблица уже
+	// перед глазами.
+	if n, err := strconv.Atoi(rest); err == nil && n != 0 {
+		if n > 0 {
+			a.pickModelByNumber(n)
+		} else {
+			a.ui.Err("номер модели: целое число от 1 — /models покажет таблицу")
+		}
+		return
+	}
 	if !a.prov.HasKey() {
 		a.ui.Warn("нет ключа для «" + a.prov.ID + "» — /provider key " + a.prov.ID + " <ключ>")
 		return
 	}
-	a.ui.SpinnerStart("Получаю список моделей с " + a.prov.ID)
-	models, err := providers.FetchModels(context.Background(), a.client, a.prov)
-	a.ui.SpinnerStop()
+	models, err := a.fetchModelList(refresh)
 	if err != nil {
 		a.ui.Err("список моделей недоступен: " + core.Truncate(core.OneLine(err.Error()), 110))
 		a.ui.Hint("задай модель вручную: /model <имя>")
 		return
 	}
+	filter := rest
 	if filter != "" {
 		var f []string
 		for _, m := range models {
@@ -783,16 +1130,48 @@ func (a *app) cmdModels(filter string) {
 		if models[i] == a.model {
 			mark = "→"
 		}
-		rows = append(rows, []string{mark + " " + strconv.Itoa(i+1), models[i]})
+		ctx := "—"
+		if n, ok := providers.ModelCtxLimit(models[i]); ok && n > 0 {
+			ctx = core.Kfmt(n)
+		}
+		rows = append(rows, []string{mark + " " + strconv.Itoa(i+1), models[i], ctx})
 	}
+	a.modelsCache.shown = models[:shown]
 	a.ui.Table([]ui.Column{
 		{Title: "", Width: 5},
 		{Title: "модель", Width: 50},
+		{Title: "окно", Width: 9},
 	}, rows, ui.BlockOpts{
 		Title:  "Модели " + a.prov.ID,
-		Footer: fmt.Sprintf("всего: %d — установить: /model <имя>", len(models)),
+		Footer: fmt.Sprintf("всего: %d — установить: /models N · /model <имя>", len(models)),
 	})
 	a.ui.Println("")
+}
+
+// pickModelByNumber — установить модель по номеру из последней таблицы.
+//
+// Таблица могла устареть (перезапуск, смена провайдера): тогда список
+// перечитывается, и номер применяется к свежему каталогу — пользователь
+// не должен повторять весь путь «/models, посмотрел, /model <имя>».
+func (a *app) pickModelByNumber(n int) {
+	list := a.modelsCache.shown
+	if a.modelsCache.prov != a.prov.ID || len(list) == 0 {
+		if !a.prov.HasKey() {
+			a.ui.Warn("нет ключа для «" + a.prov.ID + "» — /provider key " + a.prov.ID + " <ключ>")
+			return
+		}
+		models, err := a.fetchModelList(false)
+		if err != nil {
+			a.ui.Err("список моделей недоступен: " + core.Truncate(core.OneLine(err.Error()), 110))
+			return
+		}
+		list = models
+	}
+	if n > len(list) {
+		a.ui.Err(fmt.Sprintf("в списке всего %d моделей — номер %d вне таблицы", len(list), n))
+		return
+	}
+	a.setModel(list[n-1])
 }
 
 func (a *app) cmdThink(arg string) {

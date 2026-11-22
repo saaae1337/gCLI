@@ -89,10 +89,14 @@ func browserNeedsNoSandbox() bool {
 }
 
 // findBrowser — найти headless-браузер для скриншотов.
-func findBrowser() (string, []string) {
+//
+// Раньше возвращала пару (путь, аргументы), но аргументы никем не
+// читались: второй элемент оставался пустым, а подпись обещала то,
+// чего нет.
+func findBrowser() string {
 	if p := strings.TrimSpace(os.Getenv("GCLI_BROWSER")); p != "" {
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return p
 		}
 	}
 	switch runtime.GOOS {
@@ -107,7 +111,7 @@ func findBrowser() (string, []string) {
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {
-				return c, nil
+				return c
 			}
 		}
 	case "darwin":
@@ -118,17 +122,17 @@ func findBrowser() (string, []string) {
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {
-				return c, nil
+				return c
 			}
 		}
 	default:
 		for _, name := range []string{"chromium-browser", "chromium", "google-chrome", "google-chrome-stable", "microsoft-edge"} {
 			if p, err := exec.LookPath(name); err == nil {
-				return p, nil
+				return p
 			}
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // hScreenshot — снимок страницы через headless-браузер.
@@ -137,7 +141,7 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	if target == "" {
 		return Result{}, fmt.Errorf("укажи target — URL или путь к HTML-файлу")
 	}
-	browser, _ := findBrowser()
+	browser := findBrowser()
 
 	// Локальный файл → file:// URL.
 	if !strings.Contains(target, "://") {

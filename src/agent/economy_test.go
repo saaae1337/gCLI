@@ -6,11 +6,13 @@ package agent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gcli/core"
 	"gcli/providers"
@@ -322,5 +324,112 @@ func TestRequestEstimateCountsPruning(t *testing.T) {
 	}
 	if saved <= 0 {
 		t.Error("подрезка не учтена в оценке")
+	}
+}
+
+// TestPruneElidesOldWriteArgs — write_file несёт содержимое файла в
+// аргументах: у старых вызовов оно дублирует то, что уже на диске, и
+// вырезается в пользу указателя. Свежие вызовы не трогаются.
+func TestPruneElidesOldWriteArgs(t *testing.T) {
+	opt := economyOptions{KeepResults: 10, KeepAssistants: 1, MaxCallArgsTokens: 100, Budget: 1, OldUserTokens: 0}
+	content := strings.Repeat("код ", 300) // ~1200 токенов
+	args := `{"path":"a.go","content":"` + content + `"}`
+	msgs := []core.Message{
+		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "1", Name: "write_file", Args: args}}},
+		toolMsg("write_file", "Файл a.go записан"),
+		{Role: core.RoleAssistant, Content: "готово"},
+	}
+	out, saved, _ := pruneMessages(msgs, opt)
+	if saved <= 0 {
+		t.Fatal("элизия не сэкономила токены")
+	}
+	got := out[0].ToolCalls[0].Args
+	if !strings.Contains(got, "выполнено") || !strings.Contains(got, `"path":"a.go"`) {
+		t.Errorf("аргумент не элизирован или потерял путь: %.80q", got)
+	}
+	// Аргумент должен остаться валидным JSON.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("элизия сломала JSON: %v", err)
+	}
+	if out[2].ToolCalls != nil {
+		t.Error("свежее сообщение тронуто")
+	}
+}
+
+// TestElideArgsKeepsShortStrings — короткие значения (пути, флаги)
+// остаются: указатель длиннее полезной нагрузки только раздувает историю.
+func TestElideArgsKeepsShortStrings(t *testing.T) {
+	args := `{"path":"a.go","content":"короткий"}`
+	if got := elideArgs(args); got != args {
+		t.Errorf("короткие аргументы изменены: %q", got)
+	}
+	// Невалидный JSON проходит насквозь.
+	if got := elideArgs("{не json"); got != "{не json" {
+		t.Errorf("невалидный JSON изменён: %q", got)
+	}
+}
+
+// TestElideArgsHandlesNestedEdits — multi_edit несёт пачку правок:
+// длинные old_string/new_string внутри массива тоже элизируются.
+func TestElideArgsHandlesNestedEdits(t *testing.T) {
+	args := `{"path":"a.go","edits":[{"old_string":"` + strings.Repeat("старый ", 100) + `","new_string":"новый"}]}`
+	got := elideArgs(args)
+	if !strings.Contains(got, "выполнено") || !strings.Contains(got, `"new_string":"новый"`) {
+		t.Errorf("вложенная правка не элизирована: %.80q", got)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("элизия сломала JSON: %v", err)
+	}
+}
+
+// TestPruneDigestsOldUserPastes — огромная вставка из прошлого сворачивается:
+// первое сообщение (задача) и две последние вставки остаются целиком.
+func TestPruneDigestsOldUserPastes(t *testing.T) {
+	opt := economyOptions{KeepResults: 10, OldUserTokens: 100, Budget: 1}
+	paste := strings.Repeat("строка лога\n", 400)
+	msgs := []core.Message{
+		{Role: core.RoleUser, Content: "почини проект" + strings.Repeat(" и сделай хорошо", 60)},
+		{Role: core.RoleUser, Content: paste},
+		{Role: core.RoleUser, Content: "второй вопрос"},
+		{Role: core.RoleUser, Content: paste},
+		{Role: core.RoleUser, Content: "третий вопрос"},
+	}
+	out, saved, _ := pruneMessages(msgs, opt)
+	if saved <= 0 {
+		t.Fatal("вставка не свёрнута")
+	}
+	if strings.Contains(out[0].Content, "свёрнуто") {
+		t.Error("первое сообщение (постановка задачи) свёрнуто")
+	}
+	if !strings.Contains(out[1].Content, "старая вставка") {
+		t.Errorf("старая вставка не свёрнута: %.60q", out[1].Content)
+	}
+	if !strings.Contains(out[3].Content, "строка лога") {
+		t.Error("свежая вставка свёрнута")
+	}
+}
+
+// TestResultCacheStampLivesLonger — запись с отпечатком живёт дольше
+// безотпечаточной: устаревает не таймером, а изменившимся файлом.
+func TestResultCacheStampLivesLonger(t *testing.T) {
+	oldTTL, oldStampTTL := cacheTTL, cacheStampTTL
+	t.Cleanup(func() { cacheTTL, cacheStampTTL = oldTTL, oldStampTTL })
+	cacheTTL = time.Nanosecond
+	cacheStampTTL = time.Hour
+
+	c := newResultCache()
+	stamped := c.items
+	_ = stamped
+	// Без отпечатка: запись протухает сразу.
+	c.put("k1", "текст", "")
+	if _, ok := c.get("k1", ""); ok {
+		t.Error("безотпечаточная запись пережила короткий TTL")
+	}
+	// С отпечатком: запись жива, пока файл не изменился.
+	c.put("k2", "текст", "stamp")
+	if _, ok := c.get("k2", "stamp"); !ok {
+		t.Error("запись с отпечатком протухла раньше времени")
 	}
 }

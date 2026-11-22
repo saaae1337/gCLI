@@ -44,6 +44,18 @@ type economyOptions struct {
 	// история не трогается: пока контекст небольшой, полнота важнее
 	// экономии.
 	Budget int
+	// KeepAssistants — сколько последних сообщений ассистента не трогает
+	// элизия аргументов. Свежие вызовы (особенно edit_file) модели ещё
+	// нужны, чтобы продолжать работу с тем же файлом.
+	KeepAssistants int
+	// MaxCallArgsTokens — потолок аргументов старого вызова инструмента.
+	// write_file несёт в аргументах всё содержимое файла: без элизии
+	// каждая записанная версия файла навсегда остаётся в истории.
+	MaxCallArgsTokens int
+	// OldUserTokens — потолок для старой вставки пользователя. Огромный
+	// лог, приложенный к вопросу час назад, сворачивается в начало и
+	// конец: задача в первом сообщении и свежие вставки остаются целиком.
+	OldUserTokens int
 }
 
 // dropOldImages — убрать картинки, кроме последних.
@@ -72,10 +84,13 @@ func dropOldImages(msgs []core.Message) {
 // defaultEconomy — настройки по умолчанию.
 func defaultEconomy() economyOptions {
 	return economyOptions{
-		KeepResults:     6,
-		MaxResultTokens: 4000,
-		OldResultTokens: 200,
-		Budget:          16_000,
+		KeepResults:       6,
+		MaxResultTokens:   4000,
+		OldResultTokens:   200,
+		Budget:            16_000,
+		KeepAssistants:    3,
+		MaxCallArgsTokens: 500,
+		OldUserTokens:     800,
 	}
 }
 
@@ -102,11 +117,18 @@ func (a *Agent) economyOptions() economyOptions {
 //  3. свежие результаты — режем по потолку, но не сворачиваем;
 //  4. старые размышления — выбрасываем: они нужны модели только в том
 //     ходе, где родились (у Anthropic thinking-блок обязателен только
-//     в последнем сообщении ассистента).
+//     в последнем сообщении ассистента);
+//  5. огромные аргументы старых вызовов записи — элизия: write_file
+//     несёт в аргументах всё содержимое файла, и каждая старая версия
+//     файла навсегда лежит в истории рядом с результатом «записано»;
+//  6. старые вставки пользователя — сворачиваем в начало и конец:
+//     лог из тысячи строк, приложенный к прошлому вопросу, больше не
+//     нужен целиком. Первое сообщение (постановка задачи) и последние
+//     вставки не трогаются.
 //
-// Подрезка по давлению (шаги 1–4) идёт только когда история велика:
+// Подрезка по давлению (шаги 1–6) идёт только когда история велика:
 // пока контекст небольшой, полнота важнее экономии. А картинки
-// (шаг 5) убираются всегда — см. dropOldImages.
+// (шаг «всегда») убираются всегда — см. dropOldImages.
 func pruneMessages(msgs []core.Message, opt economyOptions) ([]core.Message, int, int) {
 	if len(msgs) == 0 {
 		return msgs, 0, 0
@@ -127,45 +149,45 @@ func pruneMessages(msgs []core.Message, opt economyOptions) ([]core.Message, int
 			toolIdx = append(toolIdx, i)
 		}
 	}
-	if len(toolIdx) == 0 {
-		return out, 0, 0
-	}
-	// Граница «свежих» результатов.
-	freshFrom := len(toolIdx) - opt.KeepResults
-	if freshFrom < 0 {
-		freshFrom = 0
-	}
 
 	// 1. Одинаковые результаты: содержимое оставляем у последнего, у более
 	// ранних остаётся указатель «тот же вывод ниже» — так модель читает
 	// историю сверху вниз и сразу находит содержимое.
-	lastSeen := map[string]int{}
-	for _, i := range toolIdx {
-		lastSeen[out[i].Name+"\x00"+out[i].Content] = i
-	}
-	for _, i := range toolIdx {
-		m := out[i]
-		key := m.Name + "\x00" + m.Content
-		if last, ok := lastSeen[key]; ok && last != i {
-			out[i].Content = "[повтор результата " + m.Name + " — тот же вывод ниже]"
-			pruned++
+	if len(toolIdx) > 0 {
+		lastSeen := map[string]int{}
+		for _, i := range toolIdx {
+			lastSeen[out[i].Name+"\x00"+out[i].Content] = i
 		}
-	}
+		for _, i := range toolIdx {
+			m := out[i]
+			key := m.Name + "\x00" + m.Content
+			if last, ok := lastSeen[key]; ok && last != i {
+				out[i].Content = "[повтор результата " + m.Name + " — тот же вывод ниже]"
+				pruned++
+			}
+		}
 
-	// 2-3. Сворачиваем старые результаты, режем свежие.
-	for n, i := range toolIdx {
-		m := &out[i]
-		if m.Content == "" {
-			continue
+		// Граница «свежих» результатов.
+		freshFrom := len(toolIdx) - opt.KeepResults
+		if freshFrom < 0 {
+			freshFrom = 0
 		}
-		old := m.Content
-		if n < freshFrom {
-			m.Content = core.DigestResult(m.Name, m.Content, opt.OldResultTokens)
-		} else if opt.MaxResultTokens > 0 && core.ApproxTokens(m.Content) > opt.MaxResultTokens {
-			m.Content = core.DigestResult(m.Name, m.Content, opt.MaxResultTokens)
-		}
-		if m.Content != old {
-			pruned++
+
+		// 2-3. Сворачиваем старые результаты, режем свежие.
+		for n, i := range toolIdx {
+			m := &out[i]
+			if m.Content == "" {
+				continue
+			}
+			old := m.Content
+			if n < freshFrom {
+				m.Content = core.DigestResult(m.Name, m.Content, opt.OldResultTokens)
+			} else if opt.MaxResultTokens > 0 && core.ApproxTokens(m.Content) > opt.MaxResultTokens {
+				m.Content = core.DigestResult(m.Name, m.Content, opt.MaxResultTokens)
+			}
+			if m.Content != old {
+				pruned++
+			}
 		}
 	}
 
@@ -187,8 +209,67 @@ func pruneMessages(msgs []core.Message, opt economyOptions) ([]core.Message, int
 		}
 	}
 
-	// 5. Картинки больше не трогаем: dropOldImages уже отработал в начале
-	// (шаг «всегда») и повтор вызова после шагов 1–4 был бы no-op —
+	// 5. Элизия аргументов старых вызовов записи: ассистентские сообщения
+	// кроме последних KeepAssistants отдают длинные строки из аргументов
+	// write_file/edit_file/multi_edit — содержимое уже в файле, и модель
+	// знает об этом из результата вызова.
+	lastAssistantEdge := len(out)
+	if opt.KeepAssistants > 0 {
+		count := 0
+		for i := lastAssistant; i >= 0 && count < opt.KeepAssistants; i-- {
+			if out[i].Role == core.RoleAssistant {
+				count++
+			}
+			lastAssistantEdge = i
+		}
+	}
+	for i := 0; i < lastAssistantEdge; i++ {
+		if out[i].Role != core.RoleAssistant {
+			continue
+		}
+		for c := range out[i].ToolCalls {
+			tc := &out[i].ToolCalls[c]
+			if !argsElidable(tc.Name) {
+				continue
+			}
+			if opt.MaxCallArgsTokens > 0 && core.ApproxTokens(tc.Args) <= opt.MaxCallArgsTokens {
+				continue
+			}
+			if next := elideArgs(tc.Args); next != tc.Args {
+				tc.Args = next
+				pruned++
+			}
+		}
+	}
+
+	// 6. Старые вставки пользователя: первое сообщение — постановка задачи,
+	// две последние вставки — свежий контекст; сворачивается то, что
+	// между ними.
+	if opt.OldUserTokens > 0 {
+		var userIdx []int
+		for i := range out {
+			if out[i].Role == core.RoleUser && out[i].Content != "" {
+				userIdx = append(userIdx, i)
+			}
+		}
+		for n, i := range userIdx {
+			if n == 0 || n >= len(userIdx)-2 {
+				continue
+			}
+			m := &out[i]
+			if core.ApproxTokens(m.Content) <= opt.OldUserTokens {
+				continue
+			}
+			old := m.Content
+			lines := len(core.SplitLines(old))
+			m.Content = "[свёрнуто: старая вставка пользователя — " + strconv.Itoa(lines) +
+				" строк, начало и конец ниже]\n" + core.Digest(old, opt.OldUserTokens)
+			pruned++
+		}
+	}
+
+	// Картинки больше не трогаем: dropOldImages уже отработал в начале
+	// (шаг «всегда») и повтор вызова после шагов 1–6 был бы no-op —
 	// картинки в сообщениях не появляются.
 
 	after := core.EstimateContext(out)
@@ -198,14 +279,90 @@ func pruneMessages(msgs []core.Message, opt economyOptions) ([]core.Message, int
 	return out, before - after, pruned
 }
 
+// argsElidable — можно ли элизировать большие строки в аргументах вызова.
+//
+// Только инструменты записи: их аргументы дублируют содержимое файлов,
+// которое уже лежит на диске и подтверждено результатом вызова. Аргументы
+// bash и web_fetch элизировать нельзя: там команда или URL — короткие
+// сами по себе, а вырезать из них нечего.
+func argsElidable(name string) bool {
+	switch name {
+	case "write_file", "edit_file", "multi_edit":
+		return true
+	}
+	return false
+}
+
+// elideMarker — подпись элизированной строки.
+const elideMarker = "[выполнено — содержимое записано в файл, см. результат вызова]"
+
+// elideMinChars — строки короче этого размера не трогаются: указатель
+// длиннее полезной нагрузки только раздувал бы историю.
+const elideMinChars = 200
+
+// elideArgs — вырезать длинные строковые значения из аргументов вызова,
+// сохранив структуру JSON. Аргумент должен остаться валидным JSON:
+// провайдер проверяет структуру tool_calls, и невалидный аргумент
+// отвалил бы весь запрос целиком.
+//
+// Сами ключи и короткие значения (путь к файлу, флаги) остаются: по ним
+// модель видит, что именно и куда записывала.
+func elideArgs(args string) string {
+	var v any
+	if err := json.Unmarshal([]byte(args), &v); err != nil {
+		return args
+	}
+	changed := false
+	var walk func(x any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case string:
+			if len([]rune(t)) > elideMinChars {
+				changed = true
+				return elideMarker
+			}
+			return t
+		case map[string]any:
+			for k, item := range t {
+				t[k] = walk(item)
+			}
+			return t
+		case []any:
+			for i, item := range t {
+				t[i] = walk(item)
+			}
+			return t
+		default:
+			return x
+		}
+	}
+	next := walk(v)
+	if !changed {
+		return args
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return args
+	}
+	return string(b)
+}
+
 // ---------- Кеш результатов инструментов только для чтения ----------
 
-// cacheTTL — сколько живёт запись кеша.
+// cacheTTL — сколько живёт запись кеша без отпечатка файлов.
 //
 // Ограничение по времени — страховка на случай, когда отпечаток файла
 // не удалось снять (инструмент читает не файл, а каталог или вывод
 // команды). Запись без отпечатка живёт недолго.
-const cacheTTL = 2 * time.Minute
+var cacheTTL = 2 * time.Minute
+
+// cacheStampTTL — сколько живёт запись с отпечатком файлов.
+//
+// Отпечаток (время изменения и размер) сам ловит изменения, поэтому
+// такая запись может жить дольше «безотпечаточной»: повторное чтение
+// того же файла через полчаса работы всё равно дешевле нового вызова,
+// а устаревшую запись отбраковывает не таймер, а изменившийся файл.
+var cacheStampTTL = 15 * time.Minute
 
 // cacheLimit — сколько записей держим кеш.
 const cacheLimit = 64
@@ -246,7 +403,13 @@ func (c *resultCache) get(key, stamp string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if time.Since(e.at) > cacheTTL {
+	// Запись с отпечатком живёт дольше: устаревает не таймером, а
+	// изменившимся файлом. Без отпечатка — только короткий срок.
+	limit := cacheTTL
+	if e.stamp != "" {
+		limit = cacheStampTTL
+	}
+	if time.Since(e.at) > limit {
 		c.drop(key)
 		return "", false
 	}

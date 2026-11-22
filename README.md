@@ -186,13 +186,16 @@ graph LR
 
 ## Инструменты агента
 
-34 инструмента сгруппированы по назначению; полный список с описаниями —
+38 инструментов сгруппированы по назначению; полный список с описаниями —
 в [docs/reference.md](docs/reference.md#инструменты-агента).
 
 - **Чтение и запись** — `read_file`, `write_file`, `edit_file`, `glob`,
   `grep`, `outline`, кодировка определяется автоматически;
-- **выполнение и сеть** — `bash`, `multi_bash`, фоновые процессы,
-  `web_search`, `web_fetch` c защитой от SSRF;
+- **выполнение и сеть** — `bash` (со stdin через `input`), `multi_bash`,
+  фоновые процессы, `web_search`, `web_fetch` c защитой от SSRF;
+- **компьютер** — `clipboard` (секреты маскируются), `open` (ссылка или
+  файл системным обработчиком), `notify` (уведомление на рабочем столе),
+  `screen` (снимок рабочего стола, по подтверждению);
 - **проверка и контроль** — `verify` (сборка/тесты), `git diff`,
   `think`, `remember`, `tasks`;
 - **субагенты** — делегирование волнами, контракт отчёта, заземление
@@ -232,7 +235,9 @@ gcli -mission long-time -deadline 4h -budget 500k,25 \
 | OpenRouter | `OPENROUTER_API_KEY` | 300+ моделей одним ключом |
 | OpenAI и совместимые | `OPENAI_API_KEY` | `gpt-6.2-astra`, свой `OPENAI_BASE_URL` |
 | Anthropic | `ANTHROPIC_API_KEY` | Claude, свой `ANTHROPIC_BASE_URL` |
+| Google Gemini | `GEMINI_API_KEY` | `gemini-3.8-pro`, окно 1M |
 | Ollama | — | локальные модели, без ключа |
+| Любой другой | `/provider add` | свой endpoint по OpenAI/Anthropic-протоколу; `ctx=N` — окно контекста |
 | Любой другой | `/provider add` | свой endpoint по OpenAI/Anthropic-протоколу |
 
 `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`,

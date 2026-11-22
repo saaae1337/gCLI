@@ -827,6 +827,19 @@ func (r *Registry) hMultiBash(ctx context.Context, m map[string]any) (Result, er
 // Ненулевой код выхода считается провалом: hBash отдаёт его текстом, и если
 // не разобрать метку, пачка рапортует «3 успешно» про две упавшие команды —
 // а это ровно тот вывод, на котором модель потом строит неверный вывод.
+// bashExitCode — код выхода команды из пачки.
+//
+// Структурное поле ExitCode главнее: раньше успех определялся только по
+// текстовой метке «[код выхода: N]» в выводе, и любая правка формата
+// вывода hBash ломала сводку пачки. Разбор текста остался фолбэком для
+// результатов без поля — например, от расширений.
+func bashExitCode(res Result) int {
+	if res.ExitCode == 0 && strings.Contains(res.Text, "[код выхода:") {
+		return exitCodeFrom(res.Text)
+	}
+	return res.ExitCode
+}
+
 func renderBashBatch(items []batchItem, maxOut int) (string, string) {
 	var b strings.Builder
 	ok, failed := 0, 0
@@ -840,7 +853,7 @@ func renderBashBatch(items []batchItem, maxOut int) (string, string) {
 		case strings.TrimSpace(it.warn) != "":
 			failed++
 			fmt.Fprintf(&b, "%s\n\n", it.warn)
-		case exitCodeFrom(it.res.Text) != 0:
+		case bashExitCode(it.res) != 0:
 			// Вывод печатаем целиком (кроме усечения): именно stderr
 			// объясняет, почему код ненулевой. Бросать его ценой одного
 			// абзаца ошибки — значит отдать модели «упало» без причины.

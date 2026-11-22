@@ -95,6 +95,20 @@ func Presets() []*Provider {
 			ContextLimit: 200_000,
 		},
 		{
+			// Google Gemini через OpenAI-совместимый слой
+			// generativelanguage.googleapis.com/openai: тот же протокол
+			// openai, свой ключ и каталог моделей — отдельный пресет
+			// вместо «только через OpenRouter».
+			ID: "gemini", Label: "Google Gemini", Kind: ProtoOpenAI,
+			BaseURL: EnvOr("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/openai/v1"),
+			KeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+			Models:  []string{"gemini-3.8-pro", "gemini-3.8-flash", "gemini-3.5-flash"},
+			// Окна gemini-3.x (1M) покрываются префиксным правилом
+			// в ctxlimit.go; здесь задаётся нижняя граница для моделей
+			// вне правила.
+			ContextLimit: 1_000_000,
+		},
+		{
 			ID: "deepseek", Label: "DeepSeek", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 			KeyEnvs:      []string{"DEEPSEEK_API_KEY"},
@@ -234,6 +248,12 @@ func Build(cfg core.Config) *Registry {
 		}
 		if pc.BaseURL != "" {
 			p.BaseURL = pc.BaseURL
+		}
+		// Окно контекста своего endpoint-а: /provider add ... ctx=N.
+		// Пресеты не переопределяются пустым значением — ноль означает
+		// «в конфиге не задано», а не «окна нет».
+		if pc.ContextLimit > 0 {
+			p.ContextLimit = pc.ContextLimit
 		}
 		if pc.APIKey != "" {
 			p.Key = pc.APIKey
