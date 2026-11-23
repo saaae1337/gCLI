@@ -47,9 +47,9 @@ func TestBannerShowsSession(t *testing.T) {
 			t.Errorf("в баннере нет %q:\n%s", want, clean)
 		}
 	}
-	// Бокс со скруглёнными углами и брендовый «✻».
-	if !strings.Contains(clean, "╭") || !strings.Contains(clean, "╰") || !strings.Contains(clean, "✻") {
-		t.Errorf("баннер должен быть боксом Claude Code с «✻»:\n%s", clean)
+	// Баннер - обычный текст: без бокса и без брендовых значков.
+	if strings.Contains(clean, "╭") || strings.Contains(clean, "╰") || strings.Contains(clean, "✻") {
+		t.Errorf("баннер не должен рисовать бокс или маскота:\n%s", clean)
 	}
 	if strings.Contains(clean, "/\\_/\\") || strings.Contains(clean, "> ^ <") {
 		t.Errorf("баннер не должен рисовать маскота:\n%s", clean)

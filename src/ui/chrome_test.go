@@ -153,7 +153,7 @@ func TestLiveRegionDrawsInputBox(t *testing.T) {
 }
 
 // TestLiveRegionMenu - pop-up меню команд рисуется над полем ввода,
-// выбранный пункт отмечается «❯» и акцентом.
+// выбранный пункт отмечается «>» и акцентом.
 func TestLiveRegionMenu(t *testing.T) {
 	u, buf := chromeUI(t, 60)
 	u.LiveStart(`Try "/help"`)
@@ -163,7 +163,7 @@ func TestLiveRegionMenu(t *testing.T) {
 		{Name: "/status", Desc: "состояние сессии"},
 	}, 1)
 	out := StripANSI(buf.String())
-	for _, want := range []string{"/help", "эта справка", "/status", "❯"} {
+	for _, want := range []string{"/help", "эта справка", "/status", ">"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("в меню нет %q:\n%s", want, out)
 		}
@@ -171,7 +171,7 @@ func TestLiveRegionMenu(t *testing.T) {
 	// Выбор на втором пункте: он идёт с курсором, первый - без.
 	lines := strings.Split(out, "\n")
 	for i, l := range lines {
-		if strings.Contains(l, "/status") && !strings.Contains(l, "❯") {
+		if strings.Contains(l, "/status") && !strings.Contains(l, "> ") {
 			t.Errorf("выбранный пункт без курсора (строка %d):\n%s", i, out)
 		}
 	}
@@ -201,7 +201,7 @@ func TestLiveRegionBusyLine(t *testing.T) {
 	u.spin = true
 	u.spinT0 = time.Now().Add(-2 * time.Second)
 	u.liveBusy = "Pondering"
-	u.liveMark = "✻"
+	u.liveMark = "|"
 	u.flushLiveLocked()
 	u.mu.Unlock()
 	out := StripANSI(buf.String())

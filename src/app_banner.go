@@ -15,73 +15,58 @@ func osGOOS() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
 func osArch() string { return runtime.Version() }
 
-// banner - приветственный экран в стиле Claude Code: скруглённый бокс
-// «✻ Welcome to gCLI», подсказки, каталог, модель. Ничего лишнего между
-// человеком и рабочим окном.
+// banner - приветственный экран в стиле Claude Code: жирная строка
+// приветствия, подсказка, каталог и модель. Без бокса и без брендовых
+// значков: приветствие - обычный текст, который можно выделить и скопировать.
 func (a *app) banner() {
 	if a.quiet {
 		return
 	}
-	g := a.ui.Glyphs()
 
-	// Строки бокса: бренд, подсказка, каталог, модель. Ширина бокса -
-	// по самой длинной строке плюс воздух, но не шире терминала.
-	title := a.ui.Accent(g.Mark) + " " + a.ui.Head("Welcome to gCLI v"+version()) + "!"
-	tips := a.ui.Gray("/help for help, /status for your current setup")
-	cwd := a.ui.Gray("cwd: ") + a.workDir
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Head("Welcome to gCLI v"+version()))
+	a.ui.Println("")
+	a.ui.Println("  " + a.ui.Gray("/help for help, /status for your current setup"))
+	a.ui.Println("")
+	a.ui.Println(a.ui.Gray("cwd: ") + a.workDir)
 	prov, _ := a.providerModel()
 	label := ""
 	if prov != nil {
 		label = prov.Label
 	}
-	model := a.ui.Gray("model: ") + a.ui.Accent(a.model) + a.ui.Gray(" · "+label)
-
-	lines := []string{title, "", "  " + tips, "", cwd, model}
-	// Нет ключа - предупреждаем в боксе: это первое, что надо исправить.
-	if !a.prov.HasKey() {
-		lines = append(lines,
-			a.ui.Gray("key:  ")+a.ui.Paint(a.ui.Pal().Warn, "не задан - /setup"))
+	if label != "" {
+		a.ui.Println(a.ui.Gray("model: ") + a.model + a.ui.Gray(" · "+label))
+	} else {
+		a.ui.Println(a.ui.Gray("model: ") + a.model)
 	}
 	// Режимы - последним рядом: агент, план, автопилот, песочница.
 	if chips := a.modeChips(); chips != "" {
-		lines = append(lines, a.ui.Gray("mode: ")+chips)
+		a.ui.Println(a.ui.Gray("mode: ") + chips)
+	}
+	// Нет ключа - предупреждаем сразу: это первое, что надо исправить.
+	if !a.prov.HasKey() {
+		a.ui.Println(a.ui.Gray("key:  ") + a.ui.Paint(a.ui.Pal().Warn, "не задан - /setup"))
 	}
 
-	inner := 0
-	for _, l := range lines {
-		if n := ui.VisibleWidth(l); n > inner {
-			inner = n
-		}
-	}
-	if max := a.ui.Width() - 6; inner > max {
-		inner = max
-	}
-	if inner < 24 {
-		inner = 24
-	}
-
-	var b strings.Builder
-	b.WriteString(" " + a.ui.Gray(g.TL+strings.Repeat(g.H, inner+2)+g.TR) + "\n")
-	for _, l := range lines {
-		pad := inner - ui.VisibleWidth(l)
-		if pad < 0 {
-			pad = 0
-		}
-		b.WriteString(" " + a.ui.Gray(g.V) + " " + l + strings.Repeat(" ", pad) + " " + a.ui.Gray(g.V) + "\n")
-	}
-	b.WriteString(" " + a.ui.Gray(g.BL+strings.Repeat(g.H, inner+2)+g.BR) + "\n")
-	a.ui.Print(b.String())
-
-	// Замечания старта - приглушённым списком под боксом. setupNotes
-	// уже содержит startupNotes на момент последней сборки реестра:
-	// печать обоих списков дублировала бы каждое замечание.
+	// Замечания старта - приглушённым списком, без дублирования: заметка
+	// может прийти и через setupNotes, и через startupNotes, а печатать
+	// её дважды - прямой путь к «вырвиглазному» старту.
+	seen := map[string]bool{}
 	for _, n := range a.setupNotes {
+		key := strings.TrimSpace(n)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
 		a.ui.Info(n)
 	}
 	for _, n := range a.startupNotes {
-		if _, dup := notesSeen(a.setupNotes, n); !dup {
-			a.ui.Info(n)
+		key := strings.TrimSpace(n)
+		if key == "" || seen[key] {
+			continue
 		}
+		seen[key] = true
+		a.ui.Info(n)
 	}
 	if a.pool.Enabled() {
 		a.ui.Info(a.ui.Gray("субагенты подключены - /agents"))
@@ -268,14 +253,4 @@ func testKeyFor(a *app, p *providers.Provider) (bool, string) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-// notesSeen - есть ли заметка в списке (для дедупликации в баннере).
-func notesSeen(list []string, n string) (int, bool) {
-	for i, v := range list {
-		if v == n {
-			return i, true
-		}
-	}
-	return -1, false
 }

@@ -24,8 +24,12 @@ func TestTitleFlatStyle(t *testing.T) {
 	u, buf := uiAt(ColorNone, 60)
 	u.Title("Заголовок")
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "⏺") || !strings.Contains(out, "Заголовок") {
-		t.Errorf("заголовок должен быть помечен ромбом:\n%s", out)
+	if !strings.Contains(out, "Заголовок") {
+		t.Errorf("заголовок потерян:\n%s", out)
+	}
+	// Заголовок — просто жирный текст: никаких маркеров и линеек.
+	if strings.Contains(out, "*") || strings.Contains(out, "─") {
+		t.Errorf("заголовок разукрашен:\n%s", out)
 	}
 	if strings.Contains(out, "+") || strings.Contains(out, "+-") {
 		t.Errorf("рамка в заголовке не нужна:\n%s", out)
@@ -48,9 +52,9 @@ func TestRailKeepsResultAligned(t *testing.T) {
 			t.Errorf("строка %d шире терминала (%d > 70): %q", i, w, l)
 		}
 	}
-	// Вызов и результат связаны «зубцом» на том же поле.
-	if !strings.Contains(StripANSI(lines[1]), u.emberTickOf()) {
-		t.Errorf("в строке результата нет зубца: %q", lines[1])
+	// Вызов и результат связаны отступом: результат смещён под вызов.
+	if !strings.HasPrefix(StripANSI(lines[1]), "    ") {
+		t.Errorf("строка результата без отступа под вызовом: %q", lines[1])
 	}
 }
 
@@ -123,8 +127,9 @@ func TestRailPushPopIndents(t *testing.T) {
 	if !strings.HasPrefix(StripANSI(lines[1]), "  | ") {
 		t.Errorf("во вложенном вызове нет дополнительного рельса:\n%s", buf.String())
 	}
-	if !strings.HasPrefix(StripANSI(lines[0]), "  ⏺") {
-		t.Errorf("базовый вызов должен начинаться с отступа 2:\n%s", buf.String())
+	// Маркер вызова - «*» акцентом; в терминале без цвета — простой «*».
+	if !strings.HasPrefix(StripANSI(lines[0]), "  *") {
+		t.Errorf("базовый вызов должен начинаться с отступа 2 и «*»:\n%s", buf.String())
 	}
 	// После выхода из вложенности отступ возвращается.
 	if strings.HasPrefix(StripANSI(lines[2]), "  | ") {
@@ -137,8 +142,12 @@ func TestRailEndChainCloses(t *testing.T) {
 	u.ToolStart(ToolCall{Name: "grep", Args: "TODO", Kind: "read"})
 	u.RailEndChain("готово")
 	out := buf.String()
-	if !strings.Contains(StripANSI(out), "⎿") {
-		t.Errorf("серия вызовов должна закрываться зубцом:\n%s", out)
+	if !strings.Contains(StripANSI(out), "готово") {
+		t.Errorf("серия вызовов должна закрываться строкой результата:\n%s", out)
+	}
+	// Результат — без декоративного зубца, просто с отступом.
+	if strings.Contains(StripANSI(out), "⎿") {
+		t.Errorf("зубцов быть не должно:\n%s", out)
 	}
 }
 
@@ -199,23 +208,6 @@ func TestColorLevelApplied(t *testing.T) {
 		if u.ColorLevel() != want {
 			t.Errorf("уровень цвета = %v, ожидалось %v", u.ColorLevel(), want)
 		}
-	}
-}
-
-func TestGradientOnlyWithRichColor(t *testing.T) {
-	// Без цвета градиент - обычный текст.
-	u, _ := uiAt(ColorNone, 60)
-	if got := u.Gradient("текст", [3]int{1, 2, 3}, [3]int{4, 5, 6}); got != "текст" {
-		t.Errorf("без цвета градиент должен вернуть исходный текст, получено %q", got)
-	}
-	// В truecolor - escape-последовательности с настоящим градиентом.
-	u, _ = uiAt(ColorRGB, 60)
-	got := u.Gradient("abc", [3]int{255, 0, 0}, [3]int{0, 0, 255})
-	if !strings.Contains(got, "\033[38;2;") {
-		t.Errorf("ожидался truecolor-код, получено %q", got)
-	}
-	if StripANSI(got) != "abc" {
-		t.Errorf("градиент изменил текст: %q", StripANSI(got))
 	}
 }
 

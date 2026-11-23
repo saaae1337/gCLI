@@ -20,16 +20,12 @@ type BlockOpts struct {
 	Framed bool
 }
 
-// Block - блок в стиле «УГОЛЬ»: ромб-маркер и линия вправо, без рамки.
+// Block - блок в стиле Claude Code: жирный заголовок, тело с отступом,
+// без маркеров, линеек и рамок.
 //
-//   - Заголовок -----------------
-//     тело
-//     ...
-//
-// Форма заимствована у Claude Code, но с поправкой на собственный примитив:
-// линия не рамка (тело не «заперто» в прямоугольник) и не стержень (нет
-// вертикали, которая превращалась бы в рельс вызовов). Зато по заголовку
-// сразу видно, где начинается самостоятельный блок.
+//	Заголовок
+//	  тело
+//	  ...
 func (u *UI) Block(content string, o BlockOpts) {
 	// Рамка вокруг блока: данные отделены от потока ответа.
 	if u.opts.Panels || o.Framed {
@@ -48,13 +44,10 @@ func (u *UI) Block(content string, o BlockOpts) {
 	}
 	var b strings.Builder
 
-	// Маркер у заголовка один - ромб темы. Отдельная иконка рядом с ним
-	// удваивала символ («* * Навыки») и читалась как баг.
 	title := o.Title
 	plain := StripANSI(title)
 
-	// Тело смещено на четыре знакоместа: маркер, пробел и ещё пара пробелов
-	// на ступень вправо. Ширина считается по той же ступени.
+	// Тело смещено на четыре знакоместа: заголовок - на два.
 	inner := u.Width() - 4
 	if inner < 8 {
 		inner = 8
@@ -62,26 +55,9 @@ func (u *UI) Block(content string, o BlockOpts) {
 	lines := u.contentLines(content, inner)
 
 	if plain != "" {
-		mark := u.emberMark(u.pal.Accent)
-		head := u.Head(plain)
-		if o.Accent {
-			head = u.c(u.pal.Accent, plain)
-		}
-		used := 2 + 1 + 1 + cellWidth(plain)
-		avail := u.Width() - used
-		switch {
-		case o.Subtitle != "" && avail > cellWidth(o.Subtitle)+8:
-			// Подзаголовок прижат к правому краю, хвост - линией.
-			fill := avail - cellWidth(o.Subtitle)
-			b.WriteString("  " + mark + " " + head +
-				u.emberRuleTail(fill) + o.Subtitle + "\n")
-		case o.Subtitle == "" && avail >= 12:
-			b.WriteString("  " + mark + " " + head + " " + u.emberRule(avail-1) + "\n")
-		case o.Subtitle != "":
-			b.WriteString("  " + mark + " " + head + "\n")
+		b.WriteString("  " + u.Head(plain) + "\n")
+		if o.Subtitle != "" {
 			b.WriteString("    " + u.c(u.pal.Muted, o.Subtitle) + "\n")
-		default:
-			b.WriteString("  " + mark + " " + head + "\n")
 		}
 	}
 
@@ -164,8 +140,8 @@ type Column struct {
 	Right bool // выравнивание вправо
 }
 
-// Table - таблица в стиле «УГОЛЬ»: колонки разделяет точка,
-// как в Claude Code. Сплошной вертикальный разделитель здесь только шумит:
+// Table - таблица в стиле Claude Code: приглушённые заголовки колонок,
+// колонки разделяют два пробела. Никаких маркеров над таблицей и рамок:
 // данные и так читаются по ширине столбцов.
 func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 	if len(cols) == 0 {
@@ -198,22 +174,15 @@ func (u *UI) Table(cols []Column, rows [][]string, o BlockOpts) {
 	var out strings.Builder
 	// В рамке заголовок живёт в верхней границе, а не отдельной строкой.
 	framed := o.Framed || u.opts.Panels
-	// Один маркер на заголовок - как в Block: без дополнительной иконки.
 	title := o.Title
 	plain := StripANSI(title)
 	if plain != "" && !framed {
-		head := u.Head(plain)
-		used := 2 + 1 + 1 + cellWidth(plain)
-		avail := u.Width() - used
-		if avail >= 12 {
-			head = head + " " + u.emberRule(avail-1)
-		}
-		out.WriteString("  " + u.emberMark(u.pal.Accent) + " " + head + "\n")
+		out.WriteString("  " + u.Head(plain) + "\n")
 	}
 
-	sep := " " + u.c(u.pal.Muted, u.g.Dot) + " "
+	sep := "  "
 
-	// Заголовки колонок - приглушённые, разделитель между ними - точка.
+	// Заголовки колонок - приглушённые.
 	var hb strings.Builder
 	if !framed {
 		hb.WriteString("  ")

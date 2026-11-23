@@ -1500,7 +1500,7 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	// гасит строку, конец хода - тоже.
 	if !a.quiet {
 		// Эхо запроса: как в Claude Code, запрос остаётся в стенке вывода,
-		// отделяя ходы друг от друга. Строка ожидания - «✻ Pondering…».
+		// отделяя ходы друг от друга. Строка ожидания - «| Pondering…».
 		a.ui.UserEcho(text)
 		a.ui.ShimmerStart("")
 	}

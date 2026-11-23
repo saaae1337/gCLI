@@ -229,10 +229,11 @@ func (u *UI) Panel(content string, o PanelOpts) {
 	u.emit(b.String())
 }
 
-// KVPanel - список «параметр: значение» внутри панели.
+// KVPanel - список «параметр: значение» с заголовком.
 //
-// Тот же список, что и KVPairs, но в рамке: метрики и настройки лучше
-// читаются как карточка, а не как строки в общем потоке.
+// Раньше это была карточка в рамке; рамка вокруг каждого списка превращала
+// экран в лес боксов. В стиле Claude Code: жирный заголовок, под ним
+// выровненные строки с приглушёнными ключами.
 func (u *UI) KVPanel(title string, rows [][2]string) {
 	if u.quiet {
 		return
@@ -247,8 +248,11 @@ func (u *UI) KVPanel(title string, rows [][2]string) {
 		w = kvWidth
 	}
 	var b strings.Builder
-	for _, r := range rows {
-		b.WriteString(u.Gray(padRight(r[0], w)) + r[1] + "\n")
+	if title != "" {
+		b.WriteString("  " + u.Head(StripANSI(title)) + "\n")
 	}
-	u.Panel(strings.TrimRight(b.String(), "\n"), PanelOpts{Title: title})
+	for _, r := range rows {
+		b.WriteString("  " + u.Gray(padRight(r[0], w)) + r[1] + "\n")
+	}
+	u.emit(b.String())
 }

@@ -118,10 +118,8 @@ type UI struct {
 	spinDone chan struct{}
 	spinLbl  string
 	spinT0   time.Time
-	// spinShimmer - непустое слово включает режим перелива: строка
-	// ожидания рисуется как «( -.- ) thinking...» с цветной волной,
-	// бегущей по слову, вместо классического «кадр + метка».
-	spinShimmer string
+	// Строка ожидания. spinShimmer удалён: переливы — избыточная
+	// самодеятельность, строка ожидания рисуется текстом.
 	// spinHint - короткая подсказка справа от слова, например
 	// «(Ctrl+O - показать размышления)». Показывается, только если
 	// модель действительно присылает размышления, и исчезает сама,
@@ -222,13 +220,12 @@ func (u *UI) sink() Sink {
 // ColorLevel - текущий уровень поддержки цвета.
 func (u *UI) ColorLevel() ColorLevel { return ColorLevel(u.grade) }
 
-// AnimationsOn - разрешены ли сейчас эффекты появления.
+// AnimationsOn - включён ли флаг анимаций в опциях.
 //
-// Нужен вызывающему коду (например, интеграционным тестам запуска),
-// чтобы проверить решение про анимации, не заглядывая в пакет ui.
-// Проверяется мягкое условие (canReveal): блочный логотип есть не во
-// всех темах, а появление строк - везде.
-func (u *UI) AnimationsOn() bool { return u.canReveal() }
+// Эффекты появления удалены (строки печатаются как есть), но флаг остался
+// в Options и конфиге: вызывающий код (интеграционные тесты запуска)
+// проверяет решение про анимации этим методом, не заглядывая в пакет ui.
+func (u *UI) AnimationsOn() bool { return u.opts.Animations && u.opts.Color }
 
 // ---------- Базовый вывод ----------
 
@@ -324,8 +321,10 @@ func (u *UI) Cyan(s string) string { return u.c(u.pal.Accent, s) }
 // Gray - серый.
 func (u *UI) Gray(s string) string { return u.c(u.pal.Muted, s) }
 
-// Head - заголовок (жирный акцентом).
-func (u *UI) Head(s string) string { return u.c(u.pal.Head, s) }
+// Head - заголовок: просто жирный, без цвета. Цветные заголовки — то,
+// от чего пришлось уйти: на 16-цветных консолях они превращают интерфейс
+// в «вырвиглазную» тему.
+func (u *UI) Head(s string) string { return u.Bold(s) }
 
 // Accent - основной акцент.
 func (u *UI) Accent(s string) string { return u.c(u.pal.Accent, s) }
@@ -460,7 +459,7 @@ func (u *UI) ClearScreen() {
 
 // ---------- Сообщения ----------
 
-// Err - ошибка: красный маркер события, как «⏺» у ошибок в Claude Code.
+// Err - ошибка: красный маркер события перед текстом.
 func (u *UI) Err(s string) { u.Println("  " + u.c(u.pal.Err, u.g.Dot) + " " + u.Red(s)) }
 
 // Ok - успех: зелёный маркер события.
@@ -640,27 +639,18 @@ func (u *UI) Hint(s string) { u.Println("   " + u.Gray(s)) }
 // Plain - просто строка с отступом.
 func (u *UI) Plain(s string) { u.Println(s) }
 
-// Title - заголовок раздела верхнего уровня: ромб, имя, линия вправо.
+// Title - заголовок раздела верхнего уровня: жирный текст, без маркеров
+// и линеек — как в Claude Code, где заголовок отличает вес, а не цвет.
 func (u *UI) Title(s string) {
 	u.Println("")
-	fill := u.Width() - 2 - 1 - 1 - visibleWidth(s) - 1
-	line := ""
-	if fill >= 3 {
-		line = " " + u.emberRule(fill)
-	}
-	u.Println("  " + u.emberMark(u.pal.Accent) + " " + u.Head(s) + line)
+	u.Println("  " + u.Bold(s))
 	u.Println("")
 }
 
-// Section - заголовок раздела: ромб, имя, линия вправо до края.
+// Section - заголовок раздела. Историческое имя, стиль один с Title.
 func (u *UI) Section(s string) {
 	u.Println("")
-	fill := u.Width() - 2 - 1 - 1 - visibleWidth(s) - 1
-	line := ""
-	if fill >= 3 {
-		line = " " + u.emberRule(fill)
-	}
-	u.Println("  " + u.emberMark(u.pal.Accent) + " " + u.Head(s) + line)
+	u.Println("  " + u.Bold(s))
 	u.Println("")
 }
 
@@ -729,7 +719,7 @@ func (u *UI) Bar(done, total int, width int) string {
 
 // ---------- Спиннер ----------
 //
-// Строка ожидания в стиле Claude Code: «✻ Pondering… (esc to interrupt · 4s
+// Строка ожидания в стиле Claude Code: «| Pondering… (esc to interrupt · 4s
 // · ↓ 1.2k tok)». С живой областью она рисуется над полем ввода; без неё -
 // перерисовывается на текущей строке терминала.
 
@@ -748,7 +738,6 @@ func (u *UI) SpinnerStart(label string) {
 	}
 	u.spin = true
 	u.spinLbl = label
-	u.spinShimmer = ""
 	u.spinHint = ""
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
@@ -798,7 +787,7 @@ func (u *UI) SpinnerStart(label string) {
 }
 
 // ShimmerStart - строка ожидания в стиле Claude Code: случайный глагол
-// («✻ Pondering… (esc to interrupt · 3s)»). Аргумент word сохранён для
+// («| Pondering… (esc to interrupt · 3s)»). Аргумент word сохранён для
 // совместимости вызовов и больше не влияет на вид: глагол выбирается
 // случайно на каждый ход.
 func (u *UI) ShimmerStart(word string) {
@@ -828,7 +817,6 @@ func (u *UI) ShimmerHint(word, hint string) {
 	}
 	u.spin = true
 	u.spinLbl = word
-	u.spinShimmer = ""
 	u.spinHint = hint
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
@@ -865,7 +853,7 @@ func (u *UI) ShimmerHint(word, hint string) {
 					u.mu.Unlock()
 					continue
 				}
-				// Строка ожидания без живой области: «✻ Pondering… (esc to
+				// Строка ожидания без живой области: «| Pondering… (esc to
 				// interrupt · 4s)». Пока модель думает, видно, сколько занято
 				// контекста, и есть подсказка про Ctrl+O, если она задана.
 				parts := []string{}

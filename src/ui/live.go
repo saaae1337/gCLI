@@ -220,7 +220,7 @@ func (u *UI) liveMenuRows(w int) []string {
 			inner = n
 		}
 	}
-	inner += 4 // "❯ " слева и запас справа
+	inner += 4 // "> " слева и запас справа
 	if max := w - 6; inner > max {
 		inner = max
 	}
@@ -233,7 +233,7 @@ func (u *UI) liveMenuRows(w int) []string {
 	rows = append(rows, " "+u.c(u.pal.Muted, u.g.TL+bar+u.g.TR))
 	for i, it := range win {
 		global := lo + i
-		cursor := u.c(u.pal.Accent, "❯ ")
+		cursor := u.c(u.pal.Accent, "> ")
 		if global != sel {
 			cursor = "  "
 		}
@@ -254,7 +254,7 @@ func (u *UI) liveMenuRows(w int) []string {
 	return rows
 }
 
-// liveBusyLine - строка ожидания: «✻ Infusing… (esc to interrupt · 4s · ↓ 1.2k tok)».
+// liveBusyLine - строка ожидания: «| Infusing… (esc to interrupt · 4s · ↓ 1.2k tok)».
 func (u *UI) liveBusyLine() string {
 	el := time.Since(u.spinT0).Truncate(time.Second)
 	// Клавиша прерывания - как в Claude Code: «(esc to interrupt · 4s · ↓ 1.2k tok)».

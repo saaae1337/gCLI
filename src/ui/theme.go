@@ -274,32 +274,6 @@ func applyThemeColors(p *Palette, tc ThemeColors, grade colorLevel) {
 	set(&p.Link, tc.Link)
 }
 
-// ---------- Градиенты ----------
-
-// Gradient - раскрасить строку градиентом от одного цвета к другому.
-func (u *UI) Gradient(s string, from, to [3]int) string {
-	if s == "" || u.quiet || u.grade < color256 {
-		return s
-	}
-	r := []rune(s)
-	var b strings.Builder
-	b.Grow(len(s) * 2)
-	for i, ch := range r {
-		if ch == ' ' {
-			b.WriteRune(' ')
-			continue
-		}
-		t := 0.0
-		if len(r) > 1 {
-			t = float64(i) / float64(len(r)-1)
-		}
-		b.WriteString(codeFor(blendRGB(from, to, t), u.grade))
-		b.WriteRune(ch)
-	}
-	b.WriteString(cReset)
-	return b.String()
-}
-
 // ApplyHexes - применить пользовательские hex-цвета к теме «на лету».
 func (u *UI) ApplyHexes(tc ThemeColors) {
 	if u.grade == colorNone {

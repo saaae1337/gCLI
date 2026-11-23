@@ -77,10 +77,10 @@ func TestTableExplicitWidthTruncatesOverlongCells(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		if w := cellWidth(line); w != 17 {
-			t.Errorf("строка таблицы шириной %d вместо 17: %q", w, line)
+		if w := cellWidth(line); w != 16 {
+			t.Errorf("строка таблицы шириной %d вместо 16: %q", w, line)
 		}
-		idx := strings.Index(line, " ⏺ ")
+		idx := strings.Index(line, "  ")
 		if idx < 0 {
 			t.Fatalf("разделитель колонок не найден: %q", line)
 		}

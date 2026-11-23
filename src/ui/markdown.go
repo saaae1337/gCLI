@@ -93,9 +93,11 @@ func (u *UI) renderLine(line string, st *streamState) string {
 	// иначе закрывающий ``` печатается как обычный текст кода.
 	isFence := strings.HasPrefix(trimmed, "```")
 
-	// Внутри блока кода - моноширинный серый, без разметки.
+	// Внутри блока кода - обычный цвет терминала, без разметки.
+	// Claude Code печатает код без перекраски: строки кода читаются
+	// по ограде и отступу, а не по цвету.
 	if st.fence && !isFence {
-		return u.c(u.pal.Muted, line)
+		return line
 	}
 
 	if isFence {

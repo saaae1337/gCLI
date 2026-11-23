@@ -10,18 +10,18 @@ import (
 
 // ---------- Вызовы инструментов ----------
 //
-// Разметка Claude Code: вызов печатается маркером «⏺», результат - строкой
-// ниже с зубцом «⎿»:
+// Разметка Claude Code: вызов печатается маркером «*», результат — строкой
+// ниже с отступом:
 //
-//	⏺ read_file(src/ui/ui.go)
-//	  ⎿ 481 строка · 3ms
+//      * read_file(src/ui/ui.go)
+//        481 строка · 3ms
 //
 // Пока инструмент работает, живую строку ожидания ведёт общий спиннер.
 
-// RailStart - заголовок вызова инструмента: «⏺ Name(args)».
+// RailStart - заголовок вызова инструмента: «* Name(args)».
 func (u *UI) RailStart(tc ToolCall) {
-	// Имя инструмента - обычным цветом терминала, аргументы - приглушённым:
-	// глаз цепляется за маркер события и путь, а не за оформление.
+	// Маркер вызова - акцентом (живой элемент), имя - обычным цветом,
+	// аргументы - приглушённым.
 	name := tc.Name
 	if name == "" {
 		name = toolKind(tc.Name)
@@ -38,16 +38,15 @@ func (u *UI) RailStart(tc ToolCall) {
 	u.Println(indent + u.emberMark(u.pal.Accent) + " " + name + u.Gray(args))
 }
 
-// RailEnd - строка результата под вызовом: «⎿ 481 строка · 3ms».
+// RailEnd - строка результата под вызовом: отступ, приглушённый текст.
 func (u *UI) RailEnd(tc ToolCall) {
 	text := core.OneLine(tc.Detail)
 	if text == "" {
 		text = "готово"
 	}
-	// «Зубец» прижат к тому же левому полю, что и маркер, и всегда
-	// приглушён: результат - фон события, а не второе событие. Цвет текста
-	// говорит о статусе: успех - приглушённый, ошибка - красный, отказ -
-	// янтарный.
+	// Результат - фон события, а не второе событие: смещение под вызов,
+	// приглушённый цвет. Красным или янтарным остаются только ошибки и
+	// отказы, чтобы их было видно в потоке.
 	color := u.pal.Muted
 	switch tc.Status {
 	case "fail", "error":
@@ -63,7 +62,7 @@ func (u *UI) RailEnd(tc ToolCall) {
 		meta = append(meta, core.HumanDuration(tc.Elapsed))
 	}
 	indent := u.railIndent()
-	used := visibleWidth(indent) + visibleWidth(u.g.Tick) + 2
+	used := visibleWidth(indent) + 2
 	tail := ""
 	if len(meta) > 0 {
 		tail = u.c(u.pal.Muted, " · "+strings.Join(meta, " · "))
@@ -76,16 +75,16 @@ func (u *UI) RailEnd(tc ToolCall) {
 	if avail < 8 {
 		avail = 8
 	}
-	u.RevealLine(indent + u.emberTail() + " " + u.c(color, truncate(text, avail)) + tail)
+	u.RevealLine(indent + "  " + u.c(color, truncate(text, avail)) + tail)
 }
 
-// RailEndChain - закрыть серию вызовов (последний зубец).
+// RailEndChain - закрыть серию вызовов (последняя строка результата).
 func (u *UI) RailEndChain(note string) {
 	if note == "" {
 		note = "готово"
 	}
 	u.SpinnerStop()
-	u.Println("  " + u.emberTail() + " " + u.Gray(core.OneLine(note)))
+	u.Println("    " + u.Gray(core.OneLine(note)))
 }
 
 // railOn - вертикаль вложенного рельса, railGap - шаг отступа.
@@ -132,22 +131,17 @@ func (u *UI) RailPop() {
 func (u *UI) ThinkNote(text string) {
 	u.SpinnerStop()
 	for i, l := range wrap(core.OneLine(text), u.Width()-6) {
-		mark := u.emberTail()
 		if i == 0 {
-			mark = u.emberMark(u.pal.Muted)
+			u.Println("  " + u.emberMark(u.pal.Muted) + " " + u.Italic(u.c(u.pal.Muted, l)))
+			continue
 		}
-		u.Println("  " + mark + " " + u.Italic(u.c(u.pal.Muted, l)))
+		u.Println("    " + u.Italic(u.c(u.pal.Muted, l)))
 	}
 }
 
-// ElapsedColor - цвет для времени выполнения (быстрые - зелёные, долгие - жёлтые).
+// ElapsedColor - цвет для времени выполнения. Удалён из оформления:
+// время - приглушённый текст, а не светофор. Оставлено как заглушка для
+// совместимости и возвращает нейтральный серый.
 func (u *UI) ElapsedColor(d time.Duration) string {
-	switch {
-	case d < 500*time.Millisecond:
-		return u.pal.OK
-	case d < 3*time.Second:
-		return u.pal.Warn
-	default:
-		return u.pal.Err
-	}
+	return u.pal.Muted
 }

@@ -40,51 +40,47 @@ func TestNormalizeThemeEmber(t *testing.T) {
 	}
 }
 
-// Глифы Claude Code: брендовый «✻» и «зубец» результата «⎿», ASCII-фолбэк.
+// Глифы: спокойный набор без брендовых значков, ASCII-фолбэк.
 func TestEmberGlyphs(t *testing.T) {
 	g := emberGlyphs()
-	if g.Mark != "✻" {
-		t.Errorf("брендовый знак юникода = %q, ожидался ✻", g.Mark)
+	// Маскот убран: брендовых знаков и зубцов нет.
+	if g.Mark != "" || g.Tick != "" {
+		t.Errorf("брендовые знаки должны быть пусты: mark=%q tick=%q", g.Mark, g.Tick)
 	}
-	if g.Tick != "⎿" {
-		t.Errorf("зубец юникода = %q, ожидался ⎿", g.Tick)
-	}
-	if g.Dot != "⏺" {
-		t.Errorf("маркер события = %q, ожидался ⏺", g.Dot)
+	if g.Dot != "*" {
+		t.Errorf("маркер события = %q, ожидался '*'", g.Dot)
 	}
 	a := emberASCIIGlyphs()
 	if !isASCIIString(a.Mark + a.Tick + a.Dot) {
 		t.Errorf("ASCII-набор не должен содержать юникод-глифы: mark=%q tick=%q", a.Mark, a.Tick)
 	}
-	if a.Mark != "*" || a.Tick != ":" {
-		t.Errorf("ASCII-набор = %q/%q, ожидались '*' и ':'", a.Mark, a.Tick)
-	}
 }
 
-// В ASCII-режиме «зубец» не должен оставлять юникод-кракозябру.
+// В ASCII-режиме «зубец» пуст: результат смещается отступом.
 func TestEmberTickASCII(t *testing.T) {
 	u, _ := emberASCIIUI()
-	if tick := u.emberTickOf(); !isASCIIString(tick) {
-		t.Errorf("ASCII-зубец содержит юникод: %q", tick)
+	if tick := u.emberTickOf(); tick != "" {
+		t.Errorf("ASCII-зубец должен быть пуст, получено %q", tick)
 	}
 	u2, _ := emberUI()
-	if tick := u2.emberTickOf(); tick != "⎿" {
-		t.Errorf("юникод-зубец = %q, ожидался ⎿", tick)
+	if tick := u2.emberTickOf(); tick != "" {
+		t.Errorf("юникод-зубец должен быть пуст, получено %q", tick)
 	}
 }
 
-// GlyphsFor/SpinnerFor обязаны возвращать набор «УГЛА» по теме.
+// GlyphsFor/SpinnerFor обязаны возвращать спокойный набор по теме.
 func TestEmberGlyphsFor(t *testing.T) {
 	g := GlyphsFor("ember", true)
-	if g.Mark != "✻" {
-		t.Errorf("GlyphsFor(ember) маркер = %q, ожидался ✻", g.Mark)
+	if g.Mark != "" {
+		t.Errorf("GlyphsFor(ember) маркер = %q, ожидалась пустота (без маскота)", g.Mark)
 	}
 	if GlyphsFor("coal", false).Unicode {
 		t.Error("алиас «coal» без юникода должен вернуть ASCII-набор")
 	}
 	sp := SpinnerFor("ember", true)
-	if len(sp) == 0 || sp[0] != "✻" {
-		t.Errorf("спиннер Claude Code = %v, ожидались ✻✽✶", sp)
+	// Спиннер — классическая палочка: один набор на все термины.
+	if len(sp) == 0 || sp[0] != "|" {
+		t.Errorf("спиннер = %v, ожидалась палочка |/-\\", sp)
 	}
 	if sp2 := SpinnerFor("ember", false); sp2[0] != "|" {
 		t.Errorf("ASCII-спиннер = %v, ожидалась палочка", sp2)
@@ -102,30 +98,30 @@ func TestEmberPaletteAt16(t *testing.T) {
 	}
 }
 
-// Блок «УГЛА»: ромб в шапке, тело со сдвигом, без рамок.
+// Блок: жирная шапка, тело со сдвигом, без маркеров и рамок.
 func TestEmberBlock(t *testing.T) {
 	u, buf := emberUI()
 	u.Block("строка один\nстрока два", BlockOpts{Title: "Заголовок"})
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "⏺") {
-		t.Errorf("шапка блока должна начинаться с маркера события:\n%s", out)
-	}
 	if !strings.Contains(out, "Заголовок") || !strings.Contains(out, "строка один") {
 		t.Errorf("блок потерял содержимое:\n%s", out)
+	}
+	if strings.Contains(out, "*") {
+		t.Errorf("шапке блока маркер не нужен:\n%s", out)
 	}
 	if strings.Contains(out, "+") {
 		t.Errorf("плоской теме рамки не нужны:\n%s", out)
 	}
 }
 
-// Таблица «УГЛА»: колонки разделяет точка.
+// Таблица: колонки выровнены пробелами, без декоративных разделителей.
 func TestEmberTable(t *testing.T) {
 	u, buf := emberUI()
 	u.Table([]Column{{Title: "имя", Width: 10}, {Title: "год", Width: 6, Right: true}},
 		[][]string{{"uno", "1"}, {"dos", "2"}}, BlockOpts{Title: "Т"})
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "⏺") {
-		t.Errorf("колонки должны разделяться маркером события:\n%s", out)
+	if strings.Contains(out, "⏺") || strings.Contains(out, "·") {
+		t.Errorf("декоративных разделителей быть не должно:\n%s", out)
 	}
 	if !strings.Contains(out, "uno") || !strings.Contains(out, "dos") {
 		t.Errorf("таблица потеряла строки:\n%s", out)
@@ -185,26 +181,22 @@ func TestEmberRail(t *testing.T) {
 	if !strings.Contains(out, "read_file") {
 		t.Errorf("нет вызова инструмента:\n%s", out)
 	}
-	if !strings.Contains(out, "⎿") {
-		t.Errorf("результат должен идти с «зубцом»:\n%s", out)
+	if !strings.Contains(out, "готово") {
+		t.Errorf("нет строки результата под вызовом:\n%s", out)
 	}
 }
 
-// Появление строк работает в «УГЛЕ» - но требует цвета.
+// Строки печатаются как есть: анимации появления удалены.
 func TestEmberRevealVsAnimate(t *testing.T) {
-	// Появление строк требует цвета (затуханию нечему гаситься без него).
-	// Grade задан явно: без него New() уходит в detectColorLevel(), который
-	// в окружении с NO_COLOR=1 или TERM=dumb (CI-песочницы) отдаёт colorNone
-	// - и тест завязан на переменные среды, а не на логику пакета.
 	buf := &strings.Builder{}
 	u := New(Options{Theme: "ember", Unicode: true, Color: true, Grade: Color16, Animations: true, Width: 60, Out: buf})
-	if !u.canReveal() {
-		t.Error("появление строк должно работать и в «УГЛЕ»")
+	u.RevealLine("строка")
+	out := buf.String()
+	if strings.Contains(out, "\r\033[K") {
+		t.Errorf("перерисовок быть не должно:\n%q", out)
 	}
-	// А без цвета затухания нет - строки печатаются сразу.
-	u2, _ := emberUI()
-	if u2.canReveal() {
-		t.Error("без цвета появление строк отключается")
+	if !strings.Contains(StripANSI(out), "строка") {
+		t.Errorf("строка потеряна:\n%q", out)
 	}
 }
 
