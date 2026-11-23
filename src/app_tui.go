@@ -147,9 +147,6 @@ func (a *app) startTUI() bool {
 		Color:    a.ui.ColorLevel() != 0,
 		Colors:   tuiColors(a.ui.ColorLevel()),
 		Unicode:  true,
-		// GCLI_MASCOT=0 и настройка mascot в конфиге действуют и здесь:
-		// заставка — единственное место, где кот виден в TUI.
-		HideMascot: !a.ui.Mascot(),
 		// Автономные итерации — бейдж в строке статуса TUI.
 		CronEnabled: a.cronEnabled,
 		In:          os.Stdin,

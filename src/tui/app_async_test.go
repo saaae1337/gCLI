@@ -78,7 +78,7 @@ func TestFilePaletteAsyncRefresh(t *testing.T) {
 	}
 }
 
-// TestAsyncUIMethodsRace — Toast/SetMascot/SetCronEnabled обязаны
+// TestAsyncUIMethodsRace — Toast/SetCronEnabled обязаны
 // трогать dirty под мьютексом. Раньше markDirty звался после Unlock:
 // -race ловил гонку с циклом Run, читающим тот же флаг каждый тик.
 func TestAsyncUIMethodsRace(t *testing.T) {
@@ -103,9 +103,7 @@ func TestAsyncUIMethodsRace(t *testing.T) {
 				default:
 				}
 				app.Toast("т")
-				app.SetMascot(true)
 				app.SetCronEnabled(true)
-				app.SetMascot(false)
 				app.SetCronEnabled(false)
 			}
 		}()

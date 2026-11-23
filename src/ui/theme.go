@@ -203,10 +203,10 @@ type rgbTheme struct {
 	Added, Removed, Hunk    [3]int
 }
 
-// rgbThemeFor - цвета «УГЛЯ» в truecolor. Параметр оставлен для
+// rgbThemeFor - цвета темы в truecolor. Параметр оставлен для
 // совместимости сигнатур; стиль один.
 func rgbThemeFor(theme string) rgbTheme {
-	return rgbEmber
+	return rgbNight
 }
 
 // codeFor - код ANSI для truecolor-цвета на текущем уровне.

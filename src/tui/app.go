@@ -41,7 +41,6 @@ type Options struct {
 	Color       bool
 	Colors      int // 0 — truecolor, 16 или 256 — ближайшая палитра
 	Unicode     bool
-	HideMascot  bool
 	CronEnabled bool
 	Theme       Theme
 
@@ -1194,14 +1193,6 @@ func (a *App) Raw(s string) {
 	a.rend.Raw(s)
 }
 
-// SetMascot — показать или спрятать кота на заставке.
-func (a *App) SetMascot(on bool) {
-	a.mu.Lock()
-	a.opt.HideMascot = !on
-	a.markDirty()
-	a.mu.Unlock()
-}
-
 // SetCronEnabled — показать или скрыть бейдж автономных итераций в строке
 // статуса. Вызывается из /cron on|off без перезапуска интерфейса.
 func (a *App) SetCronEnabled(on bool) {
@@ -1843,10 +1834,9 @@ func (a *App) buildLocked() *Screen {
 	return s
 }
 
-// drawHeader — шапка в одну строку: бренд, модель, каталог и расход
-// контекста. Отдельная строка-разделитель под ней не нужна: панель
-// выделяется фоном, а лента начинается сразу с первой строки — на
-// низком окне лишняя полоса съедала место диалога.
+// drawHeader — шапка в одну строку: бренд, версия и каталог. Модель
+// и расход переехали в строку статуса: там они рядом с токенами и
+// деньгами, по которым человек и решает, сжать контекст или нет.
 func (a *App) drawHeader(s *Screen) {
 	t := a.th
 	s.FillLine(0, Style{BG: t.Panel})
@@ -1862,29 +1852,13 @@ func (a *App) drawHeader(s *Screen) {
 	x++
 	verText := "v" + ver
 	s.Text(x, 0, verText, Style{FG: t.Dim, BG: t.Panel})
-	x += StringWidth(verText) + 1
-	// Модель и провайдер — главные факты сессии: сразу видно, кто отвечает.
-	mid := a.opt.Model
-	if mid == "" {
-		mid = "модель не выбрана"
-	} else if a.opt.Provider != "" {
-		mid = a.opt.Provider + " / " + mid
-	}
-	midS := Style{FG: t.Accent2, BG: t.Panel}
-	s.Text(x, 0, Truncate(mid, maxInt(8, a.w/3-x)), midS)
-	x += StringWidth(Truncate(mid, maxInt(8, a.w/3-x))) + 1
+	x += StringWidth(verText) + 2
 	// Каталог — только если помещается: на узком экране важнее шапка.
 	if cwd := a.opt.WorkDir; cwd != "" {
-		room := a.w - 16 - x - 8
+		room := a.w - 8 - x
 		if room >= 10 {
-			s.Text(x, 0, Truncate(cwd, room), Style{FG: t.Dim, BG: t.Panel})
+			s.Text(x, 0, Truncate(cwd, room), Style{FG: t.Muted, BG: t.Panel})
 		}
-	}
-	// Правая часть: расход контекста мини-баром.
-	right := a.ctxBar()
-	rx := a.w - StringWidth(right) - 1
-	if rx > x+4 {
-		s.Text(rx, 0, right, Style{FG: t.Muted, BG: t.Panel})
 	}
 }
 
@@ -2011,28 +1985,18 @@ func (a *App) drawLine(s *Screen, x, y int, l Line, w int) {
 	}
 }
 
-// drawWelcome — заставка: кот, бренд, каталог, модель и подсказки.
+// drawWelcome — заставка: выровнена влево, как в OpenCode. Бренд,
+// подпись, факты сессии и стартовые подсказки — без центрирования и
+// без рамок: это начало разговора, а не титульный лист.
 func (a *App) drawWelcome(s *Screen, top, h int) {
 	lines := a.welcomeLines()
 	if len(lines) == 0 {
 		return
 	}
-	// Вертикальный центр с лёгким сдвигом вверх.
-	y := top + (h-len(lines))/2 - 1
-	if y < top {
-		y = top
-	}
-	// Горизонтальный центр по самой широкой строке: центрировать строки
-	// отдельно нельзя — строки разной длины разъезжаются лесенкой.
-	maxW := 0
-	for _, l := range lines {
-		if w := l.Width(); w > maxW {
-			maxW = w
-		}
-	}
-	x := (a.w - maxW) / 2
-	if x < 1 {
-		x = 1
+	x := 3
+	y := top + 1
+	if h > len(lines)+6 {
+		y = top + 2
 	}
 	for i, l := range lines {
 		if y+i >= top+h {
@@ -2046,19 +2010,11 @@ func (a *App) drawWelcome(s *Screen, top, h int) {
 func (a *App) welcomeLines() []Line {
 	t := a.th
 	var out []Line
-	// Кот — три строки ASCII, только если включён и есть место.
-	if !a.opt.HideMascot && a.w >= 40 && a.h >= 16 {
-		cat := mascotLines(a.mascotState())
-		for _, cl := range cat {
-			out = append(out, Line{{Text: cl, S: Style{FG: t.Gold, BG: t.Bg}}})
-		}
-		out = append(out, Line{})
-	}
 	brand := Line{}
 	brand = append(brand, wordmarkOn(t, "gcli", t.Bg)...)
 	brand = append(brand, Seg{Text: "  " + version(a.opt.Version), S: Style{FG: t.Dim, BG: t.Bg}})
 	out = append(out, brand)
-	out = append(out, Line{{Text: "агент в терминале", S: Style{FG: t.Muted, BG: t.Bg}}})
+	out = append(out, Line{{Text: "ИИ-агент в терминале", S: Style{FG: t.Muted, BG: t.Bg}}})
 	out = append(out, Line{})
 	cwd := a.opt.WorkDir
 	if cwd == "" {
@@ -2080,7 +2036,7 @@ func (a *App) welcomeLines() []Line {
 		{Text: Truncate(model, 52), S: Style{FG: t.Accent2, BG: t.Bg}},
 	})
 	out = append(out, Line{})
-	out = append(out, Line{{Text: "с чего начать", S: Style{FG: t.Muted, BG: t.Bg, Bold: true}}})
+	out = append(out, Line{{Text: "попробуй", S: Style{FG: t.Muted, BG: t.Bg, Bold: true}}})
 	tips := []string{
 		"почини тесты в ./src",
 		"найди, где считается итог заказа",
@@ -2094,67 +2050,14 @@ func (a *App) welcomeLines() []Line {
 	}
 	out = append(out, Line{})
 	out = append(out, Line{
-		{Text: "/help", S: Style{FG: t.Gold, BG: t.Bg}},
-		{Text: " команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
-		{Text: "ctrl+enter", S: Style{FG: t.Gold, BG: t.Bg}},
-		{Text: " отправить   ", S: Style{FG: t.Dim, BG: t.Bg}},
-		{Text: "ctrl+o", S: Style{FG: t.Gold, BG: t.Bg}},
+		{Text: "/help", S: Style{FG: t.Accent2, BG: t.Bg}},
+		{Text: " команды  |  ", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: "ctrl+enter", S: Style{FG: t.Accent2, BG: t.Bg}},
+		{Text: " отправить  |  ", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: "ctrl+o", S: Style{FG: t.Accent2, BG: t.Bg}},
 		{Text: " размышления", S: Style{FG: t.Dim, BG: t.Bg}},
 	})
 	return out
-}
-
-// mascotState — настроение кота на заставке.
-//
-// Кадр заставки перерисовывается по требованию: окно мигания шире
-// одного кадра, иначе кот «моргал» бы слишком быстро. Настроение
-// повторяет работу: работает, думает, празднует завершение.
-func (a *App) mascotState() MascotState {
-	if a.busy {
-		if a.activity == "думаю" {
-			return MascotThink
-		}
-		return MascotWork
-	}
-	if !a.doneAt.IsZero() && time.Since(a.doneAt) < 3*time.Second {
-		return MascotDone
-	}
-	if a.tick%60 >= 8 && a.tick%60 < 16 {
-		return MascotBlink
-	}
-	return MascotIdle
-}
-
-// MascotState — состояние кота на заставке.
-type MascotState int
-
-const (
-	MascotIdle MascotState = iota
-	MascotBlink
-	MascotWork
-	MascotThink
-	MascotDone
-)
-
-// mascotLines — кот из чистого ASCII: уши, глаза, морда. Глаза зависят
-// от состояния: обычные, моргает, работает, думает, доволен.
-func mascotLines(st MascotState) []string {
-	eyes := "o_o"
-	switch st {
-	case MascotBlink:
-		eyes = "-_-"
-	case MascotWork:
-		eyes = ">_<"
-	case MascotThink:
-		eyes = "o_0"
-	case MascotDone:
-		eyes = "^_^"
-	}
-	return []string{
-		"  /\\_/\\",
-		"  ( " + eyes + " )",
-		"  (  \"  )_/",
-	}
 }
 
 // version — версия с префиксом.
@@ -2340,7 +2243,7 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		// Пустое поле: приглашение по центру рамки.
 		py := top + 1 + (maxLines-1)/2
 		s.Text(boxX+2, py, string(glyphPrompt)+" ", Style{FG: t.Accent, BG: t.Panel, Bold: true})
-		s.Text(boxX+4, py, "спроси что-нибудь... @файл - приложить", Style{FG: t.Dim, BG: t.Panel})
+		s.Text(boxX+4, py, "напиши запрос, / - команды, @ - файл", Style{FG: t.Dim, BG: t.Panel})
 	} else {
 		for i := 0; i < maxLines; i++ {
 			idx := start + i
@@ -2367,7 +2270,7 @@ func (a *App) drawHints(s *Screen, y int) {
 	}
 	t := a.th
 	s.FillLine(y, Style{BG: t.Bg})
-	left := " /help команды | ctrl+enter отправить | tab автодополнение"
+	left := " enter отправить (ctrl+enter - в очередь) | /help команды"
 	if a.paletteOpen() {
 		left = " up/down выбор | tab вставить | esc закрыть"
 	}
@@ -2375,7 +2278,7 @@ func (a *App) drawHints(s *Screen, y int) {
 		left = " up/down файл | tab/enter подставить | esc закрыть"
 	}
 	if a.busy {
-		left = " ctrl+enter в очередь | esc остановить | pgup/pgdn прокрутка"
+		left = " esc остановить | pgup/pgdn прокрутка | ctrl+o размышления"
 	}
 	if a.scroll > 0 {
 		left = " pgup/pgdn прокрутка | ctrl+end - вниз"
@@ -2397,7 +2300,9 @@ func (a *App) drawHints(s *Screen, y int) {
 	s.Text(x, y, msg, Style{FG: t.Gold, BG: t.Panel2})
 }
 
-// drawStatus — нижняя панель расхода.
+// drawStatus — нижняя панель: модель и расход слева, контекст и режимы
+// справа. Всё, чем человек распоряжается (токены, деньги, контекст),
+// живёт в одной строке, как в OpenCode.
 func (a *App) drawStatus(s *Screen, y int) {
 	if y < 0 || y >= a.h {
 		return
@@ -2405,72 +2310,17 @@ func (a *App) drawStatus(s *Screen, y int) {
 	t := a.th
 	s.FillLine(y, Style{BG: t.Panel})
 	x := 1
-	// Контекст: полоса из решёток и точек, процент.
-	pct := 0
-	if a.met.ContextMax > 0 {
-		pct = a.met.Context * 100 / a.met.ContextMax
-		if pct > 999 {
-			pct = 999
-		}
+	// Модель — главный факт сессии: кто сейчас отвечает и чем.
+	mid := a.opt.Model
+	if mid == "" {
+		mid = "модель не выбрана"
+	} else if a.opt.Provider != "" {
+		mid = a.opt.Provider + " / " + mid
 	}
-	barW := 10
-	fill := 0
-	if a.met.ContextMax > 0 {
-		// Округление до ближайшего, а не к нулю: полоса при малых
-		// процентах не должна выглядеть пустой.
-		fill = (2*barW*a.met.Context + a.met.ContextMax) / (2 * a.met.ContextMax)
-		if fill > barW {
-			fill = barW
-		}
-	}
-	barCol := t.Accent
-	if pct >= 85 {
-		barCol = t.Err
-	} else if pct >= 65 {
-		barCol = t.Warn
-	}
-	s.Text(x, y, "[", Style{FG: t.Border, BG: t.Panel})
-	x++
-	for i := 0; i < barW; i++ {
-		ch := '.'
-		col := t.Border
-		if i < fill {
-			ch = '#'
-			col = barCol
-		}
-		s.Set(x+i, y, ch, Style{FG: col, BG: t.Panel})
-	}
-	x += barW
-	s.Text(x, y, "]", Style{FG: t.Border, BG: t.Panel})
-	x++
-	ctx := fmt.Sprintf("%d%%", pct)
-	if a.met.ContextMax == 0 {
-		ctx = "-"
-	}
-	s.Text(x, y, ctx, Style{FG: t.Muted, BG: t.Panel})
-	x += StringWidth(ctx) + 2
-	// Метки режимов справа. Их ширина нужна до текста: на узком экране
-	// текст не должен залезать под них и обрезаться в многоточие.
-	badges := make([]statusBadge, 0, 4)
-	if a.met.Autopilot {
-		badges = append(badges, statusBadge{"автопилот", t.Warn})
-	}
-	if a.met.Plan {
-		badges = append(badges, statusBadge{"план", t.Accent2})
-	}
-	if a.busy {
-		badges = append(badges, statusBadge{spinner(a.tick/2) + " запрос", t.Accent})
-	}
-	if a.opt.CronEnabled {
-		badges = append(badges, statusBadge{"cron", t.Gold})
-	}
-	badgeW := 0
-	for _, b := range badges {
-		badgeW += StringWidth(b.text) + 3
-	}
-	// Токены, скорость, время запроса, запросы, сессия, цена — в порядке
-	// важности. Что не влезло, отбрасывается с конца, а не режется
-	// многоточием посреди числа.
+	midS := Style{FG: t.Accent, BG: t.Panel, Bold: true}
+	s.Text(x, y, Truncate(mid, maxInt(8, a.w/3)), midS)
+	x += StringWidth(Truncate(mid, maxInt(8, a.w/3))) + 2
+	// Расход: токены, скорость, время, запросы, сессия, цена.
 	parts := make([]string, 0, 6)
 	if a.met.Prompt > 0 || a.met.Completion > 0 {
 		parts = append(parts, fmt.Sprintf("in %s out %s", kfmt(a.met.Prompt), kfmt(a.met.Completion)))
@@ -2490,7 +2340,27 @@ func (a *App) drawStatus(s *Screen, y int) {
 	if a.met.CostKnown && a.met.Cost > 0 {
 		parts = append(parts, fmt.Sprintf("$%.4f", a.met.Cost))
 	}
-	avail := a.w - x - 2 - badgeW
+	// Метки режимов справа. Их ширина нужна до текста: на узком экране
+	// текст не должен залезать под них и обрезаться в многоточие.
+	badges := make([]statusBadge, 0, 4)
+	if a.met.Autopilot {
+		badges = append(badges, statusBadge{"автопилот", t.Warn})
+	}
+	if a.met.Plan {
+		badges = append(badges, statusBadge{"план", t.Accent2})
+	}
+	if a.busy {
+		badges = append(badges, statusBadge{spinner(a.tick/2) + " запрос", t.Accent})
+	}
+	if a.opt.CronEnabled {
+		badges = append(badges, statusBadge{"cron", t.Gold})
+	}
+	badgeW := 0
+	for _, b := range badges {
+		badgeW += StringWidth(b.text) + 3
+	}
+	ctx := a.ctxBar()
+	avail := a.w - x - 2 - badgeW - StringWidth(ctx) - 1
 	if avail < 8 {
 		avail = 8
 	}
@@ -2500,7 +2370,11 @@ func (a *App) drawStatus(s *Screen, y int) {
 		joined = strings.Join(parts, " | ")
 	}
 	s.Text(x, y, Truncate(joined, avail), Style{FG: t.Muted, BG: t.Panel})
-	// Правая часть: режимы.
+	// Правая часть: полоса контекста и режимы.
+	cx := a.w - 2 - badgeW - StringWidth(ctx)
+	if cx > x+4 {
+		s.Text(cx, y, ctx, Style{FG: t.Muted, BG: t.Panel})
+	}
 	bx := a.w - 2
 	for i := len(badges) - 1; i >= 0; i-- {
 		b := badges[i]

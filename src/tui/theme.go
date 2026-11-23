@@ -2,10 +2,11 @@ package tui
 
 // ---------- Тема ----------
 //
-// Палитра «Уголь»: тёплый белый текст и охра на почти чёрном фоне.
-// Цвета — единственное оформление, которое отличает терминалы: всё
-// остальное — чистый ASCII, который одинаково рисуют cmd.exe на
-// Windows 10/11, linux-консоли и Terminal.app на macOS. Никаких
+// Палитра «Ночной город»: холодный синий акцент и фиолет на тёмном
+// сине-чёрном фоне — язык современных терминальных редакторов (концепт
+// OpenCode). Цвета — единственное оформление, которое отличает терминалы:
+// всё остальное — чистый ASCII, который одинаково рисуют cmd.exe на
+// Windows 10/11, linux-консоль и Terminal.app на macOS. Никаких
 // псевдографических символов, полублоков и брайль-точек: рамки из
 // «+ - |», спиннер из «| / - \», статусы словами и знаками «ok x !».
 
@@ -19,37 +20,37 @@ type Theme struct {
 	Text      Color // основной текст
 	Muted     Color // подписи
 	Dim       Color // совсем тихое
-	Accent    Color // охра: бренд, действия
-	Accent2   Color // индиго: вторичный акцент
-	Gold      Color // светлая охра: цифры, выделение
+	Accent    Color // синий: бренд, метки ответа
+	Accent2   Color // фиолет: метки пользователя
+	Gold      Color // светлое золото: цифры, выделение
 	OK        Color
 	Warn      Color
 	Err       Color
 	Info      Color
-	User      Color // фон запроса пользователя
+	User      Color // текст запроса пользователя
 	Sel       Color // выделение в списках
 }
 
 // Dark — тема по умолчанию.
 func Dark() Theme {
 	return Theme{
-		Bg:        Hex("#0E0D0B"),
-		Panel:     Hex("#161411"),
-		Panel2:    Hex("#1D1A16"),
-		Border:    Hex("#37312A"),
-		BorderDim: Hex("#26221D"),
-		Text:      Hex("#EEE9E3"),
-		Muted:     Hex("#8A8478"),
-		Dim:       Hex("#5C574F"),
-		Accent:    Hex("#D08A3E"),
-		Accent2:   Hex("#8C94F5"),
-		Gold:      Hex("#E8C078"),
-		OK:        Hex("#7EBE8A"),
-		Warn:      Hex("#E2B75C"),
-		Err:       Hex("#DB6A6E"),
-		Info:      Hex("#7DC4E8"),
-		User:      Hex("#1A1713"),
-		Sel:       Hex("#2A241C"),
+		Bg:        Hex("#0E1016"),
+		Panel:     Hex("#141824"),
+		Panel2:    Hex("#1A2030"),
+		Border:    Hex("#2B3245"),
+		BorderDim: Hex("#1F2536"),
+		Text:      Hex("#E4E9F4"),
+		Muted:     Hex("#8A93AB"),
+		Dim:       Hex("#5A6478"),
+		Accent:    Hex("#7AA2F7"),
+		Accent2:   Hex("#BB9AF7"),
+		Gold:      Hex("#E0C079"),
+		OK:        Hex("#9ECE6A"),
+		Warn:      Hex("#E0AF68"),
+		Err:       Hex("#F7768E"),
+		Info:      Hex("#7DCFFF"),
+		User:      Hex("#E4E9F4"),
+		Sel:       Hex("#24304A"),
 	}
 }
 
@@ -81,8 +82,10 @@ const (
 	glyphCursor = '>'
 	// Приглашение поля ввода.
 	glyphPrompt = '>'
-	// Тело развернутых размышлений: каждая строка с чертой.
-	glyphQuote = '|'
+	// Метки ленты: у каждого вида сообщения свой знак.
+	// you/gcli — текстовые метки, инструменты — «*», размышления — «~».
+	glyphTool  = "*"
+	glyphThink = "~"
 	// Секретный ввод: по звёздочке на символ.
 	glyphSecret = '*'
 )

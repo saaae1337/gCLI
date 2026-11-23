@@ -16,7 +16,7 @@ import (
 )
 
 // Version — версия приложения (обновляется при сборке через -ldflags).
-var Version = "0.9.3"
+var Version = "0.10.0"
 
 // ---------- Типы диалога ----------
 
@@ -222,10 +222,6 @@ type Config struct {
 	Compact    bool  `json:"compact,omitempty"`    // компактные блоки без пустых строк
 	ShowTime   bool  `json:"show_time,omitempty"`  // показывать время в шапках
 	Animations *bool `json:"animations,omitempty"` // анимации появления и спиннер (nil = авто)
-	// Mascot — маскот «Искра» (кот gcli): встречает в баннере, сидит
-	// у строки ввода, живёт в спиннере и провожает при выходе
-	// (nil = включён; GCLI_MASCOT=0 выключает принудительно).
-	Mascot *bool `json:"mascot,omitempty"`
 	// PlanMode — режим планирования: агент сначала предлагает план и не
 	// меняет файлы, пока пользователь не одобрит (/plan).
 	PlanMode bool `json:"plan_mode,omitempty"`

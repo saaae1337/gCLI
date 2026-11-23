@@ -472,7 +472,6 @@ func main() {
 	}
 	a.buildTools()
 	a.buildPool()
-	a.applyMascot()
 	// Дочерние процессы (MCP-серверы, language servers) и журнал миссии
 	// обязаны закрыться на любом выходе, а не только из REPL: gcli -p,
 	// -bench и аварийные ветки иначе оставляли бы сирот.
@@ -1603,23 +1602,19 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	}()
 
 	ag := a.newAgent(false)
-	// Кот работает: строка "thinking..." с его мордочкой переливается
-	// под эхом задачи. Первый delta гасит строку, конец хода - тоже.
-	// Поза кота над строкой состояния не трогаем: после Enter курсор
-	// уехал вниз, и перерисовка "вслепую" попадала по чужим строкам.
+	// Строка ожидания: слово с переливом под эхом задачи. Первый delta
+	// гасит строку, конец хода - тоже.
 	if !a.quiet {
-		a.ui.MascotIdleStop()
-		state, word := ui.MascotThink, "thinking..."
+		word := "думаю..."
 		if a.cfgPlanMode() {
-			state, word = ui.MascotPensive, "planning..."
+			word = "планирую..."
 		}
 		// В полноэкранном режиме запрос уже стоит в ленте: печатать эхо
 		// второй раз - дублировать его.
 		if a.tuiApp() == nil {
 			a.ui.RequestEcho(text)
 		}
-		a.ui.SetSpinnerMascot(state)
-		a.ui.ShimmerStart(word, state)
+		a.ui.ShimmerStart(word)
 	}
 	// Ctrl+O не держит своего читателя: он уже работает весь сеанс
 	// (см. main), иначе на границе ходов два конкурирующих читателя
@@ -1632,7 +1627,6 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	// отмена): без закрытия потока приглашение приклеилось бы к хвосту
 	// последней мысли, а следующий ответ дописывался бы в неё же.
 	a.closeThinkStream()
-	a.ui.SetSpinnerMascot(ui.MascotWork)
 	return err
 }
 
@@ -2015,42 +2009,27 @@ func (a *app) repl() {
 			switch {
 			case a.reasonPastShown():
 				// Блок размышлений уже напечатан: обычная усадка нарисовала бы
-				// второго кота и вторую строку состояния подряд. Повторно
-				// Ctrl+O оставляет в том же режиме - пока не напечатано новое.
+				// вторую строку состояния подряд. Повторно Ctrl+O оставляет
+				// в том же режиме - пока не напечатано новое.
 				a.ui.Prompt(a.agentMode())
 				a.clearReasonPast()
-				a.ui.MascotIdleStart()
 			case header:
 				a.ui.Println("")
-				// Кот усаживается НАД строкой состояния и живёт на простое:
-				// моргает, скучает, засыпает. На любой ввод - замирает.
-				a.ui.MascotPerch()
 				// Нижняя панель окна: слева состояние, справа расход -
 				// контекст с процентом от лимита модели, токены, скорость,
 				// время запроса и деньги.
 				a.ui.MetricsBar(a.statusItems(), a.metrics())
 				header = false
-				// Якорь анимации - только после усадки: курсор стоит на
-				// строке приглашения, и перерисовка знает, где кот.
 				a.ui.Prompt(a.agentMode())
-				a.ui.MascotIdleStart()
 			default:
-				// Перепечатка приглашения после Enter: курсор уехал на
-				// строку ниже, старая привязка устарела - кот замирает
-				// до следующей усадки. Иначе "слепой" прыжок курсора
-				// вверх попадал по строке состояния.
+				// Перепечатка приглашения после Enter.
 				a.ui.Prompt(a.agentMode())
 			}
 		}
 		if !a.stdin.Scan() {
-			a.ui.MascotIdleStop()
 			if !a.quiet {
 				a.ui.Println("")
-				if a.ui.Mascot() {
-					a.mascotBye()
-				} else {
-					a.ui.Info("до связи!")
-				}
+				a.ui.Info("до связи!")
 			}
 			// Дочерние процессы и журнал - до saveSession: последняя
 			// запись журнала должна дойти до диска.
@@ -2070,15 +2049,8 @@ func (a *app) repl() {
 		line = strings.TrimSpace(line)
 		// Любой ввод пользователя сбрасывает таймер автономных итераций.
 		a.cronTouch()
-		// Любой ввод - кот замолкает немедленно, ещё до разбора строки.
-		// После Enter терминал уже перевёл курсор на новую строку, и
-		// слепая перерисовка успела бы попасть по чужим строкам, пока
-		// команда/ход не вызвали MascotIdleStop сами. Раньше команды не
-		// останавливали фоновую анимацию до первой печати - окно гонки.
-		a.ui.MascotIdleStop()
 		if line == "" {
-			// Пустой ввод: приглашение уже перерисовано в начале цикла,
-			// кот и статус остаются на месте.
+			// Пустой ввод: приглашение уже перерисовано в начале цикла.
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
@@ -2086,7 +2058,7 @@ func (a *app) repl() {
 				a.saveSession()
 				return
 			}
-			header = true // команда печатала вывод - кота сажаем заново
+			header = true // команда печатала вывод - панель статуса сажаем заново
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
@@ -2099,12 +2071,7 @@ func (a *app) repl() {
 		if err != nil && !a.quiet {
 			a.ui.Err(err.Error())
 		}
-		if !a.quiet {
-			// Итог хода глазами кота: мурчание/подмиг при успехе,
-			// фырканье при ошибке, "опять?!" - на второй подряд.
-			a.mascotResult(err == nil)
-		}
-		header = true // ход печатал вывод - кота сажаем заново
+		header = true // ход печатал вывод - панель статуса сажаем заново
 		a.mu.Lock()
 		a.lastTurnFailed = err != nil
 		a.mu.Unlock()
@@ -2247,9 +2214,6 @@ func (a *app) statusItems() []ui.StatusItem {
 	}
 	return items
 }
-
-// osMascotEnv - значение GCLI_MASCOT для решения о маскоте.
-func osMascotEnv() string { return os.Getenv("GCLI_MASCOT") }
 
 // unicodeOK - решение о псевдографике, принятое до первого вывода.
 //

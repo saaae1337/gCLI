@@ -8,13 +8,12 @@ import (
 	"gcli/core"
 )
 
-// ---------- Свой интерфейс: окно в духе macOS и OpenCode ----------
+// ---------- Панели окна ----------
 //
 // Оформление gcli не опирается на возможности терминала: рамки, полосы и
 // метрики рисует сам интерфейс, поэтому окно выглядит одинаково в
 // Terminal.app, в iTerm2 и в консоли Windows. Отсылка к macOS - верхняя
-// панель с «лампочками» и тонкая линия под ней. Отсылка к OpenCode -
-// нижняя строка метрик и скруглённые панели.
+// Terminal.app, в iTerm2 и в консоли Windows. Концепт - OpenCode:
 //
 // Метрики - то, ради чего всё затевалось: сколько контекста занято,
 // сколько токенов в секунду уходит, сколько времени занял последний
@@ -133,22 +132,19 @@ type TitleBarOpts struct {
 	Right string
 }
 
-// TitleBar - верхняя панель окна: «лампочки», название и метрики.
+// TitleBar - верхняя панель окна: бренд, подпись и контекст справа.
 //
-// Ровно как в Terminal.app: три кружка слева, название рядом, справа -
-// то, что сейчас важно (сколько контекста занято). Под панелью - тонкая
-// линия: без неё панель сливается с содержимым окна.
+// Концепт OpenCode - минимум украшений: одна строка фактов, никаких
+// «лампочек» и декоративных линеек. Подпись и правый блок приглушены,
+// название - акцентом.
 func (u *UI) TitleBar(o TitleBarOpts) {
 	if u.quiet || u.sink() != nil {
 		return
 	}
 	w := u.Width()
-	lights := u.c(u.pal.Err, u.lamp("*")) + " " +
-		u.c(u.pal.Warn, u.lamp("*")) + " " +
-		u.c(u.pal.OK, u.lamp("*"))
-	left := "  " + lights + "   "
+	left := "  "
 	if o.Title != "" {
-		left += u.Bold(o.Title)
+		left += u.Accent(u.Bold(o.Title))
 	}
 	if o.Subtitle != "" {
 		left += u.Gray("  |  ") + u.c(u.pal.Muted, o.Subtitle)
@@ -158,15 +154,6 @@ func (u *UI) TitleBar(o TitleBarOpts) {
 		right = u.c(u.pal.Muted, right)
 	}
 	u.Println(fitRight(left, right, w))
-	u.Println("  " + u.Gray(strings.Repeat(u.g.RuleChar, maxInt(w-2, 1))))
-}
-
-// lamp - «лампочка» панели окна: круг в юникоде, точка в ASCII.
-func (u *UI) lamp(g string) string {
-	if u.g.Unicode {
-		return g
-	}
-	return "o"
 }
 
 // MetricsBar - нижняя панель окна: метрики расхода.
@@ -221,11 +208,6 @@ func (u *UI) MetricsBar(items []StatusItem, m Metrics) {
 	// кончается ровно на краю, оставляет курсор в состоянии «перенос
 	// отложен», и следующая запись уезжает в неожиданную колонку.
 	u.Println(fitRight(leftText, rightText, w-2))
-	// Панель занимает одну строку между котом и приглашением: кот должен
-	// перерисовываться над ней.
-	u.mu.Lock()
-	u.mascotAnchor++
-	u.mu.Unlock()
 }
 
 // metricsParts - правый блок метрик: контекст, скорость, время.

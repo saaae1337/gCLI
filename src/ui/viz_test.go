@@ -137,7 +137,7 @@ func TestRailEndChainCloses(t *testing.T) {
 	u.ToolStart(ToolCall{Name: "grep", Args: "TODO", Kind: "read"})
 	u.RailEndChain("готово")
 	out := buf.String()
-	if !strings.Contains(StripANSI(out), ">-") {
+	if !strings.Contains(StripANSI(out), ":") {
 		t.Errorf("серия вызовов должна закрываться зубцом:\n%s", out)
 	}
 }

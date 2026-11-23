@@ -17,13 +17,10 @@ func osArch() string { return runtime.Version() }
 
 // banner — приветственный экран.
 //
-// Сверху — панель окна в духе Terminal.app: «лампочки», название, модель
-// и справа — сколько контекста занято. Под ней — детали сессии: каталог,
-// ключ, режимы. Кот в баннере не нужен: он сидит на своём единственном
-// посту — над строкой состояния, прямо под этим экраном. Второй кот рядом
-// выглядел бы как баг, а не как встреча.
+// Концепт OpenCode: минимум украшений. Первая строка — бренд и версия,
+// под ней подпись. Ниже — один блок фактов сессии: модель, каталог,
+// ключ, режимы. Ничего лишнего между человеком и рабочим окном.
 func (a *app) banner() {
-	// Правая колонка: не больше трёх строк — по числу строк кота.
 	key := a.ui.Red("не задан - /setup")
 	switch {
 	case a.prov.NoKey:
@@ -35,34 +32,33 @@ func (a *app) banner() {
 	if a.sess.AgentMode {
 		agent = a.ui.Accent("агент")
 	}
-	line3 := agent
-	if a.pool.Enabled() {
-		line3 += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Accent2, "субагенты")
-	}
-	if a.repo.Cfg.PlanMode {
-		line3 += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Warn, "план")
-	}
-	// Панель окна: название, модель, провайдер и занятый контекст.
 	m := a.metrics()
-	details := []string{
-		a.ui.Gray("модель ") + a.ui.Accent(a.model) +
-			a.ui.Gray("  |  ") + a.ui.Gray(m.Provider) +
-			a.ui.Gray("  |  каталог ") + a.ui.Gray(core.RelToWD(a.workDir, a.workDir)),
-		a.ui.Gray("ключ ") + key + a.ui.Gray("  |  ") + line3,
-	}
-	// Автопилот — предупреждаем сразу, чтобы режим не был сюрпризом.
-	if ap, risk := a.autopilotChip(); ap != "" {
-		details[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Warn, "автопилот ") + a.ui.Paint(risk, ap)
-	}
-
+	// Панель окна: название и подпись. Правый блок — занятый контекст.
 	a.ui.TitleBar(ui.TitleBarOpts{
 		Title:    "gcli v" + version(),
 		Subtitle: "ИИ-агент в терминале",
 		Right:    "ctx " + m.ContextText(),
 	})
 
+	facts := []string{
+		a.ui.Gray("модель ") + a.ui.Accent(a.model) +
+			a.ui.Gray("  |  ") + a.ui.Gray(m.Provider) +
+			a.ui.Gray("  |  каталог ") + a.ui.Gray(core.RelToWD(a.workDir, a.workDir)),
+		a.ui.Gray("ключ ") + key + a.ui.Gray("  |  ") + agent,
+	}
+	if a.pool.Enabled() {
+		facts[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Accent2, "субагенты")
+	}
+	if a.repo.Cfg.PlanMode {
+		facts[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Warn, "план")
+	}
+	// Автопилот — предупреждаем сразу, чтобы режим не был сюрпризом.
+	if ap, risk := a.autopilotChip(); ap != "" {
+		facts[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Warn, "автопилот ") + a.ui.Paint(risk, ap)
+	}
+
 	a.ui.Println("")
-	for _, line := range details {
+	for _, line := range facts {
 		a.ui.Println("  " + line)
 	}
 	a.PrintNoKeyHint()
@@ -137,13 +133,6 @@ func usage() {
 	fmt.Println("  -json             машинный вывод: только ответ, без UI")
 	fmt.Println("  -v                версия и платформа")
 	fmt.Println()
-	fmt.Println("Маскот:")
-	fmt.Println("  Искра - кот gcli. Живёт над строкой состояния: моргает на простое,")
-	fmt.Println("  скучает и засыпает, если долго не писать, думает (\"thinking...\"")
-	fmt.Println("  переливается цветом) и работает вместе с ИИ, мурчит от результата")
-	fmt.Println("  и фыркает на ошибках.")
-	fmt.Println("  GCLI_MASCOT=0 или \"mascot\": false в config.json - выключить")
-	fmt.Println()
 	fmt.Println("Переменные окружения:")
 	fmt.Println("  ZAI_API_KEY         Z.ai GLM (ZAI_BASE_URL)")
 	fmt.Println("  OPENROUTER_API_KEY  OpenRouter - 300+ моделей одним ключом")
@@ -153,7 +142,7 @@ func usage() {
 	fmt.Println("  GCLI_HOME           каталог данных (по умолчанию ~/.gcli)")
 	fmt.Println("  GCLI_SHELL          оболочка для bash (bash, powershell, cmd)")
 	fmt.Println("  GCLI_COLOR          уровень цвета: 16 | 256 | truecolor | none")
-	fmt.Println("  NO_COLOR | GCLI_ASCII | GCLI_NO_ANIM | GCLI_MASCOT")
+	fmt.Println("  NO_COLOR | GCLI_ASCII | GCLI_NO_ANIM")
 	fmt.Println()
 	fmt.Println("Свой endpoint любого сервиса:")
 	fmt.Println("  /provider add <id> <base_url> [openai|anthropic]")

@@ -55,9 +55,10 @@ func TestMetricsBarDoesNotFillWidth(t *testing.T) {
 	}
 }
 
-// TestTitleBarHasLightsAndRule - панель окна: «лампочки», название и
-// линия под панелью.
-func TestTitleBarHasLightsAndRule(t *testing.T) {
+// TestTitleBarMinimalLine - панель окна: бренд, подпись и контекст
+// справа. Лампочек и линий больше нет: концепт OpenCode - одна строка
+// фактов, ровно как её напечатали.
+func TestTitleBarMinimalLine(t *testing.T) {
 	u, buf := chromeUI(t, 80)
 	u.TitleBar(TitleBarOpts{
 		Title:    "gcli v0.6.2.30",
@@ -65,21 +66,24 @@ func TestTitleBarHasLightsAndRule(t *testing.T) {
 		Right:    "ctx 12.4k/128k (10%)",
 	})
 	out := buf.String()
-	if !strings.Contains(out, "o o o") {
-		t.Errorf("в панели нет лампочек:\n%s", out)
-	}
 	if !strings.Contains(out, "gcli v0.6.2.30") {
 		t.Errorf("в панели нет названия:\n%s", out)
+	}
+	if !strings.Contains(out, "ИИ-агент в терминале") {
+		t.Errorf("в панели нет подписи:\n%s", out)
 	}
 	if !strings.Contains(out, "12.4k/128k") {
 		t.Errorf("в панели нет метрик контекста:\n%s", out)
 	}
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("панель без линии:\n%s", out)
+	if strings.Contains(out, "o o o") {
+		t.Errorf("лампочки вернулись:\n%s", out)
 	}
-	if !strings.Contains(lines[1], "-") {
-		t.Errorf("под панелью нет линии:\n%s", out)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("панель должна быть одной строкой, а не %d:\n%s", len(lines), out)
+	}
+	if strings.Contains(lines[0], "-----") {
+		t.Errorf("под панелью не должно быть линии:\n%s", out)
 	}
 }
 

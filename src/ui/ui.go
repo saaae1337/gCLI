@@ -131,44 +131,11 @@ type UI struct {
 	// ожидания), которые перерисовываются каждые 90 мс: там видно, как
 	// растёт контекст, пока модель думает.
 	metrics Metrics
-	// mascotAnchor - сколько строк между макушкой кота и строкой ввода.
-	// Панель метрик добавляет строку, и кот должен перерисовываться над
-	// ней, а не поверх неё.
-	mascotAnchor int
-	// mascotLines - сколько строк напечатано с тех пор, как кот сел.
-	// Отсчёт нужен, чтобы привязка не зависела от того, кто и что
-	// печатал между котом и приглашением.
-	mascotLines int
-
 	// Подавление обычного вывода (например, для -p).
 	quiet bool
 	// think - открыт ли поток размышлений: пока модель думает, на экране
 	// висит «указатель», и первый кусок текста его закрывает.
 	think bool
-	// mascot - живёт ли маскот «Искра» (кот gcli) в интерфейсе: встречает
-	// в баннере, сидит у строки ввода, крутится в спиннере, радуется
-	// результату. Настраивается config.json ("mascot") и
-	// переменной GCLI_MASCOT.
-	mascot bool
-	// spinMascot - состояние маскота в спиннере (думает / работает).
-	spinMascot MascotState
-	// Фоновая жизнь кота на простое: моргает, дремлет, засыпает.
-	idleOn   bool
-	idleStop chan struct{}
-	idleDone chan struct{}
-	// idleSince - когда кот последний раз сел на пост (MascotIdleStart):
-	// от него отсчитывается простой - моргание, скука, сон. Сброс при
-	// каждой усадке: кот не должен «засыпать» сразу после баннера или
-	// команды только потому, что старый таймер всё ещё тикает.
-	idleSince time.Time
-	// mascotAnchored - курсор стоит на строке приглашения, и прямо над
-	// ним сидит кот со строкой состояния. Фоновая перерисовка трогает
-	// экран только при поднятой привязке: любая другая печать (ответ,
-	// команда, даже перевод строки) её сбрасывает, и анимация замирает
-	// до следующей усадки. Иначе относительный прыжок курсора вверх
-	// попадает по чужим строкам - двойные лапы и съеденные символы
-	// в строке состояния из старых версий.
-	mascotAnchored bool
 }
 
 // New - создать интерфейс.
@@ -267,38 +234,6 @@ func (u *UI) SetWidth(w int) {
 // Theme - имя стиля оформления. Тема одна - «УГОЛЬ» (ember).
 func (u *UI) Theme() string { return u.opts.Theme }
 
-// SetMascot - включить/выключить маскота. При выключении фоновая
-// жизнь кота останавливается: никакого вывода из-под выключателя.
-func (u *UI) SetMascot(on bool) {
-	// Сначала выключаем флаг, потом гасим таймер: иначе MascotIdleStart,
-	// проскочивший между остановкой и записью, успел бы запустить новую
-	// фоновую анимацию уже «выключенного» маскота.
-	u.mu.Lock()
-	u.mascot = on
-	u.mu.Unlock()
-	if !on {
-		u.MascotIdleStop()
-	}
-}
-
-// Mascot - живёт ли маскот в интерфейсе.
-func (u *UI) Mascot() bool {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.mascot
-}
-
-// SetSpinnerMascot - задать состояние маскота в спиннере:
-// MascotThink, пока модель думает, MascotWork, пока идут инструменты.
-//
-// Под мьютексом: состояние читает горутина строки ожидания. Раньше запись
-// шла без блокировки, и гонка портила кадр (кот думал, пока уже работал).
-func (u *UI) SetSpinnerMascot(s MascotState) {
-	u.mu.Lock()
-	u.spinMascot = s
-	u.mu.Unlock()
-}
-
 // SetSpinHint - подсказка справа от слова на строке ожидания
 // («(Ctrl+O - показать размышления)»).
 //
@@ -380,11 +315,6 @@ func (u *UI) Write(s string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.clearSpinLocked()
-	u.mascotAnchored = false
-	// Строки считаются: по ним кот поймёт, на сколько строк подняться
-	// при перерисовке. Панель метрик между котом и приглашением - одна
-	// строка, и без счёта кот прыгал бы на две строки выше нужного.
-	u.mascotLines += strings.Count(s, "\n")
 	u.put(s)
 }
 
@@ -468,8 +398,6 @@ func (u *UI) PrintEmpty() {
 }
 
 // RawWrite - запись без очистки спиннера (для escape-последовательностей).
-// Как и обычная печать, сбрасывает привязку маскота: после прямого вывода
-// позиция курсора заранее неизвестна.
 func (u *UI) RawWrite(s string) {
 	if snk := u.sink(); snk != nil {
 		// Сырой канал: OSC52 и другие управляющие последовательности
@@ -486,13 +414,10 @@ func (u *UI) RawWrite(s string) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.mascotAnchored = false
 	u.put(s)
 }
 
-// ClearScreen - очистить экран. Отдельный метод, а не голый RawWrite:
-// после \033[H курсор прыгает в левый верхний угол, и старая привязка
-// маскота стала бы ложной (кот перерисовался бы по стёртому экрану).
+// ClearScreen - очистить экран терминала.
 func (u *UI) ClearScreen() {
 	if sink := u.sink(); sink != nil {
 		sink.Clear()
@@ -531,18 +456,17 @@ func (u *UI) AutoTag() string {
 }
 
 // Prompt - приглашение к вводу с индикатором агентного режима.
-// Ромб - тот же маркер события, что и у вызовов инструментов:
-// приглашение становится полноправной строкой потока, а не отдельным
-// украшением. Отступ в две колонки держит поле.
+// Стрелка - то же приглашение, что и в поле полноэкранного интерфейса:
+// оба режима говорят одним языком. Отступ в две колонки держит поле.
 func (u *UI) Prompt(agentMode bool) {
 	if u.sink() != nil {
 		return
 	}
-	mark := u.emberMark(u.pal.Muted)
 	if agentMode {
-		mark = u.emberMark(u.pal.Accent)
+		u.Print("  " + u.Accent("> "))
+		return
 	}
-	u.Print("  " + mark + " ")
+	u.Print("  " + u.Gray("> "))
 }
 
 // StatusLine - нижняя панель состояния: модель, режим, токены, автопилот.
@@ -577,7 +501,7 @@ func (u *UI) StatusLine(items []StatusItem) {
 	sep := u.c(u.pal.Muted, " | ")
 	// Зубец на том же поле, что и результаты инструментов: строка
 	// состояния читается как последняя строка потока, а не как
-	// отдельная плашка. Над ней сидит кот (MascotPerch).
+	// отдельная плашка.
 	indent := "  " + u.emberTail() + " "
 	u.Println(indent + strings.Join(parts, sep))
 }
@@ -844,11 +768,8 @@ func (u *UI) SpinnerStart(label string) {
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
 	u.spinDone = make(chan struct{})
-	// Кадры спиннера: мордочка кота или «указатель» темы.
+	// Кадры спиннера - классическая палочка.
 	frames := u.spins
-	if u.mascot {
-		frames = []string{u.mascotInline(u.spinMascot, 0), u.mascotInline(u.spinMascot, 1)}
-	}
 	stop, done := u.spinStop, u.spinDone
 	u.mu.Unlock()
 
@@ -883,18 +804,17 @@ func (u *UI) SpinnerStart(label string) {
 	}()
 }
 
-// ShimmerStart - строка ожидания с котом и переливом:
+// ShimmerStart - строка ожидания с переливающимся словом:
 //
-//	( -.- ) thinking... 4s  (Ctrl+O - показать размышления)
+//	| думаю... 4s  ctx 12.3k/200k (6%)
 //
 // Слово переливается цветом по кругу (shimmerWord): фронт ходит по кольцу
 // длиной в слово и никогда не покидает его, поэтому строка жива всё время
-// ожидания, а не первые секунды. Пока маскот выключен, работает обычный
-// спиннер с тем же словом. Остановка - общий SpinnerStop; любая
-// содержательная печать через Write гасит строку сама (clearSpinLocked
-// останавливает анимацию).
-func (u *UI) ShimmerStart(word string, state MascotState) {
-	u.ShimmerHint(word, state, "")
+// ожидания, а не первые секунды. Кадр слева - классический спиннер.
+// Остановка - общий SpinnerStop; любая содержательная печать через Write
+// гасит строку сама (clearSpinLocked останавливает анимацию).
+func (u *UI) ShimmerStart(word string) {
+	u.ShimmerHint(word, "")
 }
 
 // ShimmerHint - ShimmerStart с подсказкой справа от слова.
@@ -902,18 +822,13 @@ func (u *UI) ShimmerStart(word string, state MascotState) {
 // Подсказка нужна, когда модель молчит в размышления, а пользователь ещё не
 // знает, что их можно посмотреть. Показывается только пока строка жива;
 // SpinnerStop и clearSpinLocked обнуляют её вместе с анимацией.
-func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
-	u.SetSpinnerMascot(state)
+func (u *UI) ShimmerHint(word, hint string) {
 	if u.sink() != nil {
 		// Полноэкранный интерфейс показывает ожидание сам.
 		return
 	}
-	if !u.Mascot() {
-		u.SpinnerStart(word)
-		return
-	}
 	if !u.opts.Animations || !u.opts.Color || u.quiet {
-		// Без анимаций и цвета перелива нет - но слово «thinking...»
+		// Без анимаций и цвета перелива нет - но слово «думаю...»
 		// пользователь всё равно должен увидеть, иначе ход выглядит
 		// зависшим. Печатаем один раз и уходим: без перерисовки таймер
 		// ожидания тут незачем.
@@ -929,17 +844,18 @@ func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 	u.spinLbl = ""
 	u.spinShimmer = word
 	u.spinHint = hint
-	u.spinMascot = state
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
 	u.spinDone = make(chan struct{})
 	stop, done := u.spinStop, u.spinDone
+	frames := u.spins
 	u.mu.Unlock()
 
 	go func() {
 		defer close(done)
 		t := time.NewTicker(90 * time.Millisecond)
 		defer t.Stop()
+		i := 0
 		for {
 			select {
 			case <-stop:
@@ -950,15 +866,13 @@ func (u *UI) ShimmerHint(word string, state MascotState, hint string) {
 					u.mu.Unlock()
 					return
 				}
-				face := u.mascotInline(u.spinMascot, int(time.Since(u.spinT0)/(300*time.Millisecond)))
+				frame := frames[i%len(frames)]
+				i++
 				el := time.Since(u.spinT0)
-				word := u.shimmerWord(u.spinShimmer, el.Seconds())
-				// Пока модель думает, кот уступает место переливу: привязку
-				// сбрасываем, иначе фоновый кот нарисовался бы поверх
-				// строки ожидания и над ответом.
-				u.mascotAnchored = false
-				// Счётчик секунд показывает, что ожидание не зависло.
-				line := "\r" + cReset + "\033[K" + face + cReset + " " + word + " " +
+				// Слово переливается: волна бежит по буквам, кадр и счётчик
+				// секунд показывают, что ожидание не зависло.
+				line := "\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame) + cReset + " " +
+					u.shimmerWord(u.spinShimmer, el.Seconds()) + " " +
 					u.c(u.pal.Muted, shimmerElapsed(el))
 				// Пока модель думает, видно, сколько занято контекста:
 				// человек видит, вписывается ли ход в окно модели.

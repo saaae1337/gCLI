@@ -46,8 +46,8 @@ func TestEmberGlyphs(t *testing.T) {
 	if g.Mark != "*" {
 		t.Errorf("маркер юникода = %q, ожидался ромб", g.Mark)
 	}
-	if g.Tick != ">-" {
-		t.Errorf("зубец юникода = %q, ожидался >-", g.Tick)
+	if g.Tick != ":" {
+		t.Errorf("зубец юникода = %q, ожидался :", g.Tick)
 	}
 	if g.Star != "*" {
 		t.Errorf("событийный маркер = %q, ожидался ромб", g.Star)
@@ -182,18 +182,18 @@ func TestEmberRail(t *testing.T) {
 	if !strings.Contains(out, "read_file") {
 		t.Errorf("нет вызова инструмента:\n%s", out)
 	}
-	if !strings.Contains(out, ">-") {
+	if !strings.Contains(out, ":") {
 		t.Errorf("результат должен идти с «зубцом»:\n%s", out)
 	}
 }
 
-// Приглашение: ромб акцентом в агентном режиме.
+// Приглашение: стрелка акцентом в агентном режиме.
 func TestEmberPrompt(t *testing.T) {
 	u, buf := emberUI()
 	u.Prompt(true)
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "*") {
-		t.Errorf("приглашение должно начинаться с ромба:\n%s", out)
+	if !strings.Contains(out, ">") {
+		t.Errorf("приглашение должно начинаться со стрелки:\n%s", out)
 	}
 }
 

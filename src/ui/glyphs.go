@@ -51,7 +51,7 @@ func asciiGlyphs() Glyphs {
 		DashDot:  ".",
 		RuleChar: "-",
 		Mark:     "*",
-		Tick:     ">-",
+		Tick:     ":",
 		Retry:    "~",
 	}
 }

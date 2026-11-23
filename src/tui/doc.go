@@ -14,8 +14,8 @@ import (
 // У каждого события свой вид: запрос, ответ, размышления, инструмент.
 // Лента перерисовывается целиком (только видимая часть), поэтому ширина
 // меняется без потерь, а карточки инструментов обновляются на месте.
-// Оформление — чистый ASCII: заголовки со строкой дефисов, статусы
-// словами и знаками «ok x !», тело развёрнутых размышлений с «|».
+// Оформление — чистый ASCII: текстовые метки сообщений, статусы
+// словами и знаками «ok x !», зубцы «:» у результатов.
 
 type blockKind int
 
@@ -411,17 +411,11 @@ func sanitizeBlock(s string) string {
 
 // ---------- Раскладка ----------
 //
-// Дизайн ленты — «гуттер»: у каждого вида блока свой маркер в узкой
-// колонке слева, тело выровнено под ним. Никаких линеек «you -----»:
+// Лента собирается из блоков: метка сообщения и тело с общим отступом.
+// Разделители между ходами не рисуются — соседние блоки разведены пустой
+// строкой, у каждого события своя метка (you / gcli / * / ~).
 //
-//      > запрос пользователя        («>», акцент)
-//      | ответ модели              («|», вторичный акцент)
-//      : размышления               («:», приглушённый)
-//      [bash] вызов инструмента     (карточка со статусом справа)
-//      * системная строка          («*», золото)
-//      ! ошибка                    («!»)
-//
-// Маркер и тело живут в одной строке: перенос текста идёт под маркер,
+// Метка и тело живут в соседних строках: перенос текста идёт под отступ,
 // поэтому столбец текста ровный на любой ширине.
 
 // LayoutOpts — параметры раскладки.
@@ -549,98 +543,113 @@ func (d *Doc) layout(o LayoutOpts) ([]Line, []*block) {
 	return out, owners
 }
 
-// gutter — колонка маркера: два пробела, знак, пробел. Тело всех
-// блоков начинается с одной и той же колонки — взгляд цепляется
-// за знак, а не ищет начало текста.
-func gutter(mark string, col Color, t Theme, bold bool) Seg {
-	return Seg{Text: "  " + mark + " ", S: Style{FG: col, BG: t.Bg, Bold: bold}}
-}
+// ---------- Раскладка блоков ----------
+//
+// Дизайн ленты — метки сообщений (концепт OpenCode): у каждого вида
+// блока своя текстовая метка, тело выровнено под ней на четырёх колонках.
+// Никакого гуттера из одиночных знаков:
+//
+//      you          запрос пользователя  (жирная метка, фиолет)
+//      gcli         ответ модели         (жирная метка, синий)
+//      * bash ...   вызов инструмента    (карточка со статусом справа)
+//      ~ ...        размышления          (приглушённый курсив)
+//
+// Метка и тело живут в соседних строках: перенос текста идёт под отступ,
+// поэтому столбец текста ровный на любой ширине.
 
-// renderUser — запрос пользователя: «>» акцентом, тело под ним.
+// bodyIndent — отступ тела сообщения: все блоки выровнены на одну колонку.
+const bodyIndent = "    "
+
+// renderUser — запрос пользователя: метка «you», тело под ней.
 func renderUser(b *block, w int, t Theme) []Line {
-	text := strings.Join(b.lines, "\n")
 	if w < 16 {
 		w = 16
 	}
 	var out []Line
-	for i, ln := range wrapSegs(parseStyled(text, t, Style{FG: t.User, BG: t.Bg}), w-4) {
-		l := Line{gutter(">", t.Accent, t, true)}
-		if i > 0 {
-			l = Line{{Text: "    ", S: Style{FG: t.Accent, BG: t.Bg}}}
+	out = append(out, Line{{Text: "  you", S: Style{FG: t.Accent2, BG: t.Bg, Bold: true}}})
+	for _, entry := range b.lines {
+		for _, ln := range strings.Split(entry, "\n") {
+			if strings.TrimSpace(stripANSI(ln)) == "" {
+				out = append(out, Line{})
+				continue
+			}
+			segs := parseStyled(ln, t, Style{FG: t.User, BG: t.Bg})
+			for _, wl := range wrapSegs(segs, w-6) {
+				out = append(out, append(Line{{Text: bodyIndent, S: Style{FG: t.User, BG: t.Bg}}}, wl...).trimEnd())
+			}
 		}
-		out = append(out, append(l, ln...).trimEnd())
 	}
 	return out
 }
 
-// renderAssistant — ответ модели: вертикальная черта «|» вторичным
-// акцентом. Подпись (время, токены) — под тем же маркером, тихим цветом.
+// renderAssistant — ответ модели: метка «gcli», тело под ней. Подпись
+// (время, токены) — под тем же отступом, тихим цветом.
 func renderAssistant(b *block, w int, t Theme) []Line {
 	if w < 16 {
 		w = 16
 	}
 	var out []Line
+	out = append(out, Line{{Text: "  gcli", S: Style{FG: t.Accent, BG: t.Bg, Bold: true}}})
 	for _, raw := range b.lines {
 		if strings.TrimSpace(stripANSI(raw)) == "" {
-			out = append(out, Line{{Text: "  |", S: Style{FG: t.Accent2, BG: t.Bg}}})
+			out = append(out, Line{})
 			continue
 		}
 		segs := parseStyled(raw, t, Style{FG: t.Text, BG: t.Bg})
-		for _, ln := range wrapSegs(segs, w-4) {
-			line := Line{gutter("|", t.Accent2, t, false)}
-			out = append(out, append(line, ln...).trimEnd())
+		for _, ln := range wrapSegs(segs, w-6) {
+			out = append(out, append(Line{{Text: bodyIndent, S: Style{FG: t.Text, BG: t.Bg}}}, ln...).trimEnd())
 		}
 	}
 	if b.meta != "" {
-		for _, ln := range wrapSegs(Line{{Text: b.meta, S: Style{FG: t.Dim, BG: t.Bg}}}, w-4) {
-			out = append(out, append(Line{gutter("|", t.Accent2, t, false)}, ln...).trimEnd())
+		for _, ln := range wrapSegs(Line{{Text: b.meta, S: Style{FG: t.Dim, BG: t.Bg}}}, w-6) {
+			out = append(out, append(Line{{Text: bodyIndent, S: Style{FG: t.Dim, BG: t.Bg}}}, ln...).trimEnd())
 		}
 	}
 	return out
 }
 
 // renderThink — размышления: свёрнуты в одну строку, разворачиваются
-// Ctrl+O или кликом по заголовку. Маркер «:» — тоже колонка, но тихая:
-// мысли не должны спорить с ответом за внимание. Пока модель думает,
-// в заголовке живёт спиннер.
+// Ctrl+O или кликом по заголовку. Метка «~» — тихая: мысли не должны
+// спорить с ответом за внимание. Пока модель думает, в заголовке
+// живёт спиннер.
 func renderThink(b *block, w int, t Theme, spin string) []Line {
 	body := strings.Join(b.lines, "\n")
 	body = strings.TrimSpace(stripANSI(body))
 	if body == "" {
-		return []Line{{{Text: "  : think", S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
+		return []Line{{{Text: "  " + glyphThink + " размышления", S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 	}
 	n := len(strings.Split(body, "\n"))
 	if b.collapsed {
 		if !b.done {
-			line := "  : think " + spin + " ... ctrl+o развернуть"
+			line := "  " + glyphThink + " размышления " + spin + " ... ctrl+o развернуть"
 			return []Line{{{Text: Truncate(line, w), S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 		}
-		line := fmt.Sprintf("  : think - %d %s - ctrl+o развернуть",
-			n, plural(n, "строка", "строки", "строк"))
+		line := fmt.Sprintf("  %s размышления - %d %s - ctrl+o развернуть",
+			glyphThink, n, plural(n, "строка", "строки", "строк"))
 		return []Line{{{Text: Truncate(line, w), S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 	}
-	// Развёрнутые мысли: каждый абзац с тихим «:» в колонке.
+	// Развёрнутые мысли: заголовок и тело с тем же отступом, что у сообщений.
 	var out []Line
-	head := "  : think - ctrl+o свернуть"
+	head := "  " + glyphThink + " размышления - ctrl+o свернуть"
 	if !b.done {
-		head = "  : think " + spin + " - ctrl+o свернуть"
+		head = "  " + glyphThink + " размышления " + spin + " - ctrl+o свернуть"
 	}
 	out = append(out, Line{{Text: Truncate(head, w), S: Style{FG: t.Muted, BG: t.Bg, Italic: true}}})
 	max := 400
 	for i, ln := range strings.Split(body, "\n") {
 		if i >= max {
-			out = append(out, Line{{Text: "  : ... ещё " + fmt.Sprint(n-max) + " строк", S: Style{FG: t.Dim, BG: t.Bg}}})
+			out = append(out, Line{{Text: "  " + glyphThink + " ... ещё " + fmt.Sprint(n-max) + " строк", S: Style{FG: t.Dim, BG: t.Bg}}})
 			break
 		}
-		for _, seg := range wrapSegs(parseStyled(ln, t, Style{FG: t.Muted, BG: t.Bg}), w-4) {
-			line := Line{gutter(":", t.Border, t, false)}
-			out = append(out, append(line, seg...).trimEnd())
+		for _, seg := range wrapSegs(parseStyled(ln, t, Style{FG: t.Muted, BG: t.Bg}), w-6) {
+			out = append(out, append(Line{{Text: bodyIndent, S: Style{FG: t.Muted, BG: t.Bg}}}, seg...).trimEnd())
 		}
 	}
 	return out
 }
 
-// renderTool — карточка инструмента: «[имя] аргументы ... ok 0.3s».
+// renderTool — карточка инструмента: «* имя аргументы ... ok 0.3s».
+// Результат удачного вызова — строкой ниже с «зубцом» «:», ошибка — «!».
 func renderTool(b *block, w int, t Theme, spin string) []Line {
 	ti := b.tool
 	color := toolColor(ti.Kind, t)
@@ -677,7 +686,7 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 		right = Truncate(right, max)
 	}
 	rightW := StringWidth(right)
-	left := 2 + 1 + len("[") + nameW + 1 + 1 // отступ + [ + имя + ] + пробел
+	left := 2 + 1 + 1 + nameW + 1 // отступ + * + пробел + имя + пробел
 	avail := w - left - rightW - 2
 	if avail < 0 {
 		avail = 0
@@ -688,9 +697,9 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	st := Style{FG: t.Text, BG: t.Bg}
 	line := Line{
 		{Text: "  ", S: st},
-		{Text: "[", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: glyphTool, S: Style{FG: color, BG: t.Bg}},
+		{Text: " ", S: st},
 		{Text: name, S: Style{FG: color, BG: t.Bg, Bold: true}},
-		{Text: "]", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: args, S: Style{FG: t.Muted, BG: t.Bg}},
 	}
 	// Дополняем пробелами до правой части.
@@ -702,12 +711,16 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	line = append(line, Seg{Text: right, S: Style{FG: scol, BG: t.Bg}})
 	out := []Line{line.trimEnd()}
 
-	// Деталь удачного вызова — второй строкой с отступом:
-	// «214 строк · голова файла в контексте» → «214 строк, голова в контексте».
+	// Деталь удачного вызова — второй строкой с отступом и зубцом:
+	// «214 строк · голова файла в контексте» читается как след от вызова.
 	if ti.Status == "ok" && ti.Detail != "" {
 		detail := sanitizeOneLine(ti.Detail)
-		for _, seg := range wrapSegs(Line{{Text: detail, S: Style{FG: t.Muted, BG: t.Bg}}}, w-6) {
-			l := Line{{Text: "    ", S: st}}
+		for _, seg := range wrapSegs(Line{{Text: detail, S: Style{FG: t.Muted, BG: t.Bg}}}, w-8) {
+			l := Line{
+				{Text: bodyIndent, S: st},
+				{Text: ":", S: Style{FG: t.Border, BG: t.Bg}},
+				{Text: " ", S: st},
+			}
 			out = append(out, append(l, seg...).trimEnd())
 		}
 	}
@@ -715,8 +728,12 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	// Ошибка — отдельной строкой под карточкой: её видно, не раскрывая.
 	if (ti.Status == "fail" || ti.Status == "denied") && ti.Detail != "" {
 		msg := sanitizeOneLine(ti.Detail)
-		for _, seg := range wrapSegs(Line{{Text: msg, S: Style{FG: t.Err, BG: t.Bg}}}, w-6) {
-			l := Line{gutter("!", t.Err, t, true)}
+		for _, seg := range wrapSegs(Line{{Text: msg, S: Style{FG: t.Err, BG: t.Bg}}}, w-8) {
+			l := Line{
+				{Text: bodyIndent, S: st},
+				{Text: "!", S: Style{FG: t.Err, BG: t.Bg, Bold: true}},
+				{Text: " ", S: st},
+			}
 			out = append(out, append(l, seg...).trimEnd())
 		}
 	}
