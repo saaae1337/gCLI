@@ -76,7 +76,10 @@ type Options struct {
 	Compact    bool
 	ShowTime   bool
 	Width      int
-	Out        Writer
+	// Height - фиксированная высота кадра полноэкранного режима
+	// (тесты и отладка). Ноль - брать реальную высоту терминала.
+	Height int
+	Out    Writer
 	// Colors - hex-цвета темы (пусто = цвета темы по умолчанию).
 	Colors ThemeColors
 	// Grade - принудительный уровень цвета (0 = определить автоматически).
@@ -106,6 +109,9 @@ type UI struct {
 	// width - ширина вывода. Атомарная по той же причине: фоновая
 	// горутина может печатать, пока интерфейс меняет ширину под TUI.
 	width atomic.Int64
+	// heightFix - фиксированная высота кадра (конфиг/тест). Атомарная:
+	// тикер полноэкранного режима читает её без блокировки.
+	heightFix atomic.Int64
 
 	// Уровень цвета: 16 / 256 / truecolor (определяется при создании).
 	grade colorLevel
@@ -138,6 +144,15 @@ type UI struct {
 	// печатается построчно: живая область снизу требует, чтобы каждая печать
 	// заканчивалась переводом строки.
 	thinkPend string
+
+	// ---------- Полноэкранный режим (интерфейс Claude Code) ----------
+	// Альтернативный буфер терминала: транскрипт перелицовывается под
+	// ширину окна и перерисовывается целиком (см. screen.go). Включается
+	// на время REPL, если терминал поддерживает VT.
+	scr *Screen
+	// scrOn - быстрый признак полноэкранного режима без блокировки
+	// (для lineStart и других горячих путей).
+	screenOn atomic.Bool
 
 	// ---------- Нижняя живая область (интерфейс Claude Code) ----------
 	// Поле ввода в скруглённой рамке, pop-up меню команд, строка ожидания и
@@ -182,8 +197,11 @@ func New(opts Options) *UI {
 	u := &UI{opts: opts, out: out, grade: grade, g: GlyphsFor(opts.Theme, opts.Unicode)}
 	u.applyPalette()
 	u.spins = SpinnerFor(opts.Theme, opts.Unicode)
-	if opts.Width > 0 && opts.Width != 100 {
+	if u.opts.Width > 0 && u.opts.Width != 100 {
 		u.width.Store(int64(opts.Width))
+	}
+	if u.opts.Height > 0 {
+		u.heightFix.Store(int64(opts.Height))
 	}
 	if u.opts.Width <= 0 {
 		u.opts.Width = 100
@@ -230,15 +248,36 @@ func (u *UI) AnimationsOn() bool { return u.opts.Animations && u.opts.Color }
 // ---------- Базовый вывод ----------
 
 // Width - ширина терминала для вывода.
+//
+// Фиксированная ширина (из конфига или теста) хранится в u.width;
+// иначе размер читается у терминала при каждом вызове - ioctl стоит
+// микросекунды, зато интерфейс всегда рисует под актуальный размер
+// окна, а не под тот, что был при старте.
 func (u *UI) Width() int {
 	if w := int(u.width.Load()); w > 0 {
 		return w
 	}
-	if w := terminalWidth(); w > 20 {
-		u.width.Store(int64(w))
+	if w, _ := terminalSize(); w > 0 {
 		return w
 	}
 	return 100
+}
+
+// Height - высота терминала в строках (для полноэкранного режима).
+func (u *UI) Height() int {
+	if v := int(u.heightFix.Load()); v > 0 {
+		return v
+	}
+	if _, h := terminalSize(); h > 0 {
+		return h
+	}
+	return 24
+}
+
+// SetHeight - задать высоту кадра вручную (конфиг, тесты). Ноль возвращает
+// автоматическое определение по терминалу.
+func (u *UI) SetHeight(h int) {
+	u.heightFix.Store(int64(h))
 }
 
 // SetWidth - задать ширину вручную.
@@ -359,6 +398,12 @@ func (u *UI) put(s string) {
 		sink.Text(s)
 		return
 	}
+	if u.screenOnLocked() {
+		// Полноэкранный режим: строка попадает в транскрипт и кадр
+		// перерисовывается целиком (см. screen.go).
+		u.putScreenLocked(s)
+		return
+	}
 	if u.liveOn {
 		// Живая область внизу экрана: стереть регион, напечатать строки,
 		// нарисовать регион заново (см. live.go).
@@ -395,7 +440,11 @@ func (u *UI) lineStart() string {
 	if u.liveOn {
 		return ""
 	}
-	// Полноэкранному интерфейсу CR не нужен: у него своя сетка клеток.
+	// Полноэкранному интерфейсу CR не нужен: у него своя сетка клеток,
+	// и «\r» в середине логической строки сломал бы транскрипт.
+	if u.screenOn.Load() {
+		return ""
+	}
 	if u.sink() == nil && u.tty() {
 		return "\r"
 	}
@@ -452,6 +501,10 @@ func (u *UI) RawWrite(s string) {
 func (u *UI) ClearScreen() {
 	if sink := u.sink(); sink != nil {
 		sink.Clear()
+		return
+	}
+	if u.ScreenActive() {
+		u.ScreenClear()
 		return
 	}
 	u.RawWrite("\033[2J\033[H")
@@ -728,62 +781,101 @@ func (u *UI) SpinnerStart(label string) {
 	if u.sink() != nil {
 		return
 	}
-	if !u.opts.Animations || !u.opts.Color || u.quiet {
+	u.mu.Lock()
+	screen := u.screenOnLocked()
+	u.mu.Unlock()
+	// Полноэкранному режиму строка ожидания нужна всегда (как в Claude
+	// Code), без анимаций - просто без смены кадров.
+	if !screen && (!u.opts.Animations || !u.opts.Color || u.quiet) {
+		return
+	}
+	if screen && u.quiet {
 		return
 	}
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.spin {
+	stop, done, started := u.startSpinnerLocked(label, "")
+	u.mu.Unlock()
+	if !started {
 		return
+	}
+	u.spinLoop(u.spins, stop, done)
+}
+
+// startSpinnerLocked - общее начало строки ожидания под u.mu.
+// started=false означает, что анимация уже шла.
+func (u *UI) startSpinnerLocked(label, hint string) (chan struct{}, chan struct{}, bool) {
+	if u.spin {
+		return nil, nil, false
 	}
 	u.spin = true
 	u.spinLbl = label
-	u.spinHint = ""
+	u.spinHint = hint
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
 	u.spinDone = make(chan struct{})
-	frames := u.spins
-	stop, done := u.spinStop, u.spinDone
-	if u.liveOn {
-		u.liveBusy = label
-		u.liveMark = frames[0]
+	u.liveBusy = label
+	u.liveMark = firstSpinFrame(u)
+	if u.screenOnLocked() {
+		u.screenKick()
+	} else if u.liveOn {
 		u.flushLiveLocked()
 	}
-	go func() {
-		defer close(done)
-		i := 0
-		t := time.NewTicker(120 * time.Millisecond)
-		defer t.Stop()
-		for {
-			select {
-			case <-stop:
+	return u.spinStop, u.spinDone, true
+}
+
+// firstSpinFrame - первый кадр ожидания.
+func firstSpinFrame(u *UI) string {
+	if len(u.spins) == 0 {
+		return "|"
+	}
+	return u.spins[0]
+}
+
+// spinLoop - кадры строки ожидания: перерисовка текущего бэкенда.
+func (u *UI) spinLoop(frames []string, stop, done chan struct{}) {
+	defer close(done)
+	t := time.NewTicker(120 * time.Millisecond)
+	defer t.Stop()
+	i := 0
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			u.mu.Lock()
+			if !u.spin {
+				u.mu.Unlock()
 				return
-			case <-t.C:
-				u.mu.Lock()
-				if !u.spin {
-					u.mu.Unlock()
-					return
+			}
+			frame := frames[i%len(frames)]
+			i++
+			u.liveMark = frame
+			switch {
+			case u.screenOnLocked():
+				u.screenKick()
+				u.mu.Unlock()
+			case u.liveOn:
+				u.flushLiveLocked()
+				u.mu.Unlock()
+			default:
+				// Строка ожидания в прокрутке: «| Pondering… (esc to
+				// interrupt · 4s)». Пока модель думает, видно, сколько
+				// занято контекста, и есть подсказка про Ctrl+O.
+				parts := []string{}
+				if h := u.spinHint; h != "" {
+					parts = append(parts, h)
 				}
-				frame := frames[i%len(frames)]
-				i++
-				if u.liveOn {
-					u.liveMark = frame
-					u.flushLiveLocked()
-					u.mu.Unlock()
-					continue
+				parts = append(parts, time.Since(u.spinT0).Truncate(time.Second).String())
+				if m := u.metrics; m.Context > 0 {
+					parts = append(parts, "ctx "+m.ContextText())
 				}
-				label := u.spinLbl
-				// Обрезаем, чтобы не ломать строку на узком терминале.
-				maxl := u.opts.Width - 14
-				if maxl > 8 && cellWidth(label) > maxl {
-					label = truncate(label, maxl)
-				}
-				u.put("\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame+" "+label+"…") +
-					u.c(u.pal.Muted, " "+time.Since(u.spinT0).Truncate(time.Second).String()) + cReset)
+				line := "\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame+" "+u.spinLbl+"…") +
+					u.c(u.pal.Muted, " ("+strings.Join(parts, " · ")+")")
+				u.put(line)
 				u.mu.Unlock()
 			}
 		}
-	}()
+	}
 }
 
 // ShimmerStart - строка ожидания в стиле Claude Code: случайный глагол
@@ -804,73 +896,26 @@ func (u *UI) ShimmerHint(word, hint string) {
 		// Полноэкранный интерфейс показывает ожидание сам.
 		return
 	}
-	if !u.opts.Animations || !u.opts.Color || u.quiet {
+	u.mu.Lock()
+	screen := u.screenOnLocked()
+	u.mu.Unlock()
+	if screen {
+		if u.quiet {
+			return
+		}
+	} else if !u.opts.Animations || !u.opts.Color || u.quiet {
 		// Без анимаций и цвета перерисовки нет - но факт ожидания
 		// пользователь всё равно должен увидеть. Печатаем один раз и уходим.
 		u.Println("  " + word)
 		return
 	}
 	u.mu.Lock()
-	if u.spin {
-		u.mu.Unlock()
+	stop, done, started := u.startSpinnerLocked(word, hint)
+	u.mu.Unlock()
+	if !started {
 		return
 	}
-	u.spin = true
-	u.spinLbl = word
-	u.spinHint = hint
-	u.spinT0 = time.Now()
-	u.spinStop = make(chan struct{})
-	u.spinDone = make(chan struct{})
-	stop, done := u.spinStop, u.spinDone
-	frames := u.spins
-	if u.liveOn {
-		u.liveBusy = word
-		u.liveMark = frames[0]
-		u.flushLiveLocked()
-	}
-	u.mu.Unlock()
-
-	go func() {
-		defer close(done)
-		t := time.NewTicker(120 * time.Millisecond)
-		defer t.Stop()
-		i := 0
-		for {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-				u.mu.Lock()
-				if !u.spin {
-					u.mu.Unlock()
-					return
-				}
-				frame := frames[i%len(frames)]
-				i++
-				if u.liveOn {
-					u.liveMark = frame
-					u.flushLiveLocked()
-					u.mu.Unlock()
-					continue
-				}
-				// Строка ожидания без живой области: «| Pondering… (esc to
-				// interrupt · 4s)». Пока модель думает, видно, сколько занято
-				// контекста, и есть подсказка про Ctrl+O, если она задана.
-				parts := []string{}
-				if h := u.spinHint; h != "" {
-					parts = append(parts, h)
-				}
-				parts = append(parts, time.Since(u.spinT0).Truncate(time.Second).String())
-				if m := u.metrics; m.Context > 0 {
-					parts = append(parts, "ctx "+m.ContextText())
-				}
-				line := "\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame+" "+u.spinLbl+"…") +
-					u.c(u.pal.Muted, " ("+strings.Join(parts, " · ")+")")
-				u.put(line)
-				u.mu.Unlock()
-			}
-		}
-	}()
+	u.spinLoop(u.spins, stop, done)
 }
 
 // SpinnerStop - остановить анимацию и очистить строку.
@@ -884,7 +929,9 @@ func (u *UI) SpinnerStop() {
 	u.liveBusy = ""
 	u.spinHint = ""
 	stop, done := u.spinStop, u.spinDone
-	if u.liveOn {
+	if u.screenOnLocked() {
+		u.screenKick()
+	} else if u.liveOn {
 		u.flushLiveLocked()
 	} else {
 		u.put("\r" + cReset + "\033[K")
@@ -905,7 +952,9 @@ func (u *UI) clearSpinLocked() {
 	u.liveBusy = ""
 	u.spinHint = ""
 	stop, done := u.spinStop, u.spinDone
-	if u.liveOn {
+	if u.screenOnLocked() {
+		u.screenKick()
+	} else if u.liveOn {
 		u.flushLiveLocked()
 	} else {
 		u.put("\r" + cReset + "\033[K")

@@ -52,9 +52,11 @@ func TestRailKeepsResultAligned(t *testing.T) {
 			t.Errorf("строка %d шире терминала (%d > 70): %q", i, w, l)
 		}
 	}
-	// Вызов и результат связаны отступом: результат смещён под вызов.
-	if !strings.HasPrefix(StripANSI(lines[1]), "    ") {
-		t.Errorf("строка результата без отступа под вызовом: %q", lines[1])
+	// Вызов и результат связаны зубцом: результат смещён под вызов,
+	// как в Claude Code («● Name(args)» → «  └ результат»). У цветного
+	// зубца StripANSI оставляет только видимый текст.
+	if !strings.HasPrefix(StripANSI(lines[1]), "  └") {
+		t.Errorf("строка результата без зубца под вызовом: %q", lines[1])
 	}
 }
 
@@ -127,9 +129,9 @@ func TestRailPushPopIndents(t *testing.T) {
 	if !strings.HasPrefix(StripANSI(lines[1]), "  | ") {
 		t.Errorf("во вложенном вызове нет дополнительного рельса:\n%s", buf.String())
 	}
-	// Маркер вызова - «*» акцентом; в терминале без цвета — простой «*».
-	if !strings.HasPrefix(StripANSI(lines[0]), "  *") {
-		t.Errorf("базовый вызов должен начинаться с отступа 2 и «*»:\n%s", buf.String())
+	// Маркер вызова — «●» акцентом; в терминале без цвета — простой «●».
+	if !strings.HasPrefix(StripANSI(lines[0]), "  ●") {
+		t.Errorf("базовый вызов должен начинаться с отступа 2 и «●»:\n%s", buf.String())
 	}
 	// После выхода из вложенности отступ возвращается.
 	if strings.HasPrefix(StripANSI(lines[2]), "  | ") {

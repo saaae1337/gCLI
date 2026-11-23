@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"gcli/core"
 	"gcli/providers"
 	"gcli/ui"
 )
@@ -15,42 +16,79 @@ func osGOOS() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
 func osArch() string { return runtime.Version() }
 
-// banner - приветственный экран в стиле Claude Code: жирная строка
-// приветствия, подсказка, каталог и модель. Без бокса и без брендовых
-// значков: приветствие - обычный текст, который можно выделить и скопировать.
+// banner - приветственный экран в стиле Claude Code: скруглённый бокс
+// с логотипом, под ним - подсказка, каталог и модель. Строки бокса
+// уходят в тот же поток вывода, что и весь транскрипт: в полноэкранном
+// режиме они попадают в стенку и живут вместе с ней.
 func (a *app) banner() {
 	if a.quiet {
 		return
 	}
 
-	a.ui.Println("")
-	a.ui.Println("  " + a.ui.Head("Welcome to gCLI v"+version()))
-	a.ui.Println("")
-	a.ui.Println("  " + a.ui.Gray("/help for help, /status for your current setup"))
-	a.ui.Println("")
-	a.ui.Println(a.ui.Gray("cwd: ") + a.workDir)
 	prov, _ := a.providerModel()
 	label := ""
 	if prov != nil {
 		label = prov.Label
 	}
+	modelLine := a.model
 	if label != "" {
-		a.ui.Println(a.ui.Gray("model: ") + a.model + a.ui.Gray(" · "+label))
-	} else {
-		a.ui.Println(a.ui.Gray("model: ") + a.model)
+		modelLine += " · " + label
 	}
-	// Режимы - последним рядом: агент, план, автопилот, песочница.
+
+	// Строки содержимого бокса. Режимы и предупреждения - внутри, как
+	// в Claude Code: бокс - единственное приветствие, второй стенки
+	// заметок под ним не нужно.
+	type row struct {
+		text  string // уже раскрашенная строка
+		plain int    // видимая ширина в колонках
+	}
+	rows := []row{}
+	add := func(s string) {
+		rows = append(rows, row{text: s, plain: ui.VisibleWidth(s)})
+	}
+	add(a.ui.Accent(a.ui.Glyphs().Star) + " " + a.ui.Head("Welcome to gCLI v"+version()))
+	add("")
+	add("  " + a.ui.Gray("/help for help, /status for your current setup"))
+	add("")
+	add("  " + a.ui.Gray("cwd:   ") + core.OneLine(a.workDir))
+	add("  " + a.ui.Gray("model: ") + modelLine)
 	if chips := a.modeChips(); chips != "" {
-		a.ui.Println(a.ui.Gray("mode: ") + chips)
+		add("  " + a.ui.Gray("mode:  ") + chips)
 	}
 	// Нет ключа - предупреждаем сразу: это первое, что надо исправить.
 	if !a.prov.HasKey() {
-		a.ui.Println(a.ui.Gray("key:  ") + a.ui.Paint(a.ui.Pal().Warn, "не задан - /setup"))
+		add("  " + a.ui.Gray("key:   ") + a.ui.Paint(a.ui.Pal().Warn, "не задан - /setup"))
 	}
 
-	// Замечания старта - приглушённым списком, без дублирования: заметка
-	// может прийти и через setupNotes, и через startupNotes, а печатать
-	// её дважды - прямой путь к «вырвиглазному» старту.
+	// Ширина бокса: содержимое + воздух, не шире терминала.
+	inner := 0
+	for _, r := range rows {
+		if r.plain > inner {
+			inner = r.plain
+		}
+	}
+	if max := a.ui.Width() - 4; inner > max {
+		inner = max
+	}
+	if inner < 12 {
+		inner = 12
+	}
+
+	g := a.ui.Glyphs()
+	bar := strings.Repeat(g.H, inner+2)
+	a.ui.Println("")
+	a.ui.Println(" " + a.ui.Gray(g.TL+bar+g.TR))
+	for _, r := range rows {
+		// Обрезаем до inner по видимым колонкам: длинный cwd или модель
+		// не должны выталкивать правую границу бокса.
+		body := truncateVisible(r.text, r.plain, inner)
+		a.ui.Println(" " + a.ui.Gray(g.V) + " " + padVisible(body, r.plain, inner) + " " + a.ui.Gray(g.V))
+	}
+	a.ui.Println(" " + a.ui.Gray(g.BL+bar+g.BR))
+
+	// Замечания старта - приглушённым списком под боксом, без
+	// дублирования: заметка может прийти и через setupNotes, и через
+	// startupNotes, а печатать её дважды - прямой путь к шуму.
 	seen := map[string]bool{}
 	for _, n := range a.setupNotes {
 		key := strings.TrimSpace(n)
@@ -72,6 +110,24 @@ func (a *app) banner() {
 		a.ui.Info(a.ui.Gray("субагенты подключены - /agents"))
 	}
 	a.ui.Println("")
+}
+
+// truncateVisible - обрезать раскрашенную строку до inner колонок
+// (учитывая, что ANSI не меняет видимую ширину).
+func truncateVisible(s string, plain, inner int) string {
+	if plain <= inner {
+		return s
+	}
+	return ui.TruncateCells(s, inner)
+}
+
+// padVisible - добить раскрашенную строку пробелами до inner колонок.
+func padVisible(s string, plain, inner int) string {
+	pad := inner - plain
+	if pad <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", pad)
 }
 
 // modeChips - краткие бейджи режимов для бокса и строки подсказок.

@@ -40,15 +40,18 @@ func TestNormalizeThemeEmber(t *testing.T) {
 	}
 }
 
-// Глифы: спокойный набор без брендовых значков, ASCII-фолбэк.
+// Глифы: набор Claude Code (маркер «●», зубец «└»), ASCII-фолбэк.
 func TestEmberGlyphs(t *testing.T) {
 	g := emberGlyphs()
-	// Маскот убран: брендовых знаков и зубцов нет.
-	if g.Mark != "" || g.Tick != "" {
-		t.Errorf("брендовые знаки должны быть пусты: mark=%q tick=%q", g.Mark, g.Tick)
+	// Брендового маскота нет; маркер вызова и зубец результата — как в CC.
+	if g.Mark != "" {
+		t.Errorf("брендовый знак должен быть пуст: mark=%q", g.Mark)
 	}
-	if g.Dot != "*" {
-		t.Errorf("маркер события = %q, ожидался '*'", g.Dot)
+	if g.Dot != "●" {
+		t.Errorf("маркер события = %q, ожидался '●'", g.Dot)
+	}
+	if g.Tick != "└" {
+		t.Errorf("зубец результата = %q, ожидался '└'", g.Tick)
 	}
 	a := emberASCIIGlyphs()
 	if !isASCIIString(a.Mark + a.Tick + a.Dot) {
@@ -78,9 +81,9 @@ func TestEmberGlyphsFor(t *testing.T) {
 		t.Error("алиас «coal» без юникода должен вернуть ASCII-набор")
 	}
 	sp := SpinnerFor("ember", true)
-	// Спиннер — классическая палочка: один набор на все термины.
-	if len(sp) == 0 || sp[0] != "|" {
-		t.Errorf("спиннер = %v, ожидалась палочка |/-\\", sp)
+	// Спиннер — фирменные кадры Claude Code; ASCII — палочка.
+	if len(sp) == 0 || sp[0] != "·" {
+		t.Errorf("спиннер = %v, ожидались кадры Claude Code", sp)
 	}
 	if sp2 := SpinnerFor("ember", false); sp2[0] != "|" {
 		t.Errorf("ASCII-спиннер = %v, ожидалась палочка", sp2)

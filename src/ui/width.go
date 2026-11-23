@@ -84,6 +84,10 @@ func truncateCells(s string, n int) string {
 	return out
 }
 
+// TruncateCells - экспорт обрезки по колонкам терминала (с учётом ANSI):
+// баннеру и другим местам за пределами пакета надо мерить строки колонками.
+func TruncateCells(s string, n int) string { return truncateCells(s, n) }
+
 // truncateCellsEll - обрезать до n колонок, поставив в конце «...».
 func truncateCellsEll(s string, n int) string {
 	if n <= 0 {

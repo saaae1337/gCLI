@@ -194,7 +194,15 @@ func buildCommandDefs() []commandDef {
 		{group: "Сервис", names: []string{"/copy"}, desc: "скопировать последний ответ (OSC52)",
 			run: func(a *app, rest, arg string) bool { a.cmdCopy(); return true }},
 		{group: "Сервис", names: []string{"/cls", "/clear-screen"}, desc: "очистить экран",
-			run: func(a *app, rest, arg string) bool { a.ui.ClearScreen(); return true }},
+			run: func(a *app, rest, arg string) bool {
+				a.ui.ClearScreen()
+				// В полноэкранном режиме приветствие живёт в транскрипте:
+				// после чистки стенки оно должно вернуться.
+				if a.ui.ScreenActive() && !a.quiet {
+					a.banner()
+				}
+				return true
+			}},
 		{group: "Сервис", names: []string{"/quit", "/exit", "/q"}, desc: "выход (также Ctrl+D)",
 			run: func(a *app, rest, arg string) bool { return false }},
 	}
@@ -1310,6 +1318,11 @@ func (a *app) cmdClear() {
 	a.sessSwap.Lock()
 	defer a.sessSwap.Unlock()
 	a.ui.ClearScreen()
+	// В полноэкранном режиме приветствие живёт в транскрипте: после
+	// чистки стенки оно должно вернуться.
+	if a.ui.ScreenActive() && !a.quiet {
+		a.banner()
+	}
 	a.saveSession()
 	a.sess = a.repo.NewSession(a.prov.ID, a.model, a.workDir)
 	a.saveSession()

@@ -58,8 +58,12 @@ type composer struct {
 	quit      bool
 	exitArm   bool // Ctrl+C уже нажат один раз с пустым полем
 	askSecret bool // рисовать точки вместо символов
-	// live - рисовать ли живую область: только в raw-режиме терминала.
-	// В пайпах и CI регион рисовать нечем и не нужно - ввод построчный.
+	// screen - полноэкранный режим (альтернативный буфер): стенка
+	// перелицовывается под размер окна, поле ввода у нижней границы.
+	screen bool
+	// live - рисовать ли живую область: запасной режим без
+	// альтернативного буфера (старые консоли). В пайпах и CI регион
+	// рисовать нечем и не нужно - ввод построчный.
 	live   bool
 	askCh  chan askReq
 	redraw chan struct{}
@@ -67,7 +71,11 @@ type composer struct {
 	once   sync.Once
 }
 
-// newComposer - собрать композер и включить живую область.
+// newComposer - собрать композер и включить нижнюю область.
+//
+// Приоритет - полноэкранный режим (альтернативный буфер, как в Claude
+// Code): он адаптируется к размеру окна. Терминал без VT остаётся на
+// живой области в прокрутке, пайп - на построчном вводе.
 func newComposer(a *app) *composer {
 	c := &composer{
 		a:      a,
@@ -77,8 +85,17 @@ func newComposer(a *app) *composer {
 		redraw: make(chan struct{}, 8),
 		done:   make(chan struct{}),
 	}
-	c.live = a.stdin.raw.Load()
-	if c.live {
+	c.screen = a.ui.ScreenStart()
+	c.live = !c.screen && a.stdin.raw.Load()
+	if c.screen {
+		// Приветствие рисуется заново уже внутри экрана: баннер,
+		// напечатанный до его включения, остался в прокрутке.
+		if !a.quiet {
+			a.banner()
+		}
+		c.ui.LiveStart(c.placeholder())
+		c.ui.LiveFooter("? for shortcuts", a.footerRight())
+	} else if c.live {
 		c.ui.LiveStart(c.placeholder())
 		c.ui.LiveFooter("? for shortcuts", a.footerRight())
 	}
@@ -263,7 +280,11 @@ func (c *composer) handleKey(k keyID) {
 	case keyCtrlO:
 		c.a.ctrlO()
 		c.refresh()
-	case keyPageUp, keyPageDown, keyCtrlR, keyCtrlT, keyCtrlN, keyCtrlP:
+	case keyPageUp:
+		c.ui.ScreenScroll(-8)
+	case keyPageDown:
+		c.ui.ScreenScroll(8)
+	case keyCtrlR, keyCtrlT, keyCtrlN, keyCtrlP:
 		// Резерв: поиск по истории и прочее - не задействовано.
 	}
 }
@@ -502,6 +523,16 @@ func (c *composer) onCtrlC() {
 
 // clearScreen - Ctrl+L: очистить экран и перерисовать баннер с регионом.
 func (c *composer) clearScreen() {
+	if c.screen {
+		// Полноэкранный режим: чистим транскрипт внутри кадра;
+		// выходить из альтернативного буфера не нужно.
+		c.ui.ScreenClear()
+		if !c.a.quiet {
+			c.a.banner()
+		}
+		c.refresh()
+		return
+	}
 	if c.live {
 		c.ui.LiveStop()
 	}

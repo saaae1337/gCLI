@@ -23,9 +23,9 @@ func testUI() (*UI, *strings.Builder) {
 
 func TestGlyphsFor(t *testing.T) {
 	uni := GlyphsFor("ember", true)
-	// Рамки скруглённые, брендовых значков нет: маскот убран.
-	if uni.TL != "╭" || uni.Mark != "" || uni.Dot != "*" {
-		t.Errorf("ожидались спокойные глифы, получено TL=%q mark=%q dot=%q", uni.TL, uni.Mark, uni.Dot)
+	// Рамки скруглённые, маркер вызова — «●», логотипа-маскота нет.
+	if uni.TL != "╭" || uni.Mark != "" || uni.Dot != "●" {
+		t.Errorf("ожидались глифы Claude Code, получено TL=%q mark=%q dot=%q", uni.TL, uni.Mark, uni.Dot)
 	}
 	asc := GlyphsFor("ember", false)
 	if asc.TL != "+" {

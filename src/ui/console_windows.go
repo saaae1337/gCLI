@@ -103,21 +103,36 @@ type consoleScreenBufferInfo struct {
 	MaximumWindowSize coord
 }
 
-// terminalWidth - ширина терминала в колонках.
-func terminalWidth() int {
-	h, _, _ := procGetStdHandle.Call(stdOutputHandle)
-	if h == 0 || h == ^uintptr(0) {
-		return 0
+// terminalSize - текущий размер окна консоли (колонки, строки).
+//
+// Читается при каждой перерисовке: только так интерфейс замечает
+// изменение размера окна. Размер считается по видимому окну
+// (Window), а не по буферу (Size): буфер в conhost шире окна,
+// и по нему строки уезжали за правый край.
+func terminalSize() (w, h int) {
+	hd, _, _ := procGetStdHandle.Call(stdOutputHandle)
+	if hd == 0 || hd == ^uintptr(0) {
+		return 0, 0
 	}
 	var info consoleScreenBufferInfo
-	r, _, _ := procGetConsoleSInfo.Call(h, uintptr(unsafe.Pointer(&info)))
+	r, _, _ := procGetConsoleSInfo.Call(hd, uintptr(unsafe.Pointer(&info)))
 	if r == 0 {
-		return 0
+		return 0, 0
 	}
-	w := int(info.Window.Right-info.Window.Left) + 1
+	w = int(info.Window.Right-info.Window.Left) + 1
+	h = int(info.Window.Bottom-info.Window.Top) + 1
 	if w < 20 {
-		return 0
+		w = 0
 	}
+	if h < 5 {
+		h = 0
+	}
+	return w, h
+}
+
+// terminalWidth - ширина терминала в колонках.
+func terminalWidth() int {
+	w, _ := terminalSize()
 	return w
 }
 

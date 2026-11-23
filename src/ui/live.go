@@ -47,18 +47,29 @@ const liveMenuVisible = 6
 // ---------- Публичное API ----------
 
 // LiveStart - включить живую область и нарисовать пустой регион.
+// В полноэкранном режиме (screen.go) состояние уже принадлежит экрану:
+// метод только обновляет плейсхолдер и помечает кадр грязным.
 func (u *UI) LiveStart(placeholder string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.liveOn = true
 	u.livePlaceholder = placeholder
+	if u.screenOnLocked() {
+		u.screenKick()
+		return
+	}
+	u.liveOn = true
 	u.liveMenu = nil
 	u.liveMenuSel = 0
 	u.flushLiveLocked()
 }
 
 // LiveStop - выключить живую область и стереть её с экрана.
+// В полноэкранном режиме - выйти из альтернативного буфера.
 func (u *UI) LiveStop() {
+	if u.ScreenActive() {
+		u.ScreenStop()
+		return
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.eraseLiveLocked()
@@ -78,6 +89,11 @@ func (u *UI) LiveInput(text string, cur int) {
 	u.mu.Lock()
 	u.liveInp = text
 	u.liveCur = cur
+	if u.screenOnLocked() {
+		u.screenKick()
+		u.mu.Unlock()
+		return
+	}
 	u.flushLiveLocked()
 	u.mu.Unlock()
 }
@@ -86,6 +102,11 @@ func (u *UI) LiveInput(text string, cur int) {
 func (u *UI) LivePlaceholder(text string) {
 	u.mu.Lock()
 	u.livePlaceholder = text
+	if u.screenOnLocked() {
+		u.screenKick()
+		u.mu.Unlock()
+		return
+	}
 	u.flushLiveLocked()
 	u.mu.Unlock()
 }
@@ -95,6 +116,11 @@ func (u *UI) LiveMenu(items []MenuItem, sel int) {
 	u.mu.Lock()
 	u.liveMenu = items
 	u.liveMenuSel = sel
+	if u.screenOnLocked() {
+		u.screenKick()
+		u.mu.Unlock()
+		return
+	}
 	u.flushLiveLocked()
 	u.mu.Unlock()
 }
@@ -104,6 +130,11 @@ func (u *UI) LiveFooter(left, right string) {
 	u.mu.Lock()
 	u.liveFooterL = left
 	u.liveFooterR = right
+	if u.screenOnLocked() {
+		u.screenKick()
+		u.mu.Unlock()
+		return
+	}
 	u.flushLiveLocked()
 	u.mu.Unlock()
 }
@@ -158,7 +189,7 @@ func (u *UI) drawLiveLocked() {
 
 	// 2. Строка ожидания - над полем, когда агент занят.
 	if u.liveBusy != "" {
-		rows = append(rows, u.liveBusyLine())
+		rows = append(rows, u.liveBusyLine(w))
 	}
 
 	// 3. Поле ввода в скруглённой рамке.
@@ -255,7 +286,7 @@ func (u *UI) liveMenuRows(w int) []string {
 }
 
 // liveBusyLine - строка ожидания: «| Infusing… (esc to interrupt · 4s · ↓ 1.2k tok)».
-func (u *UI) liveBusyLine() string {
+func (u *UI) liveBusyLine(w int) string {
 	el := time.Since(u.spinT0).Truncate(time.Second)
 	// Клавиша прерывания - как в Claude Code: «(esc to interrupt · 4s · ↓ 1.2k tok)».
 	parts := []string{"esc to interrupt"}
@@ -272,7 +303,7 @@ func (u *UI) liveBusyLine() string {
 	}
 	line := u.c(u.pal.Accent, u.liveMark+" "+u.liveBusy+"…") +
 		u.c(u.pal.Muted, " ("+strings.Join(parts, " · ")+")")
-	return "  " + u.truncateRow(line, u.liveWidth()-2)
+	return "  " + u.truncateRow(line, w-2)
 }
 
 // liveBoxRows - поле ввода в скруглённой рамке: первая строка с «> »,

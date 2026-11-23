@@ -46,22 +46,23 @@ type Glyphs struct {
 	Retry string
 }
 
-// ccGlyphs — юникодный набор: скруглённые рамки поля ввода, остальное —
-// ASCII. Маркеры «*», список «-», стрелка «->»: то, что рисует Claude Code
-// по смыслу, но без символов, которых нет в консольных шрифтах Windows.
+// ccGlyphs — юникодный набор: скруглённые рамки поля ввода, маркер
+// вызова инструмента «●», зубец результата «└», логотип «✳» — визуальный
+// язык Claude Code. Всё это есть в системных шрифтах Windows Terminal,
+// linux и macOS; при сомнениях остаётся -ascii (GCLI_ASCII).
 func ccGlyphs() Glyphs {
 	return Glyphs{
 		Unicode: true,
 		TL:      "╭", TR: "╮", BL: "╰", BR: "╯",
 		H: "─", V: "│",
 		Tee: "├", Elbow: "└", Pipe: "│", Dash: "─", Arrow: "->",
-		Bullet: "-", Check: "✓", Cross: "×", Excl: "!", Star: "*", Dot: "*",
+		Bullet: "-", Check: "✓", Cross: "×", Excl: "!", Star: "✳", Dot: "●",
 		Running: "|", Pending: "·", BarFull: "#", BarEmpty: ".",
 		Separator: "·", Ellipsis: "…", Dots: "...",
 		DashDot:  "·",
 		RuleChar: "─",
 		Mark:     "",
-		Tick:     "",
+		Tick:     "└",
 		Retry:    "~",
 	}
 }
@@ -125,12 +126,18 @@ const (
 	barEmpty = "."
 )
 
-// SpinnerFrames — кадры анимации ожидания. Один набор на все терминалы:
-// классическая палочка, которая есть в любом шрифте любой консоли.
-// Фирменные звёздочки Claude Code — маскот, их место в интерфейсе пусто.
+// SpinnerFrames — кадры анимации ожидания, как в Claude Code:
+// «✻ Thinking… (esc to interrupt · 4s)». Терминал без юникода рисует
+// классическую палочку (SpinnerAscii).
+var SpinnerUnicode = []string{"·", "✢", "✳", "∗", "✻", "✽"}
+
+// SpinnerAscii — палочка для терминалов без юникода.
 var SpinnerAscii = []string{"|", "/", "-", "\\"}
 
 // SpinnerFor — кадры ожидания под текущий терминал.
 func SpinnerFor(theme string, unicodeOK bool) []string {
+	if unicodeOK {
+		return SpinnerUnicode
+	}
 	return SpinnerAscii
 }

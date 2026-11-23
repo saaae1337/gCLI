@@ -38,13 +38,17 @@ func (u *UI) RailStart(tc ToolCall) {
 	u.Println(indent + u.emberMark(u.pal.Accent) + " " + name + u.Gray(args))
 }
 
-// RailEnd - строка результата под вызовом: отступ, приглушённый текст.
+// RailEnd - строка результата под вызовом: зубец и отступ, приглушённый
+// текст. Разметка Claude Code:
+//
+//	● read_file(src/ui/ui.go)
+//	  └ 481 строка · 3ms
 func (u *UI) RailEnd(tc ToolCall) {
 	text := core.OneLine(tc.Detail)
 	if text == "" {
 		text = "готово"
 	}
-	// Результат - фон события, а не второе событие: смещение под вызов,
+	// Результат - фон события, а не второе событие: зубец под вызовом,
 	// приглушённый цвет. Красным или янтарным остаются только ошибки и
 	// отказы, чтобы их было видно в потоке.
 	color := u.pal.Muted
@@ -62,7 +66,12 @@ func (u *UI) RailEnd(tc ToolCall) {
 		meta = append(meta, core.HumanDuration(tc.Elapsed))
 	}
 	indent := u.railIndent()
-	used := visibleWidth(indent) + 2
+	// Зубец результата: «└» в юникодном наборе, в ASCII - просто отступ.
+	tick := ""
+	if u.g.Tick != "" {
+		tick = u.c(u.pal.Muted, u.g.Tick) + " "
+	}
+	used := visibleWidth(indent) + visibleWidth(u.g.Tick) + 2
 	tail := ""
 	if len(meta) > 0 {
 		tail = u.c(u.pal.Muted, " · "+strings.Join(meta, " · "))
@@ -75,7 +84,7 @@ func (u *UI) RailEnd(tc ToolCall) {
 	if avail < 8 {
 		avail = 8
 	}
-	u.RevealLine(indent + "  " + u.c(color, truncate(text, avail)) + tail)
+	u.RevealLine(indent + tick + u.c(color, truncate(text, avail)) + tail)
 }
 
 // RailEndChain - закрыть серию вызовов (последняя строка результата).
