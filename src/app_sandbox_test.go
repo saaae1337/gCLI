@@ -283,7 +283,7 @@ func TestParseSandboxModeAliases(t *testing.T) {
 	for _, c := range cases {
 		got, ok := core.ParseSandboxMode(c.in)
 		if ok != c.ok || got != c.want {
-			t.Errorf("ParseSandboxMode(%q) = %q,%v — ждали %q,%v", c.in, got, ok, c.want, c.ok)
+			t.Errorf("ParseSandboxMode(%q) = %q,%v - ждали %q,%v", c.in, got, ok, c.want, c.ok)
 		}
 	}
 }

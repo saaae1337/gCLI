@@ -50,7 +50,7 @@ func TestBannerShowsSession(t *testing.T) {
 		}
 	}
 	if strings.Contains(clean, "/\\_/\\") || strings.Contains(clean, "> ^ <") {
-		t.Errorf("баннер не должен рисовать кота — его пост над строкой состояния:\n%s", clean)
+		t.Errorf("баннер не должен рисовать кота - его пост над строкой состояния:\n%s", clean)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestBannerPlainWithoutAnimations(t *testing.T) {
 func firstRunes(s string) string {
 	r := []rune(s)
 	if len(r) > 400 {
-		return string(r[:400]) + "…"
+		return string(r[:400]) + "..."
 	}
 	return s
 }

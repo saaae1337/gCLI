@@ -65,11 +65,11 @@ func (v DispatchVerdict) Reason() string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "роль выбрана автоматически: %s (уверенность %d) — сработали признаки: ",
+	fmt.Fprintf(&b, "роль выбрана автоматически: %s (уверенность %d) - сработали признаки: ",
 		v.Type, v.Score)
 	parts := make([]string, 0, len(v.Signals))
 	for _, s := range v.Signals {
-		parts = append(parts, fmt.Sprintf("%s→%s", s.Word, s.Role))
+		parts = append(parts, fmt.Sprintf("%s->%s", s.Word, s.Role))
 	}
 	b.WriteString(strings.Join(parts, ", "))
 	return b.String()

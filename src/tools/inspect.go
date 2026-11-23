@@ -29,13 +29,13 @@ func EscapeLine(s string) string {
 	for _, r := range s {
 		switch r {
 		case '\t':
-			b.WriteString("→") // таб: главный источник расхождений с edit_file
+			b.WriteString(">") // таб: главный источник расхождений с edit_file
 		case '\r':
-			b.WriteString("␍") // CR: признак CRLF-окончаний строк
+			b.WriteString("<CR>") // CR: признак CRLF-окончаний строк
 		case '\u00a0':
-			b.WriteString("⍽") // неразрывный пробел
+			b.WriteString("*") // неразрывный пробел
 		case '\u200b':
-			b.WriteString("␣") // zero-width space
+			b.WriteString("~") // zero-width space
 		case ' ':
 			b.WriteByte(' ')
 		default:
@@ -83,21 +83,21 @@ func DetectInvisible(path, content string) InvisibleReport {
 func (r InvisibleReport) Text() string {
 	var b strings.Builder
 	if r.HasBOM {
-		b.WriteString("⚠ В начале файла BOM (U+FEFF) — он часть первой строки, edit_file по ней не совпадёт.\n")
+		b.WriteString("! В начале файла BOM (U+FEFF) - он часть первой строки, edit_file по ней не совпадёт.\n")
 	}
 	if r.CRLF {
-		b.WriteString(fmt.Sprintf("⚠ Окончания строк CRLF (%d шт): после «строки» есть скрытый CR. "+
+		b.WriteString(fmt.Sprintf("! Окончания строк CRLF (%d шт): после \"строки\" есть скрытый CR. "+
 			"В ответе edit_file пиши LF, иначе не совпадёт.\n", r.CRLFCount))
 	}
 	if r.Tabs > 0 {
-		b.WriteString(fmt.Sprintf("Табов в строках: %d — в выводе ниже они показаны как →.\n", r.Tabs))
+		b.WriteString(fmt.Sprintf("Табов в строках: %d - в выводе ниже они показаны как >.\n", r.Tabs))
 	}
 	if len(r.Trailing) > 0 {
 		show := r.Trailing
 		if len(show) > 5 {
 			show = show[:5]
 		}
-		b.WriteString(fmt.Sprintf("Пробелы в конце строк: %d (строки %s) — edit_file по ним не сойдётся.\n",
+		b.WriteString(fmt.Sprintf("Пробелы в конце строк: %d (строки %s) - edit_file по ним не сойдётся.\n",
 			len(r.Trailing), joinInts(show)))
 	}
 	if b.Len() == 0 {
@@ -161,9 +161,9 @@ func (r *Registry) hInspect(_ context.Context, m map[string]any) (Result, error)
 		}
 		from := core.Max(0, idx-3)
 		to := core.Min(len(lines), idx+4)
-		fmt.Fprintf(&b, "## Совпадения для %q (строки %d–%d)\n", s, from+1, to)
+		fmt.Fprintf(&b, "## Совпадения для %q (строки %d-%d)\n", s, from+1, to)
 		for i := from; i < to; i++ {
-			fmt.Fprintf(&b, "%5d │ %s\n", i+1, EscapeLine(lines[i]))
+			fmt.Fprintf(&b, "%5d | %s\n", i+1, EscapeLine(lines[i]))
 		}
 		return Result{Text: b.String(), Summary: fmt.Sprintf("escape-вид: %s", core.RelToWD(r.workDir, p))}, nil
 	}
@@ -178,10 +178,10 @@ func (r *Registry) hInspect(_ context.Context, m map[string]any) (Result, error)
 	}
 	b.WriteString("## Строки\n")
 	for i := off - 1; i < to; i++ {
-		fmt.Fprintf(&b, "%5d │ %s\n", i+1, EscapeLine(lines[i]))
+		fmt.Fprintf(&b, "%5d | %s\n", i+1, EscapeLine(lines[i]))
 	}
-	b.WriteString("\n↑ Этот вид — для ДИАГНОСТИКИ, а не для копирования: символ → означает настоящий таб,\n" +
-		"в old_string нужен реальный символ, а не стрелка. Нужен escape-вид ровно тогда, когда\n" +
+	b.WriteString("\n! Этот вид - для ДИАГНОСТИКИ, а не для копирования: символ > означает настоящий таб,\n" +
+		"в old_string нужен реальный символ. Нужен escape-вид ровно тогда, когда\n" +
 		"edit_file не находит old_string: здесь видно, чем он отличается от того, что в файле.")
 	return Result{
 		Text:    strings.TrimSpace(b.String()),

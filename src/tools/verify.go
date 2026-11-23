@@ -167,12 +167,12 @@ var reGoDiag = regexp.MustCompile(`^([^\s:]+\.go):(\d+)(?::(\d+))?:\s*(.*)$`)
 // прогона, и разбирать их как падения нельзя: агент начнёт «чинить» то, что
 // никогда не ломалось. Отсекаем по маркеру, а не по виду имени — иначе под
 // нож попадут законные pytest-имена вида tests/test_foo.py::test_bar.
-var reTestFail = regexp.MustCompile(`^\s*(?:---\s*FAIL|FAILED|ERROR|✖|×)\s*[:\s]\s*(\S+)`)
+var reTestFail = regexp.MustCompile(`^\s*(?:---\s*FAIL|FAILED|ERROR|x|x)\s*[:\s]\s*(\S+)`)
 
 // reTestMark — тот же маркер, но без захвата имени. Нужен, чтобы отрезать
 // префикс и взять имя целиком: у Go в имени тайминг («TestFoo (0.00s)»),
 // у pytest — путь вместе с классом.
-var reTestMark = regexp.MustCompile(`^\s*(?:---\s*FAIL|FAILED|ERROR|✖|×)\s*[:\s]*`)
+var reTestMark = regexp.MustCompile(`^\s*(?:---\s*FAIL|FAILED|ERROR|x|x)\s*[:\s]*`)
 
 // reCounters — сводные счётчики вида «ok ... 5 passed» или pytest.
 var reCounters = regexp.MustCompile(`(\d+)\s+(passed|failed|ok|FAIL|PASS)`)
@@ -356,11 +356,11 @@ func failureKey(f Failure) string {
 // Text — отчёт для контекста модели.
 func (r *VerifyReport) Text() string {
 	var b strings.Builder
-	verdict := ui.Glyph("✔", "+") + " Проверка пройдена"
+	verdict := ui.Glyph("ok", "+") + " Проверка пройдена"
 	if !r.OK {
-		verdict = ui.Glyph("✖", "x") + " Проверка провалена"
+		verdict = ui.Glyph("x", "x") + " Проверка провалена"
 	}
-	fmt.Fprintf(&b, "%s — %s (%s, код выхода %d)\n", verdict, r.Command, core.HumanDuration(r.Elapsed), r.ExitCode)
+	fmt.Fprintf(&b, "%s - %s (%s, код выхода %d)\n", verdict, r.Command, core.HumanDuration(r.Elapsed), r.ExitCode)
 	if r.Passed > 0 || r.Failed > 0 {
 		fmt.Fprintf(&b, "Тестов: успешно %d, упало %d.\n", r.Passed, r.Failed)
 	}
@@ -371,13 +371,13 @@ func (r *VerifyReport) Text() string {
 	if r.HadBaseline {
 		switch {
 		case len(r.NewFailures) > 0:
-			fmt.Fprintf(&b, "\n⚠ НОВЫЕ падения (их не было до последней правки) — %d:\n", len(r.NewFailures))
+			fmt.Fprintf(&b, "\n! НОВЫЕ падения (их не было до последней правки) - %d:\n", len(r.NewFailures))
 			for i, f := range r.NewFailures {
 				if i >= 12 {
-					fmt.Fprintf(&b, "…ещё %d\n", len(r.NewFailures)-12)
+					fmt.Fprintf(&b, "...ещё %d\n", len(r.NewFailures)-12)
 					break
 				}
-				fmt.Fprintf(&b, "  • %s\n    %s\n", f.Where, core.Truncate(f.What, 200))
+				fmt.Fprintf(&b, "  - %s\n    %s\n", f.Where, core.Truncate(f.What, 200))
 			}
 			if r.Fixed > 0 {
 				fmt.Fprintf(&b, "При этом исправлено: %d. Итог: стало хуже.\n", r.Fixed)
@@ -403,7 +403,7 @@ func (r *VerifyReport) Text() string {
 		// тестов не содержит — ругаться на такой вывод нельзя, иначе
 		// инструмент сам себе противоречит на каждом зелёном прогоне.
 		if r.Passed == 0 && r.Failed == 0 && len(r.Diagnostics) == 0 && strings.TrimSpace(r.Raw) == "" {
-			b.WriteString("Внимание: команда завершилась с кодом 0 и не напечатала ни строчки — " +
+			b.WriteString("Внимание: команда завершилась с кодом 0 и не напечатала ни строчки - " +
 				"похоже, она ничего не проверяет. Убедись, что команда осмысленная.\n")
 		}
 		return strings.TrimSpace(b.String())
@@ -413,20 +413,20 @@ func (r *VerifyReport) Text() string {
 		fmt.Fprintf(&b, "\nЧто именно не так (%d):\n", len(r.Failures))
 		for i, f := range r.Failures {
 			if i >= 10 {
-				fmt.Fprintf(&b, "…ещё %d\n", len(r.Failures)-10)
+				fmt.Fprintf(&b, "...ещё %d\n", len(r.Failures)-10)
 				break
 			}
-			fmt.Fprintf(&b, "  • %s\n    %s\n", f.Where, core.Truncate(f.What, 220))
+			fmt.Fprintf(&b, "  - %s\n    %s\n", f.Where, core.Truncate(f.What, 220))
 		}
 	}
 	if len(r.Diagnostics) > 0 {
 		b.WriteString("\nДиагностика компилятора:\n")
 		for i, d := range r.Diagnostics {
 			if i >= 10 {
-				fmt.Fprintf(&b, "…ещё %d\n", len(r.Diagnostics)-10)
+				fmt.Fprintf(&b, "...ещё %d\n", len(r.Diagnostics)-10)
 				break
 			}
-			fmt.Fprintf(&b, "  %s:%d:%d — %s\n", d.File, d.Line, d.Col, core.Truncate(d.Msg, 160))
+			fmt.Fprintf(&b, "  %s:%d:%d - %s\n", d.File, d.Line, d.Col, core.Truncate(d.Msg, 160))
 		}
 	}
 	return strings.TrimSpace(b.String())
@@ -493,7 +493,7 @@ func (r *Registry) hVerify(ctx context.Context, m map[string]any) (Result, error
 		if len(cands) == 0 {
 			return Result{
 				Text: "Не нашёл в проекте признаков известного стека (go.mod, package.json, Cargo.toml, " +
-					"pyproject.toml, Makefile…). Укажи команду проверки явно: {\"command\": \"...\"}.",
+					"pyproject.toml, Makefile...). Укажи команду проверки явно: {\"command\": \"...\"}.",
 				Summary: "команда проверки не найдена",
 			}, nil
 		}
@@ -531,7 +531,7 @@ func (r *Registry) hVerify(ctx context.Context, m map[string]any) (Result, error
 				rep := checkHTMLPage(page)
 				return Result{Text: rep.Text(), Summary: rep.Summary()}, nil
 			}
-			return Result{}, fmt.Errorf("не знаю, чем проверять этот проект — укажи command, page или запусти с list=true")
+			return Result{}, fmt.Errorf("не знаю, чем проверять этот проект - укажи command, page или запусти с list=true")
 		}
 		cmd = cands[0].Cmd
 	}

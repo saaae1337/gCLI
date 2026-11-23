@@ -119,7 +119,7 @@ func TestIsPathLike(t *testing.T) {
 // TestOrDash — пустое значение печатается прочерком, а не пустотой.
 func TestOrDash(t *testing.T) {
 	for _, empty := range []string{"", "   ", "\t"} {
-		if got := orDash(empty); got != "—" {
+		if got := orDash(empty); got != "-" {
 			t.Errorf("orDash(%q) = %q, ждали прочерк", empty, got)
 		}
 	}
@@ -131,20 +131,20 @@ func TestOrDash(t *testing.T) {
 // TestYesNo — однозначный «да/нет» для переключателей.
 func TestYesNo(t *testing.T) {
 	if yesNo(true) != "да" {
-		t.Error("true должен печататься как «да»")
+		t.Error("true должен печататься как \"да\"")
 	}
 	if yesNo(false) != "нет" {
-		t.Error("false должен печататься как «нет»")
+		t.Error("false должен печататься как \"нет\"")
 	}
 }
 
 // TestModeStatus — переключатель показывается словом, а не 1/0.
 func TestModeStatus(t *testing.T) {
 	if modeStatus(true) != "вкл" {
-		t.Error("включено должно быть «вкл»")
+		t.Error("включено должно быть \"вкл\"")
 	}
 	if modeStatus(false) != "выкл" {
-		t.Error("выключено должно быть «выкл»")
+		t.Error("выключено должно быть \"выкл\"")
 	}
 }
 
@@ -237,7 +237,7 @@ func TestCommandCatalogIntegrity(t *testing.T) {
 			t.Errorf("%s: нет обработчика", d.names[0])
 		}
 		if d.desc == "" {
-			t.Errorf("%s: нет описания — в палитре и /help будет пустая строка", d.names[0])
+			t.Errorf("%s: нет описания - в палитре и /help будет пустая строка", d.names[0])
 		}
 		if d.group != "" {
 			groups++
@@ -250,7 +250,7 @@ func TestCommandCatalogIntegrity(t *testing.T) {
 		}
 	}
 	if groups == 0 {
-		t.Error("ни у одной команды нет группы — /help станет пустым")
+		t.Error("ни у одной команды нет группы - /help станет пустым")
 	}
 	// Индекс обязан покрывать все имена каталога.
 	for name := range seen {
@@ -329,11 +329,11 @@ func TestClosestNames(t *testing.T) {
 	known := []string{"zai", "openai", "openrouter", "deepseek"}
 	got := closestNames("openaii", known)
 	if len(got) == 0 || got[0] != "openai" {
-		t.Errorf("openaii → %v, ждали openai первым", got)
+		t.Errorf("openaii -> %v, ждали openai первым", got)
 	}
 	// префиксные совпадения идут раньше левенштейна
 	got = closestNames("open", known)
 	if len(got) != 2 || got[0] != "openai" || got[1] != "openrouter" {
-		t.Errorf("open → %v", got)
+		t.Errorf("open -> %v", got)
 	}
 }

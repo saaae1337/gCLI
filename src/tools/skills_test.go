@@ -58,7 +58,7 @@ func TestSkillDescTrimsAbsurdLength(t *testing.T) {
 	if len([]rune(got)) > maxSkillDesc+4 {
 		t.Errorf("описание не обрезано: %d символов", len([]rune(got)))
 	}
-	if !strings.HasSuffix(got, "…") {
+	if !strings.HasSuffix(got, "...") {
 		t.Errorf("обрыв должен быть помечен: %q", got[len(got)-10:])
 	}
 }

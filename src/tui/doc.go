@@ -11,10 +11,11 @@ import (
 
 // ---------- Лента диалога ----------
 //
-// В отличие от потока строк в обычном терминале, здесь у каждого события
-// есть вид: запрос, ответ, размышления, инструмент. Лента перерисовывается
-// целиком (только видимая часть), поэтому ширина меняется без потерь, а
-// карточки инструментов обновляются на месте.
+// У каждого события свой вид: запрос, ответ, размышления, инструмент.
+// Лента перерисовывается целиком (только видимая часть), поэтому ширина
+// меняется без потерь, а карточки инструментов обновляются на месте.
+// Оформление — чистый ASCII: заголовки со строкой дефисов, статусы
+// словами и знаками «ok x !», тело развёрнутых размышлений с «|».
 
 type blockKind int
 
@@ -67,22 +68,15 @@ type Doc struct {
 	// карточку ответа, а размышления вставали бы после неё.
 	armed   bool
 	version int
-	// Кэш отрисовки по блокам. Раньше Layout перерисовывал ВСЕ блоки
-	// ленты на каждый изменённый кадр: при busy спиннер менял ключ кэша
-	// каждые два тика, и многочасовая сессия перевёрстывалась целиком
-	// каждые ~220 мс — O(всей сессии) мусора и процессора на каждый кадр.
-	// Теперь отрисовка каждого блока переживает между кадрами: ключ —
-	// отпечаток состояния блока (см. layKey), меняется только он —
-	// перерисовывается только тронутый блок.
+	// Кэш отрисовки по блокам: на каждом кадре заново рисуются только
+	// блоки, чей отпечаток состояния изменился, — при стриминге в длинной
+	// сессии это один-два хвостовых блока, а не вся лента.
 	lay  map[*block]layEntry
 	layW int
 }
 
 // layKey — отпечаток состояния блока: если совпал с прошлым кадром,
-// раскладка блока не менялась и её можно переиспользовать. Поля покрывают
-// все места мутаций: addLine растит lines, SetMeta меняет meta,
-// ToggleThink — collapsed, ToolEnd — tool/done, размышления растут через
-// pending (pend), незакрытая карточка инструмента анимируется (spin).
+// раскладка блока не менялась и её можно переиспользовать.
 type layKey struct {
 	kind      blockKind
 	n         int // len(b.lines)
@@ -160,8 +154,7 @@ func (d *Doc) Text(s string) {
 //
 // Символ возврата каретки — не перевод строки: старые программы
 // перерисовывают им прогресс-бар, поэтому всё, что было в текущей строке
-// до CR, затирается (как на настоящем терминале). Иначе прогресс
-// превратился бы в сотню строк мусора.
+// до CR, затирается (как на настоящем терминале).
 func (d *Doc) feed(s string) {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	for len(s) > 0 {
@@ -211,9 +204,7 @@ func (d *Doc) addLine(line string) {
 // BeginStream — начать ответ модели.
 //
 // Блок создаётся лениво: агент может ответить одними вызовами
-// инструментов, и пустая карточка «ответ» между ними выглядела бы
-// дырой. Границы нужны только для того, чтобы текст ответа не смешался
-// с выводом команд.
+// инструментов, и пустая карточка «ответ» между ними выглядела бы дырой.
 func (d *Doc) BeginStream() {
 	d.armed = true
 	d.stream = nil
@@ -336,10 +327,8 @@ func (d *Doc) HasThink() bool {
 // ToolStart — добавить карточку инструмента.
 func (d *Doc) ToolStart(info ToolInfo) {
 	// Недописанный хвост предыдущего блока фиксируется ДО карточки —
-	// иначе Layout рисовал его в самом конце ленты, после карточки, а
-	// при завершении строка дописывалась в свой блок выше: текст
-	// «прыгал» через карточку. BeginThink, EndThink и EndStream хвост
-	// фиксируют; здесь пропуск был единственным.
+	// иначе Layout рисовал его в самом конце ленты, а при завершении
+	// строка дописывалась в свой блок выше: текст «прыгал» через карточку.
 	if d.pending != "" {
 		d.addLine(d.pending)
 		d.pending = ""
@@ -403,6 +392,16 @@ func (d *Doc) Rule() {
 func sanitizeBlock(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
+	// Типографские знаки («», —, …) из запроса пользователя сводятся
+	// к ASCII-заменам: лента выглядит одинаково в любом терминале.
+	s = strings.NewReplacer(
+		"«", "\"", "»", "\"", "„", "\"", "“", "\"", "”", "\"",
+		"—", "-", "–", "-", "…", "...", "·", "|",
+		"→", "->", "←", "<-", "↔", "<->", "↑", "up", "↓", "down",
+		"•", "-", "⚠", "!", "▸", ">", "◆", "*", "⊘", "-",
+		"█", "#", "░", ".", "≥", ">=", "≤", "<=", "×", "x", "№", "N",
+		"☐", "[ ]", "☑", "[x]", "✔", "[x]", "✖", "x", "✗", "x",
+	).Replace(s)
 	lines := strings.Split(trimControl(s), "\n")
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " ")
@@ -411,6 +410,19 @@ func sanitizeBlock(s string) string {
 }
 
 // ---------- Раскладка ----------
+//
+// Дизайн ленты — «гуттер»: у каждого вида блока свой маркер в узкой
+// колонке слева, тело выровнено под ним. Никаких линеек «you -----»:
+//
+//      > запрос пользователя        («>», акцент)
+//      | ответ модели              («|», вторичный акцент)
+//      : размышления               («:», приглушённый)
+//      [bash] вызов инструмента     (карточка со статусом справа)
+//      * системная строка          («*», золото)
+//      ! ошибка                    («!»)
+//
+// Маркер и тело живут в одной строке: перенос текста идёт под маркер,
+// поэтому столбец текста ровный на любой ширине.
 
 // LayoutOpts — параметры раскладки.
 type LayoutOpts struct {
@@ -420,8 +432,7 @@ type LayoutOpts struct {
 	Spinner string
 }
 
-// layKey — отпечаток состояния блока для кэша раскладки: все места мутаций
-// блока меняют хоть одно поле (см. layKey).
+// layKey — отпечаток состояния блока для кэша раскладки.
 func (d *Doc) layKey(b *block, o LayoutOpts) layKey {
 	k := layKey{kind: b.kind, n: len(b.lines), done: b.done, collapsed: b.collapsed, meta: b.meta}
 	switch b.kind {
@@ -449,10 +460,7 @@ func (d *Doc) Layout(o LayoutOpts) []Line {
 
 // layout — то же, что Layout, плюс владелец каждой строки: блок, из
 // которого она вышла. Нужен клику мышью: щелчок по строке-заголовку
-// размышлений сворачивает или разворачивает их. Отрисовка блоков
-// кэшируется (d.lay): на каждом кадре заново рисуются только блоки,
-// чей отпечаток состояния изменился, — при стриминге в длинной сессии
-// это один-два хвостовых блока, а не вся лента.
+// размышлений сворачивает или разворачивает их.
 func (d *Doc) layout(o LayoutOpts) ([]Line, []*block) {
 	w := o.Width
 	if w < 10 {
@@ -510,7 +518,7 @@ func (d *Doc) layout(o LayoutOpts) ([]Line, []*block) {
 		case blockTool:
 			bl = renderTool(b, w, t, o.Spinner)
 		case blockRule:
-			bl = []Line{{{Text: strings.Repeat("─", w), S: Style{FG: t.BorderDim, BG: t.Bg}}}}
+			bl = []Line{{{Text: strings.Repeat("-", w), S: Style{FG: t.BorderDim, BG: t.Bg}}}}
 		default:
 			bl = renderText(b, w, t)
 		}
@@ -541,109 +549,101 @@ func (d *Doc) layout(o LayoutOpts) ([]Line, []*block) {
 	return out, owners
 }
 
-// renderUser — запрос пользователя: заголовок «◆ запрос» с линией и
-// текст с отступом, как на витрине README.
+// gutter — колонка маркера: два пробела, знак, пробел. Тело всех
+// блоков начинается с одной и той же колонки — взгляд цепляется
+// за знак, а не ищет начало текста.
+func gutter(mark string, col Color, t Theme, bold bool) Seg {
+	return Seg{Text: "  " + mark + " ", S: Style{FG: col, BG: t.Bg, Bold: bold}}
+}
+
+// renderUser — запрос пользователя: «>» акцентом, тело под ним.
 func renderUser(b *block, w int, t Theme) []Line {
 	text := strings.Join(b.lines, "\n")
 	if w < 16 {
 		w = 16
 	}
-	out := []Line{blockHeader("запрос", w, t.Accent, t)}
-	for _, ln := range wrapPlain(text, w-4) {
-		out = append(out, Line{
-			{Text: "    ", S: Style{FG: t.Text, BG: t.Bg}},
-			{Text: ln, S: Style{FG: t.Text, BG: t.Bg}},
-		})
+	var out []Line
+	for i, ln := range wrapSegs(parseStyled(text, t, Style{FG: t.User, BG: t.Bg}), w-4) {
+		l := Line{gutter(">", t.Accent, t, true)}
+		if i > 0 {
+			l = Line{{Text: "    ", S: Style{FG: t.Accent, BG: t.Bg}}}
+		}
+		out = append(out, append(l, ln...).trimEnd())
 	}
 	return out
 }
 
-// blockHeader — строка «◆ имя ─────»: общий заголовок блока в стиле
-// витрины. Линия добивается до устойчивой ширины, чтобы заголовки
-// «запрос», «gcli» и инструментов читались одним глазом, но никогда не
-// выталкивает строку за ширину ленты.
-func blockHeader(title string, w int, col Color, t Theme) Line {
-	rule := 42 - utf8.RuneCountInString(title)
-	if max := w - 5 - utf8.RuneCountInString(title); rule > max {
-		rule = max
-	}
-	if rule < 1 {
-		rule = 1
-	}
-	return Line{
-		{Text: "  ◆ ", S: Style{FG: col, BG: t.Bg, Bold: true}},
-		{Text: title, S: Style{FG: col, BG: t.Bg, Bold: true}},
-		{Text: " " + strings.Repeat("─", rule), S: Style{FG: t.BorderDim, BG: t.Bg}},
-	}
-}
-
-// renderAssistant — ответ модели: заголовок «◆ gcli» и текст с отступом.
+// renderAssistant — ответ модели: вертикальная черта «|» вторичным
+// акцентом. Подпись (время, токены) — под тем же маркером, тихим цветом.
 func renderAssistant(b *block, w int, t Theme) []Line {
 	if w < 16 {
 		w = 16
 	}
-	out := []Line{blockHeader("gcli", w, t.Accent2, t)}
+	var out []Line
 	for _, raw := range b.lines {
 		if strings.TrimSpace(stripANSI(raw)) == "" {
-			out = append(out, Line{})
+			out = append(out, Line{{Text: "  |", S: Style{FG: t.Accent2, BG: t.Bg}}})
 			continue
 		}
 		segs := parseStyled(raw, t, Style{FG: t.Text, BG: t.Bg})
 		for _, ln := range wrapSegs(segs, w-4) {
-			line := Line{{Text: "    ", S: Style{FG: t.Text, BG: t.Bg}}}
-			out = append(out, append(line, ln...))
+			line := Line{gutter("|", t.Accent2, t, false)}
+			out = append(out, append(line, ln...).trimEnd())
 		}
 	}
 	if b.meta != "" {
-		out = append(out, Line{{Text: "    " + b.meta, S: Style{FG: t.Dim, BG: t.Bg}}})
+		for _, ln := range wrapSegs(Line{{Text: b.meta, S: Style{FG: t.Dim, BG: t.Bg}}}, w-4) {
+			out = append(out, append(Line{gutter("|", t.Accent2, t, false)}, ln...).trimEnd())
+		}
 	}
 	return out
 }
 
 // renderThink — размышления: свёрнуты в одну строку, разворачиваются
-// Ctrl+O или кликом по заголовку. Пока модель думает, в заголовке
-// живёт спиннер — видно, что размышления пишутся прямо сейчас.
+// Ctrl+O или кликом по заголовку. Маркер «:» — тоже колонка, но тихая:
+// мысли не должны спорить с ответом за внимание. Пока модель думает,
+// в заголовке живёт спиннер.
 func renderThink(b *block, w int, t Theme, spin string) []Line {
 	body := strings.Join(b.lines, "\n")
 	body = strings.TrimSpace(stripANSI(body))
 	if body == "" {
-		return []Line{{{Text: "  ◇ размышления", S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
+		return []Line{{{Text: "  : think", S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 	}
 	n := len(strings.Split(body, "\n"))
 	if b.collapsed {
 		if !b.done {
-			line := "  ◇ думаю " + spin + "  ·  ctrl+o — развернуть"
+			line := "  : think " + spin + " ... ctrl+o развернуть"
 			return []Line{{{Text: Truncate(line, w), S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 		}
-		line := fmt.Sprintf("  ◇ размышления · %d %s · ctrl+o — развернуть",
+		line := fmt.Sprintf("  : think - %d %s - ctrl+o развернуть",
 			n, plural(n, "строка", "строки", "строк"))
 		return []Line{{{Text: Truncate(line, w), S: Style{FG: t.Dim, BG: t.Bg, Italic: true}}}}
 	}
-	// Развёрнутые мысли: приглушённый блок с вертикальной чертой.
+	// Развёрнутые мысли: каждый абзац с тихим «:» в колонке.
 	var out []Line
-	head := "  ◇ размышления · ctrl+o — свернуть"
+	head := "  : think - ctrl+o свернуть"
 	if !b.done {
-		head = "  ◇ думаю " + spin + " · ctrl+o — свернуть"
+		head = "  : think " + spin + " - ctrl+o свернуть"
 	}
 	out = append(out, Line{{Text: Truncate(head, w), S: Style{FG: t.Muted, BG: t.Bg, Italic: true}}})
 	max := 400
 	for i, ln := range strings.Split(body, "\n") {
 		if i >= max {
-			out = append(out, Line{{Text: "  │ … ещё " + fmt.Sprint(n-max) + " строк", S: Style{FG: t.Dim, BG: t.Bg}}})
+			out = append(out, Line{{Text: "  : ... ещё " + fmt.Sprint(n-max) + " строк", S: Style{FG: t.Dim, BG: t.Bg}}})
 			break
 		}
 		for _, seg := range wrapSegs(parseStyled(ln, t, Style{FG: t.Muted, BG: t.Bg}), w-4) {
-			line := Line{{Text: "  │ ", S: Style{FG: t.Border, BG: t.Bg}}}
+			line := Line{gutter(":", t.Border, t, false)}
 			out = append(out, append(line, seg...).trimEnd())
 		}
 	}
 	return out
 }
 
-// renderTool — карточка инструмента в одну-две строки.
+// renderTool — карточка инструмента: «[имя] аргументы ... ok 0.3s».
 func renderTool(b *block, w int, t Theme, spin string) []Line {
 	ti := b.tool
-	_, color := toolIcon(ti.Kind, t)
+	color := toolColor(ti.Kind, t)
 	name := ti.Name
 	args := sanitizeOneLine(ti.Args)
 	nameW := StringWidth(name)
@@ -659,25 +659,25 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 		status = spin
 		scol = t.Accent
 	case "ok":
-		status = "✓"
+		status = glyphOK
 		scol = t.OK
 	case "denied":
-		status = "⊘"
+		status = glyphDenied
 		scol = t.Warn
 	default:
-		status = "✕"
+		status = glyphFail
 		scol = t.Err
 	}
 	right := status
 	if ti.Elapsed > 0 {
-		right = fmt.Sprintf("%s  %.1fс", right, ti.Elapsed.Seconds())
+		right = fmt.Sprintf("%s %.1fs", right, ti.Elapsed.Seconds())
 	}
 	// На узком экране правая часть не должна съесть всё имя.
 	if max := w / 2; StringWidth(right) > max && max > 6 {
 		right = Truncate(right, max)
 	}
 	rightW := StringWidth(right)
-	left := 2 + 1 + 1 + nameW // отступ + иконка + пробел + имя
+	left := 2 + 1 + len("[") + nameW + 1 + 1 // отступ + [ + имя + ] + пробел
 	avail := w - left - rightW - 2
 	if avail < 0 {
 		avail = 0
@@ -688,9 +688,9 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	st := Style{FG: t.Text, BG: t.Bg}
 	line := Line{
 		{Text: "  ", S: st},
-		{Text: "◆", S: Style{FG: color, BG: t.Bg, Bold: true}},
-		{Text: " ", S: st},
+		{Text: "[", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: name, S: Style{FG: color, BG: t.Bg, Bold: true}},
+		{Text: "]", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: args, S: Style{FG: t.Muted, BG: t.Bg}},
 	}
 	// Дополняем пробелами до правой части.
@@ -702,8 +702,8 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	line = append(line, Seg{Text: right, S: Style{FG: scol, BG: t.Bg}})
 	out := []Line{line.trimEnd()}
 
-	// Деталь удачного вызова — второй строкой с отступом, как на
-	// витрине: «214 строк · голова файла в контексте».
+	// Деталь удачного вызова — второй строкой с отступом:
+	// «214 строк · голова файла в контексте» → «214 строк, голова в контексте».
 	if ti.Status == "ok" && ti.Detail != "" {
 		detail := sanitizeOneLine(ti.Detail)
 		for _, seg := range wrapSegs(Line{{Text: detail, S: Style{FG: t.Muted, BG: t.Bg}}}, w-6) {
@@ -715,35 +715,36 @@ func renderTool(b *block, w int, t Theme, spin string) []Line {
 	// Ошибка — отдельной строкой под карточкой: её видно, не раскрывая.
 	if (ti.Status == "fail" || ti.Status == "denied") && ti.Detail != "" {
 		msg := sanitizeOneLine(ti.Detail)
-		for _, seg := range wrapSegs(Line{{Text: msg, S: Style{FG: t.Err, BG: t.Bg}}}, w-8) {
-			l := Line{{Text: "     └ ", S: Style{FG: t.Border, BG: t.Bg}}}
+		for _, seg := range wrapSegs(Line{{Text: msg, S: Style{FG: t.Err, BG: t.Bg}}}, w-6) {
+			l := Line{gutter("!", t.Err, t, true)}
 			out = append(out, append(l, seg...).trimEnd())
 		}
 	}
 	return out
 }
 
-// toolIcon — знак категории инструмента (не эмодзи: моноширинные символы).
-func toolIcon(kind string, t Theme) (string, Color) {
+// toolColor — цвет карточки по категории инструмента. Никаких значков:
+// категорию видно по цвету имени.
+func toolColor(kind string, t Theme) Color {
 	switch kind {
 	case "read":
-		return "◧", t.OK
+		return t.OK
 	case "write":
-		return "✎", t.Warn
+		return t.Warn
 	case "exec":
-		return "❯", t.Accent
+		return t.Accent
 	case "net":
-		return "⇩", t.Accent2
+		return t.Accent2
 	case "plan":
-		return "☑", t.OK
+		return t.OK
 	case "think":
-		return "◈", t.Muted
+		return t.Muted
 	case "agent":
-		return "◆", t.Accent2
+		return t.Accent2
 	case "mcp":
-		return "⬡", t.Info
+		return t.Info
 	default:
-		return "◆", t.Accent
+		return t.Accent
 	}
 }
 
@@ -826,10 +827,10 @@ func renderPlainSegs(segs Line, w int, t Theme, first, next string, st Style) []
 
 // cutText — отрезать кусок не шире w. Старается резать по пробелу.
 //
-// Режет по графическим кластерам: составной символ (флаг, эмодзи с
-// модификаторами) целиком уходит в одну из частей и не рвётся посередине —
-// иначе на стыке строк оставалась бы половина эмодзи, а ширина кусков не
-// сходилась с тем, что напечатает терминал.
+// Режет по графическим кластерам: составной символ целиком уходит в
+// одну из частей и не рвётся посередине — иначе на стыке строк
+// оставалась бы половина символа, а ширина кусков не сходилась с тем,
+// что напечатает терминал.
 func cutText(s string, w int) (cut, rest string) {
 	s = wcwidth.ValidUTF8(s)
 	cur := 0
@@ -849,7 +850,7 @@ func cutText(s string, w int) (cut, rest string) {
 				}
 				// Пробег до последнего пробела — одни пробелы (паддинг
 				// ячеек таблиц): пустой cut здесь зацикливал вызывающий
-				// код навсегда, интерфейс замерзал до перезапуска.
+				// код навсегда.
 			}
 			if i == 0 {
 				// Даже один кластер шире строки: отдаём его, иначе цикл

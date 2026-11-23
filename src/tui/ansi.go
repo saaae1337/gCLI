@@ -10,7 +10,7 @@ import (
 // ---------- ANSI в стилизованные строки ----------
 //
 // Старые панели (справка, таблицы, диффы) печатают текст с escape-кодами.
-// В новом интерфейсе их не должно быть видно: строка разбирается на куски
+// В интерфейсе их не должно быть видно: строка разбирается на куски
 // со стилями и рисуется клетками, как обычный текст.
 
 // stripANSI — убрать escape-последовательности.
@@ -18,25 +18,13 @@ func stripANSI(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b {
-			i = skipEscape(s, i)
+			i += wcwidth.SkipANSI(s, i)
 			continue
 		}
 		b.WriteByte(s[i])
 		i++
 	}
 	return b.String()
-}
-
-// skipEscape — индекс за концом escape-последовательности с позиции i
-// (i стоит на ESC). Исторический контракт этого пакета — абсолютный
-// индекс, в отличие от wcwidth.SkipANSI, возвращающего длину.
-//
-// Логика живёт в gcli/wcwidth — общей с ui реализации, куда доехали
-// все починки с фаззинга: не-ASCII после ESC не съедается, финальный
-// байт CSI ищется не только среди букв, оборванный OSC не тащит хвост
-// строки внутрь последовательности.
-func skipEscape(s string, i int) int {
-	return i + wcwidth.SkipANSI(s, i)
 }
 
 // parseStyled — разобрать строку с ANSI в куски.
@@ -82,7 +70,7 @@ func parseStyled(s string, t Theme, base Style) Line {
 				continue
 			}
 		}
-		i = skipEscape(s, i)
+		i += wcwidth.SkipANSI(s, i)
 	}
 	flush()
 	return out
@@ -100,8 +88,7 @@ func applySGR(st Style, params string, t Theme, base Style) Style {
 			p = "0"
 		}
 		// Подпараметры через двоеточие (ITU-T T.416): «4:3» — волнистое
-		// подчёркивание, «38:5:N» и «38:2:R:G:B» — цвет. Раньше вся часть
-		// отваливалась на Atoi, и стиль молча терялся.
+		// подчёркивание, «38:5:N» и «38:2:R:G:B» — цвет.
 		if strings.Contains(p, ":") {
 			sub := strings.Split(p, ":")
 			head, herr := strconv.Atoi(sub[0])
@@ -117,7 +104,7 @@ func applySGR(st Style, params string, t Theme, base Style) Style {
 				}
 				continue
 			}
-			p = sub[0] // «4:3» → «4»: ведущий параметр, подпараметры не нужны
+			p = sub[0]
 		}
 		n, err := strconv.Atoi(p)
 		if err != nil {
@@ -209,11 +196,8 @@ func clamp8(v int) int {
 }
 
 // parseExtColorColon — расширенный цвет в колоночной форме: «38:5:N»
-// (палитра 256) и «38:2:R:G:B». По T.416 перед R:G:B может стоять
-// идентификатор цветового пространства, в том числе пустой:
-// «38:2::25:100:50». Берём последние три числовые поля — так
-// обрабатываются все три формы, а нечисловые идентификаторы
-// отбрасываются сами.
+// и «38:2:R:G:B». По T.416 перед R:G:B может стоять идентификатор
+// цветового пространства, в том числе пустой: «38:2::25:100:50».
 func parseExtColorColon(sub []string) Color {
 	if len(sub) < 3 {
 		return Color{}

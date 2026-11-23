@@ -118,7 +118,7 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 	}
 	input := ArgStr(m, "input")
 	if len(input) > bashInputLimit {
-		return Result{}, fmt.Errorf("input слишком большой: %s, потолок %s — запиши данные в файл и прочитай командой", core.HumanSize(len(input)), core.HumanSize(bashInputLimit))
+		return Result{}, fmt.Errorf("input слишком большой: %s, потолок %s - запиши данные в файл и прочитай командой", core.HumanSize(len(input)), core.HumanSize(bashInputLimit))
 	}
 	timeout := core.Clamp(ArgInt(m, "timeout_sec", 60), 5, 600)
 	workdir := r.workDir
@@ -213,7 +213,7 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 		summary = "вывод"
 	}
 	if len([]rune(summary)) > 60 {
-		summary = string([]rune(summary)[:60]) + "…"
+		summary = string([]rune(summary)[:60]) + "..."
 	}
 	return Result{
 		Text:     out,

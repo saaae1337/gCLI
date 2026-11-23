@@ -87,7 +87,7 @@ func (c *Capture) String() string {
 	}
 	dropped := c.total - int64(len(c.head)) - int64(len(tail))
 	return trimRuneEdges(string(c.head)) +
-		fmt.Sprintf("\n…[вывод длиннее %s — пропущено %s]…\n",
+		fmt.Sprintf("\n...[вывод длиннее %s - пропущено %s]...\n",
 			HumanSize(c.limit), HumanSize(int(dropped))) +
 		trimRuneEdges(string(tail))
 }

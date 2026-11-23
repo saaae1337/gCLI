@@ -141,7 +141,7 @@ func Digest(text string, maxTokens int) string {
 		return text
 	}
 	return string(r[:head]) +
-		"\n…[свёрнуто символов: " + strconv.Itoa(hidden) + "]…\n" +
+		"\n...[свёрнуто символов: " + strconv.Itoa(hidden) + "]...\n" +
 		string(r[len(r)-tail:])
 }
 
@@ -154,6 +154,6 @@ func DigestResult(name, text string, maxTokens int) string {
 		return text
 	}
 	lines := len(SplitLines(text))
-	head := "[свёрнуто: " + name + " — " + strconv.Itoa(lines) + " строк, показаны начало и конец]\n"
+	head := "[свёрнуто: " + name + " - " + strconv.Itoa(lines) + " строк, показаны начало и конец]\n"
 	return head + Digest(text, maxTokens)
 }

@@ -100,9 +100,9 @@ func stdinIsTerminal() bool {
 // виноват ли терминал, система или gcli.
 func rawTUIHint() string {
 	if !stdinIsTerminal() {
-		return " · ввод не подключён к консоли (пайп или mintty): запусти gcli в Windows Terminal, cmd или через winpty gcli"
+		return " | ввод не подключён к консоли (пайп или mintty): запусти gcli в Windows Terminal, cmd или через winpty gcli"
 	}
 	// SetConsoleMode с ENABLE_VIRTUAL_TERMINAL_INPUT требует Windows 10
 	// 1607+; на более старых raw для полноэкранного режима недостижим.
-	return " · нужен Windows 10 1607+ (VT-ввод); на старой системе используй -plain"
+	return " | нужен Windows 10 1607+ (VT-ввод); на старой системе используй -plain"
 }

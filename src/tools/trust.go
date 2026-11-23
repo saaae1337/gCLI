@@ -290,7 +290,7 @@ func extWhat(ext Extension) string {
 			cmds = append(cmds, t.URL)
 		}
 	}
-	return strings.Join(cmds, " · ")
+	return strings.Join(cmds, " | ")
 }
 
 // TrustCode — запомнить согласие пользователя на конкретный код.

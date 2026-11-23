@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// atoiSafe — безопасно распарсить число.
+// atoiSafe - безопасно распарсить число.
 func atoiSafe(s string, def int) int {
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
 		return n
@@ -16,15 +16,15 @@ func atoiSafe(s string, def int) int {
 	return def
 }
 
-// enableVT — на POSIX escape-последовательности поддерживаются всегда.
+// enableVT - на POSIX escape-последовательности поддерживаются всегда.
 func EnableVT() bool { return true }
 
-// ConsoleUTF8 — на POSIX решение принимает локаль, а не консоль:
+// ConsoleUTF8 - на POSIX решение принимает локаль, а не консоль:
 // переключать кодовую страницу нечем и незачем. Здесь всегда «умеет»,
 // а отсекает юникод проверка LANG/LC_ALL в main.
 func ConsoleUTF8(tty bool) bool { return true }
 
-// terminalWidth — ширина терминала через переменные COLUMNS или ioctl не делаем:
+// terminalWidth - ширина терминала через переменные COLUMNS или ioctl не делаем:
 // достаточно читать COLUMNS, иначе возвращаем 0 (взять дефолт).
 func terminalWidth() int {
 	if s := os.Getenv("COLUMNS"); s != "" {
@@ -35,7 +35,7 @@ func terminalWidth() int {
 	return 0
 }
 
-// isTerminal — является ли stdout терминалом.
+// isTerminal - является ли stdout терминалом.
 func isTerminal() bool {
 	fi, err := os.Stdout.Stat()
 	if err != nil {

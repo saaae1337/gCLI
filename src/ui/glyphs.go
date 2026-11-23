@@ -1,11 +1,17 @@
-// Package ui — терминальный интерфейс gcli: псевдографика, цвета,
+// Package ui — терминальный интерфейс gcli: рамки, цвета,
 // таблицы, карточки инструментов, диффы и потоковый markdown.
 //
-// Пакет умеет работать и в цвете, и без него (NO_COLOR, пайпы),
-// и в юникоде, и в чистом ASCII — наборы символов выбираются автоматически.
+// Пакет умеет работать и в цвете, и без него (NO_COLOR, пайпы).
+// Оформление — чистый ASCII: рамки «+ - |», статусы «ok x !», линии из
+// дефисов. Декоративные юникод-символы не используются: тот же вид в
+// классической консоли Windows 10/11, в linux-консоли и на macOS.
 package ui
 
-// Glyphs — набор псевдографики с учётом unicode/ascii.
+// Glyphs — набор символов оформления.
+//
+// Поля Unicode и набор для «юникод-терминалов» оставлены для
+// совместимости сигнатур, но оба набора — один и тот же ASCII: gcli
+// больше не печатает псевдографику ни в каком режиме.
 type Glyphs struct {
 	Unicode bool
 	Sharp   bool // прямые углы вместо округлённых
@@ -25,46 +31,23 @@ type Glyphs struct {
 	DashDot string
 	// RuleChar — символ сплошной линии (длинные заголовки, хвосты таблиц).
 	RuleChar string
-	// Mark — монограмма стиля (ромб «◆»).
+	// Mark — монограмма стиля.
 	Mark string
 	// Tick — «зубец» перед результатом инструмента.
-	// У Claude Code такой же приём, но там глиф не входит в общий набор и
-	// печатается прямо в коде. Здесь он часть темы, поэтому в ASCII-режиме
-	// подставляется ASCII-вариант, а не «кракозябра».
 	Tick string
-	// Retry — знак ожидания: «↻» (указатель) или ASCII «~».
+	// Retry — знак ожидания.
 	Retry string
 }
 
-// emberGlyphs — набор псевдографики стиля «УГОЛЬ» (см. ember.go).
-// В ASCII-режиме у каждого символа есть запасной вариант.
-func emberGlyphs() Glyphs {
+// asciiGlyphs — единственный набор символов gcli: чистый ASCII.
+func asciiGlyphs() Glyphs {
 	return Glyphs{
-		Unicode: true,
-		TL:      "│", TR: "", BL: "│", BR: "",
-		H: "─", V: "│",
-		Tee: "├", Elbow: "└", Pipe: "│", Dash: "─", Arrow: "→",
-		Bullet: "•", Check: "✔", Cross: "✖", Excl: "▲", Star: "◆", Dot: "·",
-		Running: "◆", Pending: "◇", BarFull: "▬", BarEmpty: "·",
-		Separator: "·", Ellipsis: "…", Dots: "…",
-		DashDot:  "·",
-		RuleChar: "─",
-		Mark:     "◆",
-		Tick:     "⎿",
-		Retry:    "↻",
-	}
-}
-
-// emberASCIIGlyphs — тот же стиль для терминалов без юникода.
-func emberASCIIGlyphs() Glyphs {
-	return Glyphs{
-		Unicode: false,
-		TL:      "|", TR: "", BL: "|", BR: "",
+		TL: "|", TR: "", BL: "|", BR: "",
 		H: "-", V: "|",
 		Tee: "|-", Elbow: "`-", Pipe: "|", Dash: "-", Arrow: "->",
 		Bullet: "-", Check: "+", Cross: "x", Excl: "!", Star: "*", Dot: ".",
 		Running: ">", Pending: "o", BarFull: "#", BarEmpty: ".",
-		Separator: ".", Ellipsis: "...", Dots: "...",
+		Separator: "|", Ellipsis: "...", Dots: "...",
 		DashDot:  ".",
 		RuleChar: "-",
 		Mark:     "*",
@@ -73,59 +56,58 @@ func emberASCIIGlyphs() Glyphs {
 	}
 }
 
-// GlyphsFor — набор под текущий терминал. Стиль один — «УГОЛЬ»,
-// различается только поддержка юникода.
-func GlyphsFor(theme string, unicodeOK bool) Glyphs {
-	if unicodeOK {
-		return emberGlyphs()
-	}
-	return emberASCIIGlyphs()
+// emberGlyphs — историческое имя набора стиля «УГОЛЬ». Раньше различались
+// юникод и ASCII варианты, теперь набор один и всегда ASCII.
+func emberGlyphs() Glyphs {
+	g := asciiGlyphs()
+	g.Unicode = true
+	return g
 }
 
-// unicodeOutput — единое для всего процесса решение «можно ли печатать
-// юникод-глифы в вывод». Решает main при старте (кодовая страница
-// консоли, LANG/LC_ALL, флаг -ascii); здесь — общая точка для строк,
-// которые собираются вне UI-рендерера: отчёты инструментов, сводки
-// субагентов, вердикты проверок. Без неё эти строки печатали «✔» и
-// «█» напрямую, и на консоли без юникода вместо них выходил «?».
-var unicodeOutput = true
+// emberASCIIGlyphs — то же самое (совместимость имён).
+func emberASCIIGlyphs() Glyphs { return asciiGlyphs() }
 
-// SetUnicodeOutput — зафиксировать решение о юникоде. Вызывается один
-// раз из main до первого вывода.
-func SetUnicodeOutput(ok bool) { unicodeOutput = ok }
+// GlyphsFor — набор под текущий терминал. Стиль один — «УГОЛЬ», и всегда
+// ASCII: аргумент unicodeOK оставлен в сигнатуре для совместимости.
+func GlyphsFor(theme string, unicodeOK bool) Glyphs {
+	return asciiGlyphs()
+}
+
+// unicodeOutput — решение «можно ли печатать юникод-глифы». С 0.9.3
+// всегда ложь: декоративные символы не печатаются нигде. Переменная и
+// SetUnicodeOutput оставлены для совместимости вызовов.
+var unicodeOutput = false
+
+// SetUnicodeOutput — зафиксировать решение о юникоде. Значение
+// игнорируется: gcli печатает только ASCII.
+func SetUnicodeOutput(bool) { unicodeOutput = false }
 
 // UnicodeOutput — текущее решение о юникоде.
 func UnicodeOutput() bool { return unicodeOutput }
 
-// Glyph — глиф с ASCII-фолбэком для строк вне UI-рендерера: mark в
-// юникод-режиме, ascii — там, где юникод нельзя. Пары держим рядом с
-// местом печати: «✔»/«+», «✖»/«x», «█»/«#», «░»/«.», «◆»/«*», «⊘»/«-».
+// Glyph — глиф для строк вне UI-рендерера: исторически пары «✔»/«+»,
+// «✖»/«x», «█»/«#», «░»/«.», «◆»/«*», «⊘»/«-». Теперь всегда ASCII-вариант.
 func Glyph(mark, ascii string) string {
-	if unicodeOutput {
-		return mark
-	}
 	return ascii
 }
 
 // Символы блоков для заполнения полосы прогресса (двухуровневый).
 const (
-	barFull  = "█"
-	barPart  = "▌"
-	barEmpty = "░"
+	barFull  = "#"
+	barPart  = "+"
+	barEmpty = "."
 )
 
 // SpinnerFrames — кадры анимации ожидания.
 var (
-	// emberSpinner — «указатель» «↻»: знак один, движение создаёт цвет.
-	emberSpinner = []string{"↻", "↺"}
-	// SpinnerAscii — для терминалов без юникода.
+	// emberSpinner — классическая палочка: знак один, движение создаёт цвет.
+	emberSpinner = []string{"|", "/", "-", "\\"}
+	// SpinnerAscii — тот же набор: ASCII для любых терминалов.
 	SpinnerAscii = []string{"|", "/", "-", "\\"}
 )
 
-// SpinnerFor — кадры ожидания под текущий терминал.
+// SpinnerFor — кадры ожидания под текущий терминал. Аргумент
+// unicodeOK оставлен в сигнатуре для совместимости: кадры всегда ASCII.
 func SpinnerFor(theme string, unicodeOK bool) []string {
-	if !unicodeOK {
-		return SpinnerAscii
-	}
-	return emberSpinner
+	return SpinnerAscii
 }

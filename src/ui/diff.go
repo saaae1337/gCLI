@@ -7,7 +7,7 @@ import (
 	"gcli/core"
 )
 
-// DiffOp — одна операция диффа.
+// DiffOp - одна операция диффа.
 type DiffOp struct {
 	Kind byte // ' ' контекст, '+' добавлено, '-' удалено
 	Old  int  // номер строки в старом файле (0 = нет)
@@ -15,7 +15,7 @@ type DiffOp struct {
 	Text string
 }
 
-// DiffOpts — параметры показа диффа.
+// DiffOpts - параметры показа диффа.
 type DiffOpts struct {
 	Path      string
 	MaxLines  int
@@ -24,17 +24,17 @@ type DiffOpts struct {
 	HunkNames bool
 }
 
-// Diff — построить операции диффа (алгоритм Майерса на LCS).
+// Diff - построить операции диффа (алгоритм Майерса на LCS).
 // Возвращает операции с номерами строк обоих файлов.
 func Diff(oldS, newS string) []DiffOp {
 	return DiffLines(core.SplitLines(oldS), core.SplitLines(newS))
 }
 
-// DiffLines — дифф по двум наборам строк.
+// DiffLines - дифф по двум наборам строк.
 func DiffLines(a, b []string) []DiffOp {
 	n, m := len(a), len(b)
 
-	// Очень большие файлы — линейный diff по префиксу/суффиксу.
+	// Очень большие файлы - линейный diff по префиксу/суффиксу.
 	if n*m > 4_000_000 {
 		return naiveDiff(a, b)
 	}
@@ -82,7 +82,7 @@ func DiffLines(a, b []string) []DiffOp {
 	return ops
 }
 
-// naiveDiff — запасной линейный diff для огромных файлов: сравниваем
+// naiveDiff - запасной линейный diff для огромных файлов: сравниваем
 // общий префикс и общий суффикс, середину считаем полной заменой.
 func naiveDiff(a, b []string) []DiffOp {
 	var ops []DiffOp
@@ -108,7 +108,7 @@ func naiveDiff(a, b []string) []DiffOp {
 	return append(ops, suffix...)
 }
 
-// PrintDiff — напечатать дифф с номерами строк и контекстом.
+// PrintDiff - напечатать дифф с номерами строк и контекстом.
 func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 	ctx := o.Context
 	if ctx <= 0 {
@@ -135,10 +135,10 @@ func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 	// Шапка.
 	u.SpinnerStop()
 	u.Println("")
-	//  ◆ путь
-	//    +3 · −1
+	//  * путь
+	//    +3 | -1
 	//
-	// Маркер события вместо «✎»: дифф — это не отдельный значок,
+	// Маркер события вместо «w»: дифф - это не отдельный значок,
 	// а такой же шаг хода, как и вызов инструмента. Поэтому он встаёт
 	// в один ряд с остальными маркерами, а не выпадает из потока.
 	path := core.OneLine(o.Path)
@@ -149,7 +149,7 @@ func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 	if !o.NoStats {
 		u.Println("  " + u.emberTail() + " " + u.c(u.pal.Muted, strings.Join([]string{
 			u.c(u.pal.OK, "+"+core.Kfmt(added)),
-			u.c(u.pal.Err, "−"+core.Kfmt(removed)),
+			u.c(u.pal.Err, "-"+core.Kfmt(removed)),
 		}, " "+u.g.Dot+" ")))
 	}
 
@@ -206,17 +206,17 @@ func (u *UI) PrintDiff(ops []DiffOp, o DiffOpts) {
 	}
 }
 
-// printlnDiffGap — разделитель пропущенных строк диффа.
+// printlnDiffGap - разделитель пропущенных строк диффа.
 func (u *UI) printlnDiffGap() {
 	// Пропуск обозначаем многоточием на зубце: он не спорит с плюсами
 	// и минусами строк диффа, как это делает пунктир.
 	u.Println("  " + u.emberTail() + " " + u.c(u.pal.Muted, u.g.Ellipsis))
 }
 
-// printDiffOp — одна строка диффа с номерами строк с обеих сторон.
+// printDiffOp - одна строка диффа с номерами строк с обеих сторон.
 func (u *UI) printDiffOp(op DiffOp) {
 	// Строка диффа не должна переползать на следующую: отступ, зубец,
-	// пробел и двухколоночный маркер «+ »/«− » уже заняли часть ширины.
+	// пробел и двухколоночный маркер «+ »/«- » уже заняли часть ширины.
 	// Зубец в ASCII-режиме шире на колонку, поэтому считаем по факту.
 	avail := u.Width() - (2 + visibleWidth(u.emberTail()) + 1 + 2)
 	if avail < 1 {
@@ -228,7 +228,7 @@ func (u *UI) printDiffOp(op DiffOp) {
 	case '+':
 		body = u.c(u.pal.OK, "+ ") + u.c(u.pal.OK, text)
 	case '-':
-		body = u.c(u.pal.Err, "− ") + u.c(u.pal.Err, text)
+		body = u.c(u.pal.Err, "- ") + u.c(u.pal.Err, text)
 	default:
 		body = u.c(u.pal.Muted, "  ") + u.c(u.pal.Muted, text)
 	}
@@ -239,5 +239,5 @@ func (u *UI) printDiffOp(op DiffOp) {
 	u.Println("  " + u.emberTail() + " " + body)
 }
 
-// itoa — быстрый int → string.
+// itoa - быстрый int → string.
 func itoa(n int) string { return fmt.Sprintf("%d", n) }

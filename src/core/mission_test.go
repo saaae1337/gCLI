@@ -353,7 +353,7 @@ func TestTrackerResumeDoesNotLookStalled(t *testing.T) {
 func TestTrackerSelfLineSeparatesParts(t *testing.T) {
 	tr := NewTrackerAt(Mission{Mode: MissionNormal}, 0, 0, time.Now)
 	line := tr.SelfLine()
-	if !strings.Contains(line, " · вызовы инструментов: 0") {
+	if !strings.Contains(line, " | вызовы инструментов: 0") {
 		t.Errorf("части строки не разделены: %q", line)
 	}
 	if strings.Contains(line, "потолковвызовы") {

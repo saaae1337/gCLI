@@ -39,7 +39,7 @@ const spawnDepsBudget = 2000
 // зависимость передаёт ЧУЖИЕ выводы, и модель, решившая, что их достаточно,
 // выдумает недостающее. Явное разрешение сказать «не хватает» дешевле правки
 // на основе выдуманного входа.
-const depsBlockHeader = "[Выводы субагентов, которых ты ждёшь — это входные данные для твоей задачи. " +
+const depsBlockHeader = "[Выводы субагентов, которых ты ждёшь - это входные данные для твоей задачи. " +
 	"Если их не хватает или они противоречат друг другу, скажи об этом прямо, а не додумывай.]\n"
 
 // spawnSpec — узел пачки субагентов до развёртки в волны.
@@ -128,7 +128,7 @@ func (r *Registry) runSpawnWaves(ctx context.Context, dag *subagents.DAG, specs 
 		// смотрит в пустоту до самого конца и не понимает, идёт ли дело.
 		r.progress(ProgressEvent{
 			Title: "spawn_agents",
-			Label: fmt.Sprintf("волна %d/%d — %s", w+1, len(dag.Waves),
+			Label: fmt.Sprintf("волна %d/%d - %s", w+1, len(dag.Waves),
 				waveSummary(wave, items, skipped)),
 			Done:  0,
 			Total: len(specs),
@@ -172,7 +172,7 @@ func depsFailed(i int, specs []spawnSpec, ok, skipped []bool) (bool, string) {
 		if ok[j] {
 			continue
 		}
-		bad = append(bad, specs[j].label+" — не выполнен")
+		bad = append(bad, specs[j].label+" - не выполнен")
 	}
 	if len(bad) == 0 {
 		return false, ""
@@ -236,7 +236,7 @@ func renderSpawnWaves(dag *subagents.DAG, specs []spawnSpec, items []batchItem, 
 		switch {
 		case skipped[i]:
 			miss++
-			fmt.Fprintf(&b, "## [%d] %s\nПРОПУЩЕН — %s\n\n", n, s.label, it.warn)
+			fmt.Fprintf(&b, "## [%d] %s\nПРОПУЩЕН - %s\n\n", n, s.label, it.warn)
 		case it.Failed():
 			failed++
 			fmt.Fprintf(&b, "## [%d] %s\nОШИБКА: %v\n\n", n, s.label, it.err)

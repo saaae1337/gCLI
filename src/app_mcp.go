@@ -51,9 +51,9 @@ func (a *app) cmdMcp(rest string) {
 	case "path", "путь":
 		a.ui.Println("")
 		for _, d := range a.tools.MCPDirs() {
-			mark := "—"
+			mark := "-"
 			if fileExists(d[0]) {
-				mark = "✓"
+				mark = "+"
 			}
 			a.ui.KV(mark+" "+d[1], d[0])
 		}
@@ -75,7 +75,7 @@ func (a *app) cmdMcp(rest string) {
 			a.ui.Warn(w)
 		}
 		if n > 0 {
-			a.ui.Ok(fmt.Sprintf("MCP: подключено новых инструментов — %d", n))
+			a.ui.Ok(fmt.Sprintf("MCP: подключено новых инструментов - %d", n))
 		} else if len(warns) == 0 {
 			a.ui.Info("новых инструментов нет (серверы уже подключены или конфиг пуст)")
 		}
@@ -87,14 +87,14 @@ func (a *app) cmdMcp(rest string) {
 	a.ui.Println("")
 	if len(servers) == 0 {
 		a.ui.Info("MCP-серверы не настроены")
-		a.ui.Hint("создай конфиг: /mcp new — затем /mcp reload")
-		a.ui.Hint("формат: .gcli/mcp.json — {\"servers\": {\"имя\": {\"command\": \"...\", \"args\": [...]}}}")
+		a.ui.Hint("создай конфиг: /mcp new - затем /mcp reload")
+		a.ui.Hint("формат: .gcli/mcp.json - {\"servers\": {\"имя\": {\"command\": \"...\", \"args\": [...]}}}")
 		a.ui.Println("")
 		return
 	}
 	a.ui.Section("MCP-серверы")
 	for _, s := range servers {
-		a.ui.Println("  " + a.ui.Accent("◆") + " " + s)
+		a.ui.Println("  " + a.ui.Accent("*") + " " + s)
 	}
 	if toolCount > 0 {
 		a.ui.Hint(fmt.Sprintf("инструментов в реестре: %d (имена: mcp__сервер__инструмент)", toolCount))
@@ -174,23 +174,23 @@ func mcpSrvTools() []mcpSrvTool {
 	}
 	return []mcpSrvTool{
 		mk("gcli_prompt",
-			"Разовый запрос к gcli — терминальному ИИ-агенту. Агент видит проект в workdir, может читать файлы, писать код, запускать команды и проверять результат. Блокирует до ответа (потолок — timeout_min минут). Обычные действия одобряет сам; это отключается переменной окружения GCLI_MCP_SERVE_YOLO=0 на стороне сервера.",
+			"Разовый запрос к gcli - терминальному ИИ-агенту. Агент видит проект в workdir, может читать файлы, писать код, запускать команды и проверять результат. Блокирует до ответа (потолок - timeout_min минут). Обычные действия одобряет сам; это отключается переменной окружения GCLI_MCP_SERVE_YOLO=0 на стороне сервера.",
 			map[string]mcpSrvProp{
 				"prompt":      {"string", "задача для агента одной строкой"},
-				"workdir":     {"string", "каталог проекта (по умолчанию — каталог запуска gcli -mcp-serve)"},
+				"workdir":     {"string", "каталог проекта (по умолчанию - каталог запуска gcli -mcp-serve)"},
 				"timeout_min": {"integer", "потолок времени на задачу, минут (1..10, по умолчанию 5)"},
 			},
 			[]string{"prompt"}),
 		mk("gcli_mission_status",
-			"Состояние автономного прогона gcli в указанном каталоге: цель, режим, счётчики, остановки. Читает .gcli/mission.json и mission_state.json — быстро и без запуска агента.",
+			"Состояние автономного прогона gcli в указанном каталоге: цель, режим, счётчики, остановки. Читает .gcli/mission.json и mission_state.json - быстро и без запуска агента.",
 			map[string]mcpSrvProp{
-				"workdir": {"string", "каталог проекта (по умолчанию — текущий)"},
+				"workdir": {"string", "каталог проекта (по умолчанию - текущий)"},
 			},
 			nil),
 		mk("gcli_mission_report",
 			"Markdown-отчёт по прогону gcli: цель, режим, итоги, хроника из журнала. Строится на лету из .gcli/mission_journal.log.",
 			map[string]mcpSrvProp{
-				"workdir": {"string", "каталог проекта (по умолчанию — текущий)"},
+				"workdir": {"string", "каталог проекта (по умолчанию - текущий)"},
 			},
 			nil),
 	}

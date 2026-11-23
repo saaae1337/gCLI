@@ -12,48 +12,48 @@ import (
 //
 // Оформление gcli не опирается на возможности терминала: рамки, полосы и
 // метрики рисует сам интерфейс, поэтому окно выглядит одинаково в
-// Terminal.app, в iTerm2 и в консоли Windows. Отсылка к macOS — верхняя
-// панель с «лампочками» и тонкая линия под ней. Отсылка к OpenCode —
+// Terminal.app, в iTerm2 и в консоли Windows. Отсылка к macOS - верхняя
+// панель с «лампочками» и тонкая линия под ней. Отсылка к OpenCode -
 // нижняя строка метрик и скруглённые панели.
 //
-// Метрики — то, ради чего всё затевалось: сколько контекста занято,
+// Метрики - то, ради чего всё затевалось: сколько контекста занято,
 // сколько токенов в секунду уходит, сколько времени занял последний
 // запрос и сколько это стоило.
 
-// Metrics — снимок расхода сессии для панелей.
+// Metrics - снимок расхода сессии для панелей.
 //
 // Собирается хостом (там, где живут сессия и провайдер) и передаётся в
 // интерфейс готовым: пакет ui не знает ни про провайдеров, ни про сессии.
 type Metrics struct {
-	// Model и Provider — что работает сейчас.
+	// Model и Provider - что работает сейчас.
 	Model    string
 	Provider string
-	// Context — занято токенов в контексте, ContextMax — лимит модели.
+	// Context - занято токенов в контексте, ContextMax - лимит модели.
 	Context    int
 	ContextMax int
-	// Prompt и Completion — токены за сессию (вход и выход).
+	// Prompt и Completion - токены за сессию (вход и выход).
 	Prompt     int
 	Completion int
-	// Requests — сколько запросов к модели ушло за сессию.
+	// Requests - сколько запросов к модели ушло за сессию.
 	Requests int
-	// Rate — скорость ВЫВОДА модели в токенах в секунду.
+	// Rate - скорость ВЫВОДА модели в токенах в секунду.
 	//
-	// Именно вывода: входные токены — это повторённый контекст запроса,
+	// Именно вывода: входные токены - это повторённый контекст запроса,
 	// и делить их на время значит показывать «2194 tok/s», которых
-	// никто не писал. Человек ждёт ответа — его и надо мерить.
+	// никто не писал. Человек ждёт ответа - его и надо мерить.
 	Rate float64
-	// Last — время последнего запроса, Session — время сессии.
+	// Last - время последнего запроса, Session - время сессии.
 	Last    time.Duration
 	Session time.Duration
-	// Cost — расход сессии в долларах, CostKnown — цена известна.
+	// Cost - расход сессии в долларах, CostKnown - цена известна.
 	Cost      float64
 	CostKnown bool
-	// Autopilot и Plan — режимы для бейджей нижней панели.
+	// Autopilot и Plan - режимы для бейджей нижней панели.
 	Autopilot bool
 	Plan      bool
 }
 
-// ContextPct — процент занятого контекста.
+// ContextPct - процент занятого контекста.
 //
 // Ноль, когда лимит неизвестен: показывать «0%» при неизвестном лимите
 // значит врать, а молчание честнее.
@@ -68,7 +68,7 @@ func (m Metrics) ContextPct() int {
 	return pct
 }
 
-// ContextRatio — занятая доля контекста (0..1) для полосы.
+// ContextRatio - занятая доля контекста (0..1) для полосы.
 func (m Metrics) ContextRatio() float64 {
 	if m.ContextMax <= 0 {
 		return 0
@@ -83,7 +83,7 @@ func (m Metrics) ContextRatio() float64 {
 	return r
 }
 
-// RateText — скорость токенов в секунду.
+// RateText - скорость токенов в секунду.
 func (m Metrics) RateText() string {
 	if m.Rate <= 0 {
 		return ""
@@ -94,7 +94,7 @@ func (m Metrics) RateText() string {
 	return fmt.Sprintf("%d tok/s", int(m.Rate+0.5))
 }
 
-// ContextText — занятый контекст с процентом от лимита модели.
+// ContextText - занятый контекст с процентом от лимита модели.
 func (m Metrics) ContextText() string {
 	if m.ContextMax <= 0 {
 		return core.Kfmt(m.Context) + " ctx"
@@ -102,7 +102,7 @@ func (m Metrics) ContextText() string {
 	return fmt.Sprintf("%s/%s (%d%%)", core.Kfmt(m.Context), core.Kfmt(m.ContextMax), m.ContextPct())
 }
 
-// SetMetrics — обновить снимок расхода.
+// SetMetrics - обновить снимок расхода.
 //
 // Живёт в интерфейсе, потому что строка ожидания перерисовывается из
 // своей горутины: без снимка она не знала бы, сколько занято контекста.
@@ -116,42 +116,42 @@ func (u *UI) SetMetrics(m Metrics) {
 	}
 }
 
-// Metrics — текущий снимок расхода.
+// Metrics - текущий снимок расхода.
 func (u *UI) Metrics() Metrics {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.metrics
 }
 
-// TitleBarOpts — параметры верхней панели окна.
+// TitleBarOpts - параметры верхней панели окна.
 type TitleBarOpts struct {
-	// Title — имя окна (жирное).
+	// Title - имя окна (жирное).
 	Title string
-	// Subtitle — что внутри: модель, провайдер.
+	// Subtitle - что внутри: модель, провайдер.
 	Subtitle string
-	// Right — правый блок, прижатый к краю.
+	// Right - правый блок, прижатый к краю.
 	Right string
 }
 
-// TitleBar — верхняя панель окна: «лампочки», название и метрики.
+// TitleBar - верхняя панель окна: «лампочки», название и метрики.
 //
-// Ровно как в Terminal.app: три кружка слева, название рядом, справа —
-// то, что сейчас важно (сколько контекста занято). Под панелью — тонкая
+// Ровно как в Terminal.app: три кружка слева, название рядом, справа -
+// то, что сейчас важно (сколько контекста занято). Под панелью - тонкая
 // линия: без неё панель сливается с содержимым окна.
 func (u *UI) TitleBar(o TitleBarOpts) {
 	if u.quiet || u.sink() != nil {
 		return
 	}
 	w := u.Width()
-	lights := u.c(u.pal.Err, u.lamp("●")) + " " +
-		u.c(u.pal.Warn, u.lamp("●")) + " " +
-		u.c(u.pal.OK, u.lamp("●"))
+	lights := u.c(u.pal.Err, u.lamp("*")) + " " +
+		u.c(u.pal.Warn, u.lamp("*")) + " " +
+		u.c(u.pal.OK, u.lamp("*"))
 	left := "  " + lights + "   "
 	if o.Title != "" {
 		left += u.Bold(o.Title)
 	}
 	if o.Subtitle != "" {
-		left += u.Gray("  ·  ") + u.c(u.pal.Muted, o.Subtitle)
+		left += u.Gray("  |  ") + u.c(u.pal.Muted, o.Subtitle)
 	}
 	right := o.Right
 	if right != "" {
@@ -161,7 +161,7 @@ func (u *UI) TitleBar(o TitleBarOpts) {
 	u.Println("  " + u.Gray(strings.Repeat(u.g.RuleChar, maxInt(w-2, 1))))
 }
 
-// lamp — «лампочка» панели окна: круг в юникоде, точка в ASCII.
+// lamp - «лампочка» панели окна: круг в юникоде, точка в ASCII.
 func (u *UI) lamp(g string) string {
 	if u.g.Unicode {
 		return g
@@ -169,9 +169,9 @@ func (u *UI) lamp(g string) string {
 	return "o"
 }
 
-// MetricsBar — нижняя панель окна: метрики расхода.
+// MetricsBar - нижняя панель окна: метрики расхода.
 //
-// Слева — состояние (модель, режимы), справа — расход: контекст с
+// Слева - состояние (модель, режимы), справа - расход: контекст с
 // процентом от лимита модели, токены, скорость вывода, время запроса и
 // деньги. Всё в одной строке: разрозненные числа в разных местах экрана
 // невозможно сравнивать между собой.
@@ -204,7 +204,7 @@ func (u *UI) MetricsBar(items []StatusItem, m Metrics) {
 		}
 		left = append(left, text)
 	}
-	leftText := strings.Join(left, u.c(u.pal.Muted, " · "))
+	leftText := strings.Join(left, u.c(u.pal.Muted, " | "))
 	if leftText == "" {
 		leftText = "  "
 	} else {
@@ -228,10 +228,10 @@ func (u *UI) MetricsBar(items []StatusItem, m Metrics) {
 	u.mu.Unlock()
 }
 
-// metricsParts — правый блок метрик: контекст, скорость, время.
+// metricsParts - правый блок метрик: контекст, скорость, время.
 //
-// Порядок — по важности: что не влезает в строку, отпадает с конца, а
-// не с начала. Первым уходит стоимость, последним — процент контекста:
+// Порядок - по важности: что не влезает в строку, отпадает с конца, а
+// не с начала. Первым уходит стоимость, последним - процент контекста:
 // ради него человек и смотрит в панель.
 func (u *UI) metricsParts(m Metrics, room int) string {
 	var parts []string
@@ -239,7 +239,7 @@ func (u *UI) metricsParts(m Metrics, room int) string {
 		parts = append(parts, fmt.Sprintf("ctx %d%%", m.ContextPct()))
 	}
 	if r := m.RateText(); r != "" {
-		// Скорость вывода, а не всего запроса: входные токены — это
+		// Скорость вывода, а не всего запроса: входные токены - это
 		// повторённый контекст, и делить их на время значит показывать
 		// скорость, которой нет.
 		parts = append(parts, "вывод "+r)
@@ -248,13 +248,13 @@ func (u *UI) metricsParts(m Metrics, room int) string {
 		parts = append(parts, "запрос "+core.HumanDuration(m.Last))
 	}
 	if m.Prompt > 0 || m.Completion > 0 {
-		parts = append(parts, "↑"+core.Kfmt(m.Prompt)+" ↓"+core.Kfmt(m.Completion))
+		parts = append(parts, "in "+core.Kfmt(m.Prompt)+" out "+core.Kfmt(m.Completion))
 	}
 	if m.CostKnown {
 		parts = append(parts, core.FormatUSD(m.Cost))
 	}
 	// Отрезаем с конца, пока не влезем.
-	sep := " · "
+	sep := " | "
 	for len(parts) > 1 {
 		text := strings.Join(parts, sep)
 		if visibleWidth(text) <= room {
@@ -268,9 +268,9 @@ func (u *UI) metricsParts(m Metrics, room int) string {
 	return ""
 }
 
-// fitRight — прижать правый блок к правому краю строки.
+// fitRight - прижать правый блок к правому краю строки.
 //
-// Если не влезает — правый блок укорачивается, а не левый: показать
+// Если не влезает - правый блок укорачивается, а не левый: показать
 // половину расхода хуже, чем потерять название модели.
 func fitRight(left, right string, width int) string {
 	if right == "" {
@@ -297,15 +297,15 @@ func fitRight(left, right string, width int) string {
 // Панель в духе OpenCode: рамка со скруглёнными углами, заголовок
 // внутри верхней границы.
 const (
-	panelTL = "╭"
-	panelTR = "╮"
-	panelBL = "╰"
-	panelBR = "╯"
-	panelH  = "─"
-	panelV  = "│"
+	panelTL = "+"
+	panelTR = "+"
+	panelBL = "+"
+	panelBR = "+"
+	panelH  = "-"
+	panelV  = "|"
 )
 
-// panelGlyphs — рамка под текущий терминал.
+// panelGlyphs - рамка под текущий терминал.
 func (u *UI) panelGlyphs() (tl, tr, bl, br, h, v string) {
 	if u.g.Unicode {
 		return panelTL, panelTR, panelBL, panelBR, panelH, panelV
@@ -313,17 +313,17 @@ func (u *UI) panelGlyphs() (tl, tr, bl, br, h, v string) {
 	return "+", "+", "+", "+", "-", "|"
 }
 
-// PanelOpts — параметры панели.
+// PanelOpts - параметры панели.
 type PanelOpts struct {
-	// Title — заголовок в верхней границе.
+	// Title - заголовок в верхней границе.
 	Title string
-	// Footer — подпись под содержимым, внутри рамки.
+	// Footer - подпись под содержимым, внутри рамки.
 	Footer string
-	// Accent — заголовок акцентным цветом.
+	// Accent - заголовок акцентным цветом.
 	Accent bool
 }
 
-// Panel — блок в скруглённой рамке.
+// Panel - блок в скруглённой рамке.
 //
 // Рамка рисуется интерфейсом, а не терминалом: содержимое остаётся
 // текстом, который можно выделить, скопировать и прочитать без
@@ -350,7 +350,7 @@ func (u *UI) Panel(content string, o PanelOpts) {
 			head = " " + u.Head(plain) + " "
 		}
 	}
-	// Верхняя граница: заголовок внутри, остальное — заполнитель.
+	// Верхняя граница: заголовок внутри, остальное - заполнитель.
 	fill := inner - visibleWidth(head) - 1
 	if fill < 0 {
 		fill = 0
@@ -384,7 +384,7 @@ func (u *UI) Panel(content string, o PanelOpts) {
 	u.emit(b.String())
 }
 
-// KVPanel — список «параметр: значение» внутри панели.
+// KVPanel - список «параметр: значение» внутри панели.
 //
 // Тот же список, что и KVPairs, но в рамке: метрики и настройки лучше
 // читаются как карточка, а не как строки в общем потоке.

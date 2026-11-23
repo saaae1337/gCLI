@@ -18,7 +18,7 @@ import (
 // свою же задачу: пока она формулирует причину, она вынуждена ответить на
 // вопрос «что я вообще делаю и зачем мне ещё время».
 
-var schemaExtend = `{"type":"object","properties":{"reason":{"type":"string","description":"Что именно осталось сделать и почему этого не хватает — одна-двумя фразами, минимум 20 символов"},"n":{"type":"integer","description":"На сколько итераций продлить (не обязательно; по умолчанию — размер шага из конфига)"}}}`
+var schemaExtend = `{"type":"object","properties":{"reason":{"type":"string","description":"Что именно осталось сделать и почему этого не хватает - одна-двумя фразами, минимум 20 символов"},"n":{"type":"integer","description":"На сколько итераций продлить (не обязательно; по умолчанию - размер шага из конфига)"}}}`
 
 func registerExtendTool(r *Registry) {
 	r.registerBound("extend_turns",

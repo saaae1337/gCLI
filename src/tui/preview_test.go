@@ -175,15 +175,15 @@ func fillDialogue(a *App) {
 	a.doc.EndThink()
 	a.doc.ToolStart(ToolInfo{Name: "read_file", Args: "transport.go", Kind: "read", Detail: "240 строк", Status: "running"})
 	a.doc.ToolEnd(ToolInfo{Name: "read_file", Kind: "read", Detail: "240 строк", Status: "ok", Elapsed: 180 * time.Millisecond, Lines: 240})
-	a.doc.ToolStart(ToolInfo{Name: "edit_file", Args: "transport.go", Kind: "write", Detail: "+3 −2", Status: "running"})
-	a.doc.ToolEnd(ToolInfo{Name: "edit_file", Kind: "write", Detail: "+3 −2", Status: "ok", Elapsed: 90 * time.Millisecond, Lines: 3})
+	a.doc.ToolStart(ToolInfo{Name: "edit_file", Args: "transport.go", Kind: "write", Detail: "+3 -2", Status: "running"})
+	a.doc.ToolEnd(ToolInfo{Name: "edit_file", Kind: "write", Detail: "+3 -2", Status: "ok", Elapsed: 90 * time.Millisecond, Lines: 3})
 	a.doc.ToolStart(ToolInfo{Name: "bash", Args: "go test ./providers/...", Kind: "exec", Detail: "12 строк", Status: "running"})
 	a.doc.ToolEnd(ToolInfo{Name: "bash", Kind: "exec", Detail: "12 строк", Status: "ok", Elapsed: 2*time.Second + 100*time.Millisecond, Lines: 12})
 	a.doc.BeginStream()
-	a.doc.Text("Готово: лимит поднят до пяти попыток, между ними — нарастающая пауза.\n\n")
+	a.doc.Text("Готово: лимит поднят до пяти попыток, между ними - нарастающая пауза.\n\n")
 	a.doc.Text("Тесты провайдеров проходят, сборка чистая.\n")
 	a.doc.EndStream()
-	a.doc.SetMeta("18.4с  ·  41 tok/s  ·  ↑18.4k ↓3.2k")
+	a.doc.SetMeta("18.4s | 41 tok/s | in 18.4k out 3.2k")
 	a.busy = false
 	a.tick = 3
 }

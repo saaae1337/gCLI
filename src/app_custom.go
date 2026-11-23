@@ -133,13 +133,13 @@ func (a *app) findCustomCommand(name string) (customCommand, bool) {
 func (a *app) runCustomCommand(cmd customCommand, args string) {
 	body := strings.ReplaceAll(cmd.Body, "$ARGUMENTS", strings.TrimSpace(args))
 	if strings.TrimSpace(body) == "" {
-		a.ui.Warn("команда «/" + cmd.Name + "» пуста — добавь промпт в файл")
+		a.ui.Warn("команда \"/" + cmd.Name + "\" пуста - добавь промпт в файл")
 		return
 	}
 	if !a.quiet {
 		label := "/" + cmd.Name
 		if cmd.Description != "" {
-			label += " — " + cmd.Description
+			label += " - " + cmd.Description
 		}
 		a.ui.Println("  " + a.ui.Accent(a.ui.Glyphs().Star) + " " + a.ui.Gray(label))
 	}

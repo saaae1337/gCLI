@@ -39,13 +39,13 @@ func ansApp(t *testing.T, answers ...string) *app {
 func TestReadAnsUpperAChoosesAll(t *testing.T) {
 	a := ansApp(t, "A")
 	if got := a.readAns(true, true); got != confirmAll {
-		t.Errorf("A с доступным «все» = %d, хотели %d (confirmAll)", got, confirmAll)
+		t.Errorf("A с доступным \"все\" = %d, хотели %d (confirmAll)", got, confirmAll)
 	}
 	// «A» без доступного «все» — не «всегда», а переспрос, после которого
 	// «y» нормально завершает диалог.
 	a2 := ansApp(t, "A", "y")
 	if got := a2.readAns(false, false); got != confirmYes {
-		t.Errorf("после отказа «A» ответ «y» = %d, хотели %d (confirmYes)", got, confirmYes)
+		t.Errorf("после отказа \"A\" ответ \"y\" = %d, хотели %d (confirmYes)", got, confirmYes)
 	}
 	// Строчная «a» — по-прежнему «всегда».
 	a3 := ansApp(t, "a")

@@ -73,12 +73,12 @@ func TestToolActivityCutRuneSafe(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Fatalf("невалидный UTF-8 в строке активности: %q", got)
 	}
-	if !strings.HasSuffix(got, "…") {
+	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("обрезка без многоточия: %q", got)
 	}
 	// Байт 42 — второй байт двадцатой руны: обрезка отступает к 41,
 	// в результате 20 полных «ы» после «a».
-	want := "bash a" + strings.Repeat("ы", 20) + "…"
+	want := "bash a" + strings.Repeat("ы", 20) + "..."
 	if got != want {
 		t.Fatalf("неожиданный текст: %q", got)
 	}

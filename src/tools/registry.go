@@ -719,7 +719,7 @@ func (r *Registry) registerExt(extName, name, desc, schema, category string, h H
 		final = "x_" + name
 	}
 	if r.byName[final] != nil {
-		warns = append(warns, fmt.Sprintf("расширение %s: имя «%s» занято — пропущен", extName, name))
+		warns = append(warns, fmt.Sprintf("расширение %s: имя \"%s\" занято - пропущен", extName, name))
 		return final, false, warns
 	}
 	t := &Tool{

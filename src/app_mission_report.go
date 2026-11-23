@@ -39,7 +39,7 @@ func kindLabel(kind string) string {
 	case core.JournalResume:
 		return "продолжение"
 	case "":
-		return "—"
+		return "-"
 	}
 	return kind
 }
@@ -171,7 +171,7 @@ func buildMissionReport(d missionReportData) string {
 				b.WriteString("| Сохранений состояния | " + strconv.Itoa(cp) + " |\n")
 			}
 			if cont := d.Tracker.Continues(); cont > 0 {
-				b.WriteString("| Продолжений после «готово» | " + strconv.Itoa(cont) + " |\n")
+				b.WriteString("| Продолжений после \"готово\" | " + strconv.Itoa(cont) + " |\n")
 			}
 		}
 		b.WriteString("\n")
@@ -394,7 +394,7 @@ func mdToHTML(md string) string {
 			// Список: без слияния в <ul> — отчёт строится самим gcli,
 			// и там только плоские списки; <li> вне <ul> невалиден,
 			// поэтому каждый элемент — строка с маркером.
-			fmt.Fprintf(&out, "<p>• %s</p>\n", inlineMD(strings.TrimSpace(line[2:])))
+			fmt.Fprintf(&out, "<p>- %s</p>\n", inlineMD(strings.TrimSpace(line[2:])))
 		default:
 			flushTable()
 			para = append(para, strings.TrimSpace(line))
@@ -463,7 +463,7 @@ func (a *app) missionReportHTML() {
 		a.ui.Warn("сначала построй отчёт: /mission report")
 		return
 	}
-	title := "Отчёт миссии — gcli " + core.Version
+	title := "Отчёт миссии - gcli " + core.Version
 	page := fmt.Sprintf(reportHTMLTemplate, html.EscapeString(title), mdToHTML(string(data)))
 	htmlPath := strings.TrimSuffix(path, ".md") + ".html"
 	if err := core.WriteAtomic(htmlPath, []byte(page), 0o644); err != nil {
@@ -471,5 +471,5 @@ func (a *app) missionReportHTML() {
 		return
 	}
 	a.ui.Ok("страница отчёта: " + htmlPath)
-	a.ui.Println("  " + a.ui.Gray("положи в gist/Pages или отправь файлом — стили внутри, внешних ресурсов нет"))
+	a.ui.Println("  " + a.ui.Gray("положи в gist/Pages или отправь файлом - стили внутри, внешних ресурсов нет"))
 }

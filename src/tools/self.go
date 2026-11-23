@@ -72,19 +72,19 @@ type SelfReport struct {
 // своих ошибках.
 var toolLimits = []struct{ tool, limit string }{
 	{"read_file", "вернёт не более ~24 000 симв.; у больших файлов читай по частям через offset/limit"},
-	{"bash", "вывод обрезан до 16 000 симв.; таймаут 5–600 с (по умолчанию 60); повторять ту же команду с тем же результатом бессмысленно"},
+	{"bash", "вывод обрезан до 16 000 симв.; таймаут 5-600 с (по умолчанию 60); повторять ту же команду с тем же результатом бессмысленно"},
 	{"web_fetch", "текст страницы обрезан до 8000 симв. по умолчанию; максимум задаётся max_chars"},
-	{"web_search", "до 8 результатов по умолчанию; это HTML-скрапинг DuckDuckGo, поэтому результаты шумные — проверяй факты по первоисточникам"},
+	{"web_search", "до 8 результатов по умолчанию; это HTML-скрапинг DuckDuckGo, поэтому результаты шумные - проверяй факты по первоисточникам"},
 	{"grep", "результаты ограничены по числу совпадений; крупный поиск по проекту сначала сузь до каталога"},
 	{"todo_write", "план виден только тебе; не переписывай его целиком ради одной отметки"},
-	{"agent_status", "agent_status list/status — только сводка; полный отчёт субагента приходит его же результатом"},
+	{"agent_status", "agent_status list/status - только сводка; полный отчёт субагента приходит его же результатом"},
 	{"ask_user", "в автопилоте вопросы не задаются: вопрос помечается как решённый на твоё усмотрение"},
 	{"self_status", "этот инструмент; ничего не меняет"},
 	{"extend_turns", "продлевает ход, а не сохраняет состояние: для следующего хода зови handoff; отклоняется при повторах и без обоснования"},
-	{"remember", "пишет в долговременную память (~/.gcli/GCLI.md); для заметок внутри задачи — task_note"},
+	{"remember", "пишет в долговременную память (~/.gcli/GCLI.md); для заметок внутри задачи - task_note"},
 	{"screenshot", "PNG сохраняется в .gcli/screenshots; изображение прикладывается к твоему контексту"},
 	{"read_image", "изображение прикладывается к контексту; до 4 картинок за один ход"},
-	{"spawn_agent", "пул ограничен; субагент не видит твоего контекста — передай факты в task"},
+	{"spawn_agent", "пул ограничен; субагент не видит твоего контекста - передай факты в task"},
 }
 
 // SelfStatus — текстовый снимок состояния агента для контекста модели.
@@ -115,9 +115,9 @@ func (s SelfReport) Text() string {
 			total, s.CompactAt, pct)
 		b.WriteString(bar + "\n")
 		if pct > 85 {
-			b.WriteString("⚠ Контекст близок к порогу: скоро будет сжатие истории — не тащи новые файлы целиком, читай по частям.\n")
+			b.WriteString("! Контекст близок к порогу: скоро будет сжатие истории - не тащи новые файлы целиком, читай по частям.\n")
 		} else if pct > 60 {
-			b.WriteString("Контекст заполнен больше чем наполовину — переходи на точечные чтения вместо чтения файлов целиком.\n")
+			b.WriteString("Контекст заполнен больше чем наполовину - переходи на точечные чтения вместо чтения файлов целиком.\n")
 		}
 	} else {
 		fmt.Fprintf(&b, "Контекст: ~%d токенов (сжатие отключено).\n", total)
@@ -144,15 +144,15 @@ func (s SelfReport) Text() string {
 		left := s.MaxIters - s.Turns
 		switch {
 		case left <= 2:
-			b.WriteString(" — почти всё, пора готовить итог.")
+			b.WriteString(" - почти всё, пора готовить итог.")
 		case left <= 6:
-			b.WriteString(" — осталось немного, не распыляйся на «ещё один заход».")
+			b.WriteString(" - осталось немного, не распыляйся на \"ещё один заход\".")
 		}
 		if s.Extends > 0 {
 			fmt.Fprintf(&b, " (продлено %d %s до %d)",
 				s.Extends, pluralRU(s.Extends, "раз", "раза", "раз"), s.ExtendAbs)
 		} else if s.ExtendAbs > s.MaxIters {
-			fmt.Fprintf(&b, ". Продлить можно до %d — инструментом extend_turns с объяснением, зачем.", s.ExtendAbs)
+			fmt.Fprintf(&b, ". Продлить можно до %d - инструментом extend_turns с объяснением, зачем.", s.ExtendAbs)
 		}
 		b.WriteString("\n")
 	}
@@ -161,7 +161,7 @@ func (s SelfReport) Text() string {
 		fmt.Fprintf(&b, "\nЗаметки по задаче (%d):\n", len(s.Notes))
 		for i, n := range s.Notes {
 			if i >= 10 {
-				fmt.Fprintf(&b, "- …ещё %d\n", len(s.Notes)-10)
+				fmt.Fprintf(&b, "- ...ещё %d\n", len(s.Notes)-10)
 				break
 			}
 			fmt.Fprintf(&b, "- %s\n", core.Truncate(core.OneLine(n), 140))
@@ -169,7 +169,7 @@ func (s SelfReport) Text() string {
 	}
 
 	if s.ReadFiles > 0 {
-		fmt.Fprintf(&b, "\nУже прочитано файлов: %d (они помечены как прочитанные — edit_file по ним разрешён).", s.ReadFiles)
+		fmt.Fprintf(&b, "\nУже прочитано файлов: %d (они помечены как прочитанные - edit_file по ним разрешён).", s.ReadFiles)
 		if s.ReadOnly {
 			b.WriteString(" Режим только для чтения: инструменты записи недоступны.")
 		}
@@ -191,9 +191,9 @@ func (s SelfReport) Text() string {
 	}
 
 	if s.Subagent != "" {
-		fmt.Fprintf(&b, "\nЯ субагент «%s», глубина вложенности %d", s.Subagent, s.Depth)
+		fmt.Fprintf(&b, "\nЯ субагент \"%s\", глубина вложенности %d", s.Subagent, s.Depth)
 		if s.Depth >= 1 {
-			b.WriteString(" — порождать субагентов нельзя, работай сам.")
+			b.WriteString(" - порождать субагентов нельзя, работай сам.")
 		}
 		b.WriteString("\n")
 	}
@@ -223,7 +223,7 @@ func contextBar(total, limit int) (string, int) {
 	if filled > 10 {
 		filled = 10
 	}
-	bar := "[" + strings.Repeat(ui.Glyph("█", "#"), filled) + strings.Repeat(ui.Glyph("░", "."), 10-filled) + "]"
+	bar := "[" + strings.Repeat(ui.Glyph("#", "#"), filled) + strings.Repeat(ui.Glyph(".", "."), 10-filled) + "]"
 	return bar, pct
 }
 

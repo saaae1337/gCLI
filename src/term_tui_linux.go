@@ -63,7 +63,7 @@ func stdinIsTerminal() bool {
 // rawTUIHint — подсказка к отказу raw-режима на Linux.
 func rawTUIHint() string {
 	if !stdinIsTerminal() {
-		return " · stdin не терминал (пайп?) — полноэкранному режиму нужен настоящий tty"
+		return " | stdin не терминал (пайп?) - полноэкранному режиму нужен настоящий tty"
 	}
 	return ""
 }

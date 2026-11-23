@@ -120,7 +120,7 @@ func cleanControl(s string) string {
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b {
-			j := skipEscape(s, i)
+			j := i + wcwidth.SkipANSI(s, i)
 			b.WriteString(s[i:j])
 			i = j
 			continue
@@ -135,10 +135,53 @@ func cleanControl(s string) string {
 		case r < 32 || r == 0x7f:
 			// прочие управляющие — мусор
 		default:
-			b.WriteRune(r)
+			// Декоративная юникодщина из текста (стрелки, буллеты,
+			// галочки) заменяется ASCII: терминалы Windows 10/11 без
+			// смены шрифта рисуют только ASCII и кириллицу.
+			b.WriteString(asciiText(r))
 		}
 	}
 	return b.String()
+}
+
+// asciiText — ASCII-замена одной руны текста. Кириллица и ASCII
+// проходят как есть; прочие знаки — по таблице. Незнакомые символы
+// выкидываются: терминал нарисовал бы вместо них квадратик.
+func asciiText(r rune) string {
+	if r < 0x7F || (r >= 0x0400 && r <= 0x04FF) {
+		return string(r)
+	}
+	switch r {
+	case '«', '»', '„', '“', '”':
+		return "\""
+	case '—', '–':
+		return "-"
+	case '·':
+		return "|"
+	case '•':
+		return "-"
+	case '⚠':
+		return "!"
+	case '▸':
+		return ">"
+	case '◆':
+		return "*"
+	case '⊘':
+		return "-"
+	case '█':
+		return "#"
+	case '░':
+		return "."
+	case '≥':
+		return ">="
+	case '≤':
+		return "<="
+	case '×':
+		return "x"
+	case '№':
+		return "N"
+	}
+	return ""
 }
 
 // trimControl — убрать управляющие символы и escape-последовательности.
@@ -148,7 +191,7 @@ func trimControl(s string) string {
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b {
-			i = skipEscape(s, i)
+			i = i + wcwidth.SkipANSI(s, i)
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
@@ -159,7 +202,10 @@ func trimControl(s string) string {
 		case r < 32 || r == 0x7f:
 			// прочие управляющие — мусор
 		default:
-			b.WriteRune(r)
+			// Декоративная юникодщина из текста (стрелки, буллеты,
+			// галочки) заменяется ASCII: терминалы Windows 10/11 без
+			// смены шрифта рисуют только ASCII и кириллицу.
+			b.WriteString(asciiText(r))
 		}
 	}
 	return b.String()

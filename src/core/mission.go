@@ -350,7 +350,7 @@ func (m Mission) Summary() string {
 	if len(parts) == 0 {
 		return "миссия"
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, " | ")
 }
 
 // ---------- Файл миссии ----------
@@ -1033,7 +1033,7 @@ func (t *Tracker) SelfLine() string {
 	}
 	parts := func(s string) {
 		if b.Len() > 0 {
-			b.WriteString(" · ")
+			b.WriteString(" | ")
 		}
 		b.WriteString(s)
 	}
@@ -1099,26 +1099,26 @@ func (t *Tracker) status() string {
 	}
 	if t.m.MaxIters > 0 {
 		if b.Len() > 0 {
-			b.WriteString(" · ")
+			b.WriteString(" | ")
 		}
 		fmt.Fprintf(&b, "итерации: %d из %d", t.iters, t.m.MaxIters)
 	}
 	if t.m.MaxToolCalls > 0 {
 		if b.Len() > 0 {
-			b.WriteString(" · ")
+			b.WriteString(" | ")
 		}
 		fmt.Fprintf(&b, "вызовы инструментов: %d из %d", t.toolCalls, t.m.MaxToolCalls)
 	}
 	if t.m.TokenBudget > 0 {
 		if b.Len() > 0 {
-			b.WriteString(" · ")
+			b.WriteString(" | ")
 		}
 		fmt.Fprintf(&b, "токены: %s из %s",
 			CompactNum(t.tokens), CompactNum(t.m.TokenBudget))
 	}
 	if t.m.CostBudget > 0 {
 		if b.Len() > 0 {
-			b.WriteString(" · ")
+			b.WriteString(" | ")
 		}
 		fmt.Fprintf(&b, "деньги: %s из %s",
 			FormatUSD(t.cost()), FormatUSD(t.m.CostBudget))
@@ -1288,7 +1288,7 @@ func (m Mission) PromptBlock() string {
 		}
 		b.WriteString("\nПеред тем как объявить работу законченной, ПРОВЕРЬ каждый пункт " +
 			"инструментами и перечисли в ответе, каким именно вызовом проверил каждый. " +
-			"«Должно работать» — не проверка. Если пункт выполнить нельзя, " +
+			"\"Должно работать\" - не проверка. Если пункт выполнить нельзя, " +
 			"скажи это прямо и назови причину.\n")
 	}
 

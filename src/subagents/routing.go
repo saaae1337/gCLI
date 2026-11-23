@@ -168,34 +168,34 @@ type RouteVerdict struct {
 func RouteModel(role Type, opts RouteOptions) RouteVerdict {
 	cur := strings.TrimSpace(opts.Current)
 	if e := strings.TrimSpace(opts.Explicit); e != "" {
-		return RouteVerdict{Model: cur, Why: "модель указана явно — не меняю"}
+		return RouteVerdict{Model: cur, Why: "модель указана явно - не меняю"}
 	}
 	if !opts.Enabled {
 		return RouteVerdict{Model: cur, Why: "маршрутизация выключена"}
 	}
 	if cur == "" {
 		// Нечего понижать: пустая модель — это «как у главного агента».
-		return RouteVerdict{Model: "", Why: "модель не задана — едет как у главного агента"}
+		return RouteVerdict{Model: "", Why: "модель не задана - едет как у главного агента"}
 	}
 	bv := JudgeBudget(opts.Budget)
 	cheap := cheapest(opts.ProviderID, opts.Available)
 	if cheap.model == "" {
-		return RouteVerdict{Model: cur, Why: "нет более дешёвой модели у провайдера — оставляю " + cur}
+		return RouteVerdict{Model: cur, Why: "нет более дешёвой модели у провайдера - оставляю " + cur}
 	}
 	curPrice, ok := core.ModelPrice(opts.ProviderID, cur)
 	if !ok {
-		return RouteVerdict{Model: cur, Why: "цена модели " + cur + " неизвестна — не гадаю"}
+		return RouteVerdict{Model: cur, Why: "цена модели " + cur + " неизвестна - не гадаю"}
 	}
 
 	wantCheap := CostClassOf(role) == CostCheap || bv.Critical || bv.Tight
 	if !wantCheap {
-		return RouteVerdict{Model: cur, Why: fmt.Sprintf("роль «%s» требовательна, бюджет в порядке", role)}
+		return RouteVerdict{Model: cur, Why: fmt.Sprintf("роль \"%s\" требовательна, бюджет в порядке", role)}
 	}
 	if !cheaper(cheap.price, curPrice) {
-		return RouteVerdict{Model: cur, Why: fmt.Sprintf("%s не дешевле %s — оставляю", cheap.model, cur)}
+		return RouteVerdict{Model: cur, Why: fmt.Sprintf("%s не дешевле %s - оставляю", cheap.model, cur)}
 	}
 
-	why := fmt.Sprintf("роль «%s» простая, модель %s (%s) дороже %s",
+	why := fmt.Sprintf("роль \"%s\" простая, модель %s (%s) дороже %s",
 		role, cur, core.FormatUSD(sampleCost(curPrice)), cheap.model)
 	if bv.Critical {
 		why += "; бюджет на пределе (" + bv.String() + ")"

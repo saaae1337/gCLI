@@ -98,7 +98,7 @@ func parseExtension(path string) (Extension, error) {
 	return ext, nil
 }
 
-const schemaExt = `{"type":"object","properties":{"input":{"type":"string","description":"Входные данные/аргументы. Для shell-инструментов приходят в переменную окружения (GCLI_INPUT) и stdin — в команде читай \"$GCLI_INPUT\"/\"%GCLI_INPUT%\", вставлять вход в строку команды нельзя. Для HTTP-инструментов подставляются в url/body как раньше."}},"required":[]}`
+const schemaExt = `{"type":"object","properties":{"input":{"type":"string","description":"Входные данные/аргументы. Для shell-инструментов приходят в переменную окружения (GCLI_INPUT) и stdin - в команде читай \"$GCLI_INPUT\"/\"%GCLI_INPUT%\", вставлять вход в строку команды нельзя. Для HTTP-инструментов подставляются в url/body как раньше."}},"required":[]}`
 
 // extTrusted — можно ли подключать расширение.
 //
@@ -174,7 +174,7 @@ func (r *Registry) LoadExtensionTools() (int, []string) {
 		}
 		for _, t := range ext.Tools {
 			if !reExtName.MatchString(t.Name) {
-				warns = append(warns, fmt.Sprintf("расширение %s: плохое имя инструмента «%s» (нужны a-z, 0-9, _, 3–31 символ)", ext.Name, t.Name))
+				warns = append(warns, fmt.Sprintf("расширение %s: плохое имя инструмента \"%s\" (нужны a-z, 0-9, _, 3-31 символ)", ext.Name, t.Name))
 				continue
 			}
 			desc := t.Desc
@@ -195,7 +195,7 @@ func (r *Registry) LoadExtensionTools() (int, []string) {
 					count++
 				}
 			default:
-				warns = append(warns, fmt.Sprintf("расширение %s: у «%s» нет command и url — пропущен", ext.Name, t.Name))
+				warns = append(warns, fmt.Sprintf("расширение %s: у \"%s\" нет command и url - пропущен", ext.Name, t.Name))
 			}
 		}
 	}
@@ -238,10 +238,10 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		// переписать, вместо тихой склейки.
 		if strings.Contains(t.Command, "{input}") {
 			return Result{}, fmt.Errorf(
-				"расширение %s: вход нельзя вставлять в команду текстом — это позволяет "+
+				"расширение %s: вход нельзя вставлять в команду текстом - это позволяет "+
 					"выполнить что угодно (инъекция в shell). Перепиши команду так, чтобы она "+
-					"читала переменную окружения %s: bash → \"$%s\", cmd → \"%%%s%%\", "+
-					"PowerShell → \"$env:%s\"", ext.Name, envName, envName, envName, envName)
+					"читала переменную окружения %s: bash -> \"$%s\", cmd -> \"%%%s%%\", "+
+					"PowerShell -> \"$env:%s\"", ext.Name, envName, envName, envName, envName)
 		}
 		cmdStr := t.Command
 		if strings.TrimSpace(cmdStr) == "" {
@@ -250,7 +250,7 @@ func (r *Registry) extCmdHandler(ext Extension, t ExtTool) Handler {
 		if r.env.ReadOnly && !t.ReadOnly {
 			// В режиме «только чтение» разрешены лишь расширения, явно
 			// помеченные read_only; всё, что может писать, — запрещено.
-			return Result{Error: "режим «только чтение»"}, nil
+			return Result{Error: "режим \"только чтение\""}, nil
 		}
 		if !t.NoConfirm && r.env.Confirm != nil {
 			ok := r.env.Confirm(ConfirmReq{
@@ -390,7 +390,7 @@ func (r *Registry) extHTTPHandler(ext Extension, t ExtTool) Handler {
 		}
 		return Result{
 			Text:    fmt.Sprintf("HTTP %d %s\n\n%s", resp.StatusCode, u, s),
-			Summary: fmt.Sprintf("%s → HTTP %d", ext.Name, resp.StatusCode),
+			Summary: fmt.Sprintf("%s -> HTTP %d", ext.Name, resp.StatusCode),
 		}, nil
 	}
 }

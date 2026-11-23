@@ -235,7 +235,7 @@ func (r *Registry) hAskTrace(_ context.Context, _ map[string]any) (Result, error
 
 	if len(items) == 0 {
 		return Result{
-			Text:    "Вопросов пользователю в этом ходе не было. Если ты поставил задачу в тупик и ждёшь ответа — такого следа нет: значит, вопрос не был задан, и продолжай сам или спроси явно.",
+			Text:    "Вопросов пользователю в этом ходе не было. Если ты поставил задачу в тупик и ждёшь ответа - такого следа нет: значит, вопрос не был задан, и продолжай сам или спроси явно.",
 			Summary: "вопросов не было",
 		}, nil
 	}
@@ -245,16 +245,16 @@ func (r *Registry) hAskTrace(_ context.Context, _ map[string]any) (Result, error
 	for i, it := range items {
 		if it.Pending {
 			pending++
-			fmt.Fprintf(&b, "%d. ⏳ %s\n   — ответа нет: вопрос задан, но пользователь не ответил (ask_user вернул ошибку).\n",
+			fmt.Fprintf(&b, "%d. ... %s\n   - ответа нет: вопрос задан, но пользователь не ответил (ask_user вернул ошибку).\n",
 				i+1, core.Truncate(core.OneLine(it.Question), 200))
 			continue
 		}
-		fmt.Fprintf(&b, "%d. %s\n   → %s\n", i+1,
+		fmt.Fprintf(&b, "%d. %s\n   -> %s\n", i+1,
 			core.Truncate(core.OneLine(it.Question), 200),
 			core.Truncate(core.OneLine(it.Answer), 200))
 	}
 	if pending > 0 {
-		fmt.Fprintf(&b, "\n⏳ Вопросов без ответа: %d. Ответ не придёт сам — либо продолжай без него,\n"+
+		fmt.Fprintf(&b, "\n... Вопросов без ответа: %d. Ответ не придёт сам - либо продолжай без него,\n"+
 			"либо прими решение сам и скажи об этом вслух в отчёте.\n", pending)
 	}
 	return Result{Text: strings.TrimSpace(b.String()), Summary: fmt.Sprintf("вопросов: %d", len(items))}, nil
@@ -644,11 +644,11 @@ func (r *Registry) hJob(_ context.Context, m map[string]any) (Result, error) {
 			case jobFailed:
 				verdict = fmt.Sprintf("ОШИБКА, код выхода %d", code)
 			case jobUnknown:
-				verdict = fmt.Sprintf("код выхода неизвестен (%d) — процесс убит или завершился не штатно", code)
+				verdict = fmt.Sprintf("код выхода неизвестен (%d) - процесс убит или завершился не штатно", code)
 			}
-			tail = fmt.Sprintf("\n\n[статус: %s; код выхода: %d — %s]", st, code, verdict)
+			tail = fmt.Sprintf("\n\n[статус: %s; код выхода: %d - %s]", st, code, verdict)
 		} else {
-			tail = "\n\n[процесс ещё выполняется — загляни позже]"
+			tail = "\n\n[процесс ещё выполняется - загляни позже]"
 		}
 		return Result{
 			Text:    txt + tail,
@@ -674,7 +674,7 @@ func (r *Registry) hJob(_ context.Context, m map[string]any) (Result, error) {
 		j.mu.Unlock()
 		if !alive {
 			return Result{
-				Text:    fmt.Sprintf("Процесс %s уже %s — останавливать нечего.", j.ID, j.Status()),
+				Text:    fmt.Sprintf("Процесс %s уже %s - останавливать нечего.", j.ID, j.Status()),
 				Summary: "уже завершён",
 			}, nil
 		}

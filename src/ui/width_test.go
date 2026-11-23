@@ -68,7 +68,7 @@ func TestCellWidthCombiningMarks(t *testing.T) {
 	}
 }
 
-// TestPadRightFillsWideChars — главный симптом дефекта: дополнение должно
+// TestPadRightFillsWideChars - главный симптом дефекта: дополнение должно
 // считать колонки, а не руны, иначе строка с CJK короче, чем задано.
 func TestPadRightFillsWideChars(t *testing.T) {
 	for _, s := range []string{"日本", "привет", "👍", "日本 👍"} {
@@ -88,7 +88,7 @@ func TestPadLeftFillsWideChars(t *testing.T) {
 	}
 }
 
-// TestTruncateCellsNeverExceedsWidth — обрезка не должна выдавать строку
+// TestTruncateCellsNeverExceedsWidth - обрезка не должна выдавать строку
 // шире заданной: разрез по рунам оставлял «日本» шире 3 колонок.
 func TestTruncateCellsNeverExceedsWidth(t *testing.T) {
 	cases := []struct {
@@ -113,13 +113,13 @@ func TestTruncateCellsEllFitsWithMarker(t *testing.T) {
 	if w := cellWidth(got); w > 5 {
 		t.Errorf("строка с многоточием шире лимита: %d колонок (%q)", w, got)
 	}
-	if !strings.HasSuffix(got, "…") {
+	if !strings.HasSuffix(got, "...") {
 		t.Errorf("нет метки обрезки: %q", got)
 	}
 }
 
-// TestWrapCJKRespectsWidth — перенос по ширине обязан считать колонки:
-// 20 японских иероглифов — это 40 колонок, а не 20.
+// TestWrapCJKRespectsWidth - перенос по ширине обязан считать колонки:
+// 20 японских иероглифов - это 40 колонок, а не 20.
 func TestWrapCJKRespectsWidth(t *testing.T) {
 	const width = 20
 	lines := wrap(strings.Repeat("日本語", 20), width)
@@ -138,10 +138,10 @@ func TestWrapCJKRespectsWidth(t *testing.T) {
 	}
 }
 
-// TestWrapLongWordWithWideChars — слово длиннее строки режется по колонкам,
+// TestWrapLongWordWithWideChars - слово длиннее строки режется по колонкам,
 // а не по рунам, и не зацикливается на символе шире самой строки.
 func TestWrapLongWordWithWideChars(t *testing.T) {
-	// Ширина 11: символ в 2 колонки помещается, но один «👍» — нет.
+	// Ширина 11: символ в 2 колонки помещается, но один «👍» - нет.
 	lines := wrap("👍👍👍👍👍👍👍", 11)
 	if len(lines) == 0 {
 		t.Fatal("wrap вернул пустой результат")
@@ -170,7 +170,7 @@ func TestWrapTerminatesOnWideCharNarrowWidth(t *testing.T) {
 	}
 }
 
-// TestCellWidthGraphemeClusters — эмодзи, собранные из нескольких рун, рисуются
+// TestCellWidthGraphemeClusters - эмодзи, собранные из нескольких рун, рисуются
 // терминалом как одна картинка, а значит занимают одну ширину. Считать руны
 // здесь нельзя: иначе «🇷🇺» растягивал колонку на 8 символов и ломал рамки
 // таблиц. Каждый кластер обязан весить ровно 2 колонки.
@@ -195,8 +195,8 @@ func TestCellWidthGraphemeClusters(t *testing.T) {
 	}
 }
 
-// TestCellWidthVariationSelector — FE0F просит нарисовать символ как эмодзи,
-// FE0E — как обычный текст. Один и тот же «✂» поэтому весит то 2, то 1.
+// TestCellWidthVariationSelector - FE0F просит нарисовать символ как эмодзи,
+// FE0E - как обычный текст. Один и тот же «✂» поэтому весит то 2, то 1.
 func TestCellWidthVariationSelector(t *testing.T) {
 	cases := []struct {
 		name string
@@ -213,7 +213,7 @@ func TestCellWidthVariationSelector(t *testing.T) {
 	}
 }
 
-// TestCellWidthANSIConsecutive — подряд идущие управляющие последовательности
+// TestCellWidthANSIConsecutive - подряд идущие управляющие последовательности
 // (сброс цвета плюс следующий SGR) не должны сбивать считыватель с толку:
 // возвращаемая skipANSI длина считается от позиции входа, а не от начала строки.
 func TestCellWidthANSIConsecutive(t *testing.T) {
@@ -234,7 +234,7 @@ func TestCellWidthANSIConsecutive(t *testing.T) {
 	}
 }
 
-// TestStripANSIKeepsText — вырезание последовательностей не должно терять текст
+// TestStripANSIKeepsText - вырезание последовательностей не должно терять текст
 // и не должно зависать на неполной последовательности в конце строки.
 func TestStripANSIKeepsText(t *testing.T) {
 	cases := []struct {
@@ -253,7 +253,7 @@ func TestStripANSIKeepsText(t *testing.T) {
 	}
 }
 
-// TestTruncateCellsKeepsClustersWhole — обрезка не должна оставлять половину
+// TestTruncateCellsKeepsClustersWhole - обрезка не должна оставлять половину
 // кластера: символ, который не помещается, уходит целиком вместе с ZWJ,
 // модификаторами и variation selectors.
 func TestTruncateCellsKeepsClustersWhole(t *testing.T) {
@@ -269,7 +269,7 @@ func TestTruncateCellsKeepsClustersWhole(t *testing.T) {
 	}
 }
 
-// TestWrapEmojiClusters — перенос по ширине не должен разрывать ZWJ-семью и
+// TestWrapEmojiClusters - перенос по ширине не должен разрывать ZWJ-семью и
 // терять её части: слово шире строки режется по границам кластеров.
 func TestWrapEmojiClusters(t *testing.T) {
 	const src = "👨‍👩‍👧‍👦"
@@ -288,7 +288,7 @@ func TestWrapEmojiClusters(t *testing.T) {
 	}
 }
 
-// TestTableWidthsUsesColumns — автоширина таблицы обязана считать колонки,
+// TestTableWidthsUsesColumns - автоширина таблицы обязана считать колонки,
 // иначе колонка с CJK вдвое шире остальных.
 func TestTableWidthsUsesColumns(t *testing.T) {
 	// Заголовок короче японской ячейки: ширину колонки обязано задавать

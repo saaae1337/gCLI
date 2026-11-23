@@ -127,7 +127,7 @@ func (a *app) runBench(dir string) bool {
 		a.ui.Err("bench: " + err.Error())
 		return true
 	}
-	a.ui.Title("Self-bench — задач: " + strconv.Itoa(len(tasks)))
+	a.ui.Title("Self-bench - задач: " + strconv.Itoa(len(tasks)))
 	a.ui.Info("каждая задача исполняется агентом в чистом временном каталоге (gcli -p -json -yolo)")
 
 	passed := 0
@@ -172,7 +172,7 @@ func (a *app) runBench(dir string) bool {
 			if ok {
 				fmt.Printf("[%d/%d] ok   %s\n", i+1, len(tasks), t.Name)
 			} else {
-				fmt.Printf("[%d/%d] FAIL %s — %s\n", i+1, len(tasks), t.Name, note)
+				fmt.Printf("[%d/%d] FAIL %s - %s\n", i+1, len(tasks), t.Name, note)
 			}
 		}
 	}

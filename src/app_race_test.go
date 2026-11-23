@@ -198,7 +198,7 @@ func TestProviderModelPairRace(t *testing.T) {
 				}
 			}
 			if !ok {
-				t.Errorf("рваная пара: провайдер %p · модель %q", p, m)
+				t.Errorf("рваная пара: провайдер %p | модель %q", p, m)
 				return
 			}
 		}
@@ -242,7 +242,7 @@ func TestSessionCountersRace(t *testing.T) {
 	wg.Wait()
 
 	if got, want := a.sessionUsage().Total(), 4*50*5; got != want {
-		t.Errorf("итог usage = %d, ожидалось %d — часть обновлений потеряна", got, want)
+		t.Errorf("итог usage = %d, ожидалось %d - часть обновлений потеряна", got, want)
 	}
 	if got := a.sessionEconomy().Requests; got != 200 {
 		t.Errorf("запросов в экономии = %d, ожидалось 200", got)
@@ -284,7 +284,7 @@ func TestAgentModeRace(t *testing.T) {
 	wg.Wait()
 
 	if a.agentMode() {
-		t.Error("последняя запись в каждом цикле — false, но флаг оказался true")
+		t.Error("последняя запись в каждом цикле - false, но флаг оказался true")
 	}
 }
 
@@ -404,7 +404,7 @@ func TestCfgRace(t *testing.T) {
 	cfgMu.Unlock()
 	snap := a.cfgSnap()
 	if len(snap.SkillsOff) == 0 || snap.SkillsOff[0] != "base" {
-		t.Errorf("снимок SkillsOff = %v, ожидалось начало с base — копия не глубокая", snap.SkillsOff)
+		t.Errorf("снимок SkillsOff = %v, ожидалось начало с base - копия не глубокая", snap.SkillsOff)
 	}
 	if n := len(snap.SkillsOff); n > 0 {
 		for _, s := range snap.SkillsOff {
@@ -653,7 +653,7 @@ func TestOnToolCallbacksParallelStatsNoRace(t *testing.T) {
 	wg.Wait()
 
 	if a.sess.Stats.Tools != n {
-		t.Errorf("Stats.Tools = %d, ожидалось %d (потерянные инкременты — гонка)",
+		t.Errorf("Stats.Tools = %d, ожидалось %d (потерянные инкременты - гонка)",
 			a.sess.Stats.Tools, n)
 	}
 }

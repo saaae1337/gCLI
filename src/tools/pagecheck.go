@@ -30,7 +30,7 @@ func (r PageReport) Text() string {
 		return fmt.Sprintf("Страница %s: проблем не найдено (проверок: %d).", r.Path, r.Checks)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Страница %s: проблем — %d (проверок: %d)\n", r.Path, len(r.Problems), r.Checks)
+	fmt.Fprintf(&b, "Страница %s: проблем - %d (проверок: %d)\n", r.Path, len(r.Problems), r.Checks)
 	for _, p := range r.Problems {
 		b.WriteString("- " + p + "\n")
 	}
@@ -42,7 +42,7 @@ func (r PageReport) Summary() string {
 	if len(r.Problems) == 0 {
 		return fmt.Sprintf("страница в порядке (%d проверок)", r.Checks)
 	}
-	return fmt.Sprintf("страница: проблем — %d", len(r.Problems))
+	return fmt.Sprintf("страница: проблем - %d", len(r.Problems))
 }
 
 // Регулярки разбора HTML. Полноценного парсера нет (зависимостей у
@@ -89,7 +89,7 @@ func checkHTMLPage(path string) PageReport {
 	rep.Checks++
 	if !strings.Contains(strings.ToLower(html), `name="viewport"`) &&
 		!strings.Contains(strings.ToLower(html), `name='viewport'`) {
-		rep.Problems = append(rep.Problems, "нет <meta name=\"viewport\"> — на телефоне страница откроется во всю ширину")
+		rep.Problems = append(rep.Problems, "нет <meta name=\"viewport\"> - на телефоне страница откроется во всю ширину")
 	}
 
 	// Идентификаторы — чтобы проверить якоря.
@@ -112,7 +112,7 @@ func checkHTMLPage(path string) PageReport {
 			rep.Checks++
 			id := strings.TrimPrefix(ref, "#")
 			if id != "" && !ids[id] {
-				rep.Problems = append(rep.Problems, "якорь #"+id+" — элемента с таким id нет")
+				rep.Problems = append(rep.Problems, "якорь #"+id+" - элемента с таким id нет")
 			}
 		case strings.Contains(ref, "://"), strings.HasPrefix(ref, "//"),
 			strings.HasPrefix(ref, "mailto:"), strings.HasPrefix(ref, "data:"),

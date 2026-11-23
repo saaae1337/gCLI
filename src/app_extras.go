@@ -98,7 +98,7 @@ func lastUserText(msgs []core.Message) string {
 func (a *app) appendMemoryNote(text string) {
 	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "#"))
 	if text == "" {
-		a.ui.Warn("формат: #текст — фраза попадёт в GCLI.md (память проекта)")
+		a.ui.Warn("формат: #текст - фраза попадёт в GCLI.md (память проекта)")
 		return
 	}
 	path, err := a.memory.AppendFact(text)

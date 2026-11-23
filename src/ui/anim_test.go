@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// animUI — UI с включёнными анимациями для проверки эффектов появления.
+// animUI - UI с включёнными анимациями для проверки эффектов появления.
 func animUI(width int) (*UI, *strings.Builder) {
 	buf := &strings.Builder{}
 	u := New(Options{
@@ -15,7 +15,7 @@ func animUI(width int) (*UI, *strings.Builder) {
 	return u, buf
 }
 
-// afterMark — часть вывода после последнего кадра «\r ESC[K».
+// afterMark - часть вывода после последнего кадра «\r ESC[K».
 // Нужна, чтобы смотреть именно на содержимое финального кадра:
 // StripANSI умеет только последовательности, оканчивающиеся на «m»,
 // и проглатывает «ESC[K» вместе со всем, что после него.
@@ -43,7 +43,7 @@ func TestRevealLinesPrintsAllLines(t *testing.T) {
 	if !strings.Contains(out, "\r\033[K") {
 		t.Errorf("ожидалась перерисовка строк при проявлении:\n%q", firstRunes(out))
 	}
-	// Финальный кадр — последняя строка, после блока перевод строки:
+	// Финальный кадр - последняя строка, после блока перевод строки:
 	// иначе следующий вывод дописался бы в последнюю строку.
 	if got := StripANSI(afterMark(out)); got != "третья строка\n" {
 		t.Errorf("финальный кадр должен быть последней строкой, получено %q", got)
@@ -98,7 +98,7 @@ func TestRevealLineDimsWholeColoredLine(t *testing.T) {
 	// сбросом \033[0m. Затухание должно действовать на ВСЕ фрагменты:
 	// иначе оно гаснет на первом же переходе и эффекта не видно.
 	u, buf := animUI(80)
-	colored := u.c(u.pal.OK, "✔") + " " + u.Gray("готово")
+	colored := u.c(u.pal.OK, "+") + " " + u.Gray("готово")
 	u.RevealLine("  " + colored)
 	out := buf.String()
 
@@ -109,11 +109,11 @@ func TestRevealLineDimsWholeColoredLine(t *testing.T) {
 	rest := out[k+len("\r\033[K"):]
 	dim := rest[:strings.Index(rest, "\r\033[K")]
 
-	// Сколько сбросов — столько же раз должен вернуться dim.
+	// Сколько сбросов - столько же раз должен вернуться dim.
 	resets := strings.Count(dim, cReset)
 	dims := strings.Count(dim, cDim)
 	if dims < resets {
-		t.Errorf("dim вернулся %d раз при %d сбросах цвета — затухание гаснет на первом фрагменте:\n%q",
+		t.Errorf("dim вернулся %d раз при %d сбросах цвета - затухание гаснет на первом фрагменте:\n%q",
 			dims, resets, dim)
 	}
 }
@@ -126,7 +126,7 @@ func TestDimFrameNoColorPassthrough(t *testing.T) {
 }
 
 func TestDimFrameKeepsColors(t *testing.T) {
-	// dim добавляется и после последнего сброса — чтобы прикрыть хвост
+	// dim добавляется и после последнего сброса - чтобы прикрыть хвост
 	// строки, где цвет уже погас. Главное: текст и исходные цвета на месте.
 	s := "\033[38;2;1;2;3mтекст\033[0m"
 	got := dimFrame(s)
@@ -158,7 +158,7 @@ func TestRevealLinesEndsWithNewline(t *testing.T) {
 	}
 }
 
-// TestRevealLineEndsWithNewline — строка проявления обязана кончаться
+// TestRevealLineEndsWithNewline - строка проявления обязана кончаться
 // переводом строки. Без него следующий вывод дописывался бы в конец
 // проявленной строки: результат инструмента слипался с закрывающей
 // строкой рельса (она печатается следом).
@@ -178,12 +178,12 @@ func TestRevealLineEndsWithNewline(t *testing.T) {
 	}
 }
 
-// TestRevealLinesDimsColoredLines — строки баннера и рельса приходят уже
+// TestRevealLinesDimsColoredLines - строки баннера и рельса приходят уже
 // раскрашенными. Затухание обёрткой приглушённого цвета гасло бы на первом
 // же сбросе внутри строки, поэтому применяется dimFrame.
 func TestRevealLinesDimsColoredLines(t *testing.T) {
 	u, buf := animUI(80)
-	u.RevealLines([]string{u.c(u.pal.OK, "✔") + " " + u.Gray("готово")})
+	u.RevealLines([]string{u.c(u.pal.OK, "+") + " " + u.Gray("готово")})
 	out := buf.String()
 
 	k := strings.Index(out, "\033[K")
@@ -194,12 +194,12 @@ func TestRevealLinesDimsColoredLines(t *testing.T) {
 	frame = frame[:strings.Index(frame, "\r\033[K")]
 
 	if resets := strings.Count(frame, cReset); strings.Count(frame, cDim) < resets {
-		t.Errorf("dim вернулся %d раз при %d сбросах цвета — затухание гаснет на первом фрагменте:\n%q",
+		t.Errorf("dim вернулся %d раз при %d сбросах цвета - затухание гаснет на первом фрагменте:\n%q",
 			strings.Count(frame, cDim), resets, frame)
 	}
 }
 
-// TestRevealLinesAnimatedOnlyWhenAllowed — анимация требует цвета, юникода,
+// TestRevealLinesAnimatedOnlyWhenAllowed - анимация требует цвета, юникода,
 // терминала и непустого режима вывода. В пайпе и при -no-color строки
 // печатаются как есть.
 func TestRevealLinesAnimatedOnlyWhenAllowed(t *testing.T) {
@@ -214,7 +214,7 @@ func TestRevealLinesAnimatedOnlyWhenAllowed(t *testing.T) {
 	}
 }
 
-// TestRevealLinesNoDoubleAnimation — если анимация выключена, строки печатаются
+// TestRevealLinesNoDoubleAnimation - если анимация выключена, строки печатаются
 // по одной, без заготовки: блок не должен «прыгать» на экране.
 func TestRevealLinesNoDoubleAnimation(t *testing.T) {
 	buf := &strings.Builder{}
@@ -229,7 +229,7 @@ func TestRevealLinesNoDoubleAnimation(t *testing.T) {
 	}
 }
 
-// TestRailEndChainStopsWaitLine — закрывающая строка рельса гасит строку
+// TestRailEndChainStopsWaitLine - закрывающая строка рельса гасит строку
 // ожидания (кот «working...») и печатается чисто: без управления курсором
 // в обычном режиме и без хвоста ожидания после себя.
 func TestRailEndChainStopsWaitLine(t *testing.T) {

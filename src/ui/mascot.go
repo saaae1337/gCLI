@@ -6,45 +6,45 @@ import (
 	"time"
 )
 
-// ---------- Маскот «ИСКРА» — кот gcli ----------
+// ---------- Маскот «ИСКРА» - кот gcli ----------
 //
-// Искра — кот-помощник, который всегда на посту. Она встречает в баннере,
+// Искра - кот-помощник, который всегда на посту. Она встречает в баннере,
 // сидит над строкой состояния, пока пользователь печатает, думает и
 // работает вместе с ИИ, мурчит от результата и фыркает на ошибках.
 //
-// Кот нарисован по референсу проекта — три строки:
+// Кот нарисован по референсу проекта - три строки:
 //
 //     /\_/\
 //    ( ^.^ )
 //     > ^ <
 //
-// Оформление подчиняется теме «УГОЛЬ»: контур — охра, мордочка — тёплый
-// белый, хвост-суффикс (zZ, ?) — светлая охра.
+// Оформление подчиняется теме «УГОЛЬ»: контур - охра, мордочка - тёплый
+// белый, хвост-суффикс (zZ, ?) - светлая охра.
 //
 // Правила арта:
 //
-//  1. Каждый кадр — ровно три строки: уши, мордочка, лапы. Эмоция живёт
+//  1. Каждый кадр - ровно три строки: уши, мордочка, лапы. Эмоция живёт
 //     в трёх символах между скобками, поэтому кот анимируется без сдвигов:
 //     правая колонка баннера и строка состояния под ним остаются на месте.
 //
 //  2. У каждого состояния есть ASCII-версия: в режиме -ascii кот продолжает
-//     жить — просто грубее нарисован (ω → w, ° → o, □ → O, △ → o).
+//     весь набор ASCII: морда «o.o», «o.O», «O_O» - как в TUI-заставке.
 //
-//  3. Все состояния одного набора — одной ширины: строка мордочки добивается
+//  3. Все состояния одного набора - одной ширины: строка мордочки добивается
 //     пробелами до catWidth, суффиксы (zZ, ?) растут вправо от неё.
 
-// MascotState — состояние маскота.
+// MascotState - состояние маскота.
 type MascotState int
 
 const (
 	MascotIdle      MascotState = iota // ждёт команду            ( ^.^ )
 	MascotThink                        // модель рассуждает       ( -.- )
 	MascotWork                         // идут инструменты        ( >.< )
-	MascotHappy                        // задача выполнена        ( ^ω^ )
+	MascotHappy                        // задача выполнена        ( ^o^ )
 	MascotOops                         // что-то сломалось        ( x_x )
 	MascotSleep                        // сессия закрыта / сон    ( -.- ) zZ
-	MascotListen                       // слушает пользователя    ( °.° )
-	MascotSurprised                    // неожиданный результат   ( °□° )
+	MascotListen                       // слушает пользователя    ( o.o )
+	MascotSurprised                    // неожиданный результат   ( o.O )
 	MascotBored                        // долго нет команд        ( -.- )
 	MascotEat                          // большой объём данных    ( ~.~ )
 	MascotBlink                        // моргает                 ( -.- )
@@ -52,28 +52,28 @@ const (
 	MascotContent                      // доволен                 ( ^_^ )
 	MascotShy                          // смущён                  ( ^//^ )
 	MascotCry                          // плачет                  ( T_T )
-	MascotAngry                        // сердится                ( Ò_Ó )
+	MascotAngry                        // сердится                ( O_O )
 	MascotPensive                      // задумчив                ( -.- )?
-	MascotScared                       // испуган                 ( °△° )
+	MascotScared                       // испуган                 ( O.o )
 	MascotPurr                         // мурлычет                ( ^~^ )
 )
 
-// mascotLast — последнее состояние (для перебора в тестах и демо).
+// mascotLast - последнее состояние (для перебора в тестах и демо).
 const mascotLast = MascotPurr
 
-// Geometry кота: три строки, тело мордочки — catWidth колонок.
+// Geometry кота: три строки, тело мордочки - catWidth колонок.
 const (
 	catHeight = 3
 	catWidth  = 8
 )
 
-// mascotFrame — один кадр: лицо (3 символа) и хвост-суффикс.
+// mascotFrame - один кадр: лицо (3 символа) и хвост-суффикс.
 type mascotFrame struct {
 	face   string
 	suffix string
 }
 
-// catLines — собрать три строки кота из кадра. Строки добиваются до
+// catLines - собрать три строки кота из кадра. Строки добиваются до
 // catWidth, суффикс растёт вправо от тела.
 func catLines(f mascotFrame) []string {
 	l2 := " ( " + f.face + " )"
@@ -90,7 +90,7 @@ func catLines(f mascotFrame) []string {
 
 // ---------- Лица по референсу ----------
 
-// mascotFaces — юникод-лица состояний. Каноническое лицо кадра 0.
+// mascotFaces - юникод-лица состояний. Каноническое лицо кадра 0.
 func mascotFaces(s MascotState) []mascotFrame {
 	switch s {
 	case MascotThink:
@@ -98,15 +98,15 @@ func mascotFaces(s MascotState) []mascotFrame {
 	case MascotWork:
 		return []mascotFrame{{face: ">.<"}}
 	case MascotHappy:
-		return []mascotFrame{{face: "^ω^"}, {face: "^.^"}}
+		return []mascotFrame{{face: "^o^"}, {face: "^.^"}}
 	case MascotOops:
 		return []mascotFrame{{face: "x_x"}}
 	case MascotSleep:
 		return []mascotFrame{{"-.-", " zZ"}}
 	case MascotListen:
-		return []mascotFrame{{face: "°.°"}}
+		return []mascotFrame{{face: "o.o"}}
 	case MascotSurprised:
-		return []mascotFrame{{face: "°□°"}}
+		return []mascotFrame{{face: "o.O"}}
 	case MascotBored:
 		return []mascotFrame{{face: "-.-"}}
 	case MascotEat:
@@ -122,11 +122,11 @@ func mascotFaces(s MascotState) []mascotFrame {
 	case MascotCry:
 		return []mascotFrame{{face: "T_T"}}
 	case MascotAngry:
-		return []mascotFrame{{face: "Ò_Ó"}}
+		return []mascotFrame{{face: "O_O"}}
 	case MascotPensive:
 		return []mascotFrame{{"-.-", "?"}}
 	case MascotScared:
-		return []mascotFrame{{face: "°△°"}}
+		return []mascotFrame{{face: "O.o"}}
 	case MascotPurr:
 		return []mascotFrame{{face: "^~^"}, {face: "^.^"}}
 	default:
@@ -135,7 +135,7 @@ func mascotFaces(s MascotState) []mascotFrame {
 	}
 }
 
-// mascotASCIIFaces — те же состояния для терминалов без юникода.
+// mascotASCIIFaces - те же состояния для терминалов без юникода.
 func mascotASCIIFaces(s MascotState) []mascotFrame {
 	switch s {
 	case MascotThink, MascotBlink, MascotBored, MascotPensive:
@@ -178,7 +178,7 @@ func mascotASCIIFaces(s MascotState) []mascotFrame {
 	}
 }
 
-// MascotFrames — кадры состояния под текущий терминал.
+// MascotFrames - кадры состояния под текущий терминал.
 func (u *UI) MascotFrames(s MascotState) []mascotFrame {
 	if u.opts.Unicode {
 		return mascotFaces(s)
@@ -186,7 +186,7 @@ func (u *UI) MascotFrames(s MascotState) []mascotFrame {
 	return mascotASCIIFaces(s)
 }
 
-// mascotFrameOf — кадр по индексу (по кругу).
+// mascotFrameOf - кадр по индексу (по кругу).
 func (u *UI) mascotFrameOf(s MascotState, frame int) mascotFrame {
 	frames := u.MascotFrames(s)
 	if len(frames) == 0 {
@@ -197,8 +197,8 @@ func (u *UI) mascotFrameOf(s MascotState, frame int) mascotFrame {
 
 // ---------- Раскраска ----------
 
-// mascotPaint — раскрасить кадр под тему «УГОЛЬ»: контур — охра,
-// мордочка — тёплый белый, суффикс (zZ, ?) — светлая охра.
+// mascotPaint - раскрасить кадр под тему «УГОЛЬ»: контур - охра,
+// мордочка - тёплый белый, суффикс (zZ, ?) - светлая охра.
 func (u *UI) mascotPaint(f mascotFrame) string {
 	lines := catLines(f)
 	var b strings.Builder
@@ -211,19 +211,19 @@ func (u *UI) mascotPaint(f mascotFrame) string {
 	return b.String()
 }
 
-// mascotPaintLine — раскрасить одну строку кадра.
+// mascotPaintLine - раскрасить одну строку кадра.
 func (u *UI) mascotPaintLine(lineIdx int, line string) string {
 	switch lineIdx {
 	case 1:
 		return u.mascotPaintFace(line)
 	default:
-		// Уши и лапы — цельный контур акцентом.
+		// Уши и лапы - цельный контур акцентом.
 		return u.c(u.pal.Accent, line)
 	}
 }
 
-// mascotPaintFace — строка мордочки: скобки акцентом, лицо — цветом
-// заголовков, суффикс (zZ, ?) — светлой охрой.
+// mascotPaintFace - строка мордочки: скобки акцентом, лицо - цветом
+// заголовков, суффикс (zZ, ?) - светлой охрой.
 func (u *UI) mascotPaintFace(line string) string {
 	r := []rune(line)
 	open, close := -1, -1
@@ -251,7 +251,7 @@ func (u *UI) mascotPaintFace(line string) string {
 		}
 		b.WriteString(u.c(u.pal.Head, string(r[i])))
 	}
-	// Закрывающая скобка — акцентом, суффикс (zZ, ?) — светлой охрой.
+	// Закрывающая скобка - акцентом, суффикс (zZ, ?) - светлой охрой.
 	// Суффикс красится на своём месте: он уже часть строки, и второй раз
 	// дописывать его нельзя.
 	b.WriteString(u.c(u.pal.Accent, string(r[close:close+1])))
@@ -261,13 +261,13 @@ func (u *UI) mascotPaintFace(line string) string {
 	return b.String()
 }
 
-// MascotRender — готовый к печати кадр (с цветом).
+// MascotRender - готовый к печати кадр (с цветом).
 func (u *UI) MascotRender(s MascotState, frame int) string {
 	return u.mascotPaint(u.mascotFrameOf(s, frame))
 }
 
-// mascotInline — мордочка одной строкой для спиннера и реплик: «( -.- )».
-// Лицо живёт без пробелов внутри скобок — короче и ближе к кадру кота.
+// mascotInline - мордочка одной строкой для спиннера и реплик: «( -.- )».
+// Лицо живёт без пробелов внутри скобок - короче и ближе к кадру кота.
 func (u *UI) mascotInline(s MascotState, frame int) string {
 	f := u.mascotFrameOf(s, frame)
 	return u.c(u.pal.Accent, "("+f.face+")")
@@ -275,11 +275,11 @@ func (u *UI) mascotInline(s MascotState, frame int) string {
 
 // ---------- Анимации с маскотом ----------
 
-// mascotAnimStep — пауза между кадрами маскота. Медленнее «раскрытия»
+// mascotAnimStep - пауза между кадрами маскота. Медленнее «раскрытия»
 // строк: кот живёт, а не мелькает.
 const mascotAnimStep = 260 * time.Millisecond
 
-// canMascot — можно ли показывать живого маскота.
+// canMascot - можно ли показывать живого маскота.
 //
 // Маскоту не нужен цвет, чтобы существовать (он нарисован символами),
 // но нужны анимации и настоящий вывод. В quiet-режиме (-json, пайпы)
@@ -288,8 +288,8 @@ func (u *UI) canMascot() bool {
 	return u.opts.Animations && !u.quiet
 }
 
-// MascotSpeak — маскот говорит: кадр состояния + реплика в «облачке»
-// из тире. Без рамок — в духе плоской вёрстки темы.
+// MascotSpeak - маскот говорит: кадр состояния + реплика в «облачке»
+// из тире. Без рамок - в духе плоской вёрстки темы.
 func (u *UI) MascotSpeak(s MascotState, text string) {
 	if u.sink() != nil {
 		return
@@ -298,8 +298,8 @@ func (u *UI) MascotSpeak(s MascotState, text string) {
 	if text != "" {
 		indent := strings.Repeat(" ", catWidth+3)
 		// В ASCII-режиме рамка облачка тоже должна быть ASCII:
-		// «╭»/«╰» в консоли без юникода превращаются в кракозябры.
-		head, tail := "╭ ", "╰──────────"
+		// «+»/«+» в консоли без юникода превращаются в кракозябры.
+		head, tail := "+ ", "+----------"
 		if !u.opts.Unicode {
 			head, tail = "+ ", "+----------"
 		}
@@ -311,7 +311,7 @@ func (u *UI) MascotSpeak(s MascotState, text string) {
 	}
 }
 
-// MascotSayLine — короткая реплика маскота одной строкой (без облачка):
+// MascotSayLine - короткая реплика маскота одной строкой (без облачка):
 // «  ( -.- )  думает».
 func (u *UI) MascotSayLine(s MascotState, text string) {
 	if u.sink() != nil {
@@ -320,7 +320,7 @@ func (u *UI) MascotSayLine(s MascotState, text string) {
 	u.Println("  " + u.mascotInline(s, 0) + "  " + text)
 }
 
-// MascotDance — проиграть анимацию состояния на месте (demo / приветствие):
+// MascotDance - проиграть анимацию состояния на месте (demo / приветствие):
 // кадры сменяют друг друга, в конце остаётся последний кадр.
 func (u *UI) MascotDance(s MascotState, cycles int) {
 	if u.sink() != nil {
@@ -373,9 +373,9 @@ const (
 	idleSleepAfter = 25 * time.Second // засыпает по-настоящему
 )
 
-// MascotPerch — усадить кота над строкой состояния. Вызывается перед
+// MascotPerch - усадить кота над строкой состояния. Вызывается перед
 // каждым приглашением: кот всегда на посту, прямо над статусом
-// «модель · состояние · режим». Порядок печати важен: кот занимает
+// «модель | состояние | режим». Порядок печати важен: кот занимает
 // ровно catHeight строк, и фоновая перерисовка знает, где он сидит.
 func (u *UI) MascotPerch() {
 	if !u.Mascot() || u.quiet || u.sink() != nil {
@@ -389,8 +389,8 @@ func (u *UI) MascotPerch() {
 	u.mu.Unlock()
 }
 
-// idleMood — что делает кот спустя d простоя: моргает, скучает или спит.
-// Чистая функция времени — чтобы её можно было проверить тестом.
+// idleMood - что делает кот спустя d простоя: моргает, скучает или спит.
+// Чистая функция времени - чтобы её можно было проверить тестом.
 func idleMood(d time.Duration) (MascotState, int) {
 	sec := int(d.Seconds())
 	switch {
@@ -409,14 +409,14 @@ func idleMood(d time.Duration) (MascotState, int) {
 	}
 }
 
-// mascotRedrawLines — записать готовые строки кадра с сохранением курсора.
+// mascotRedrawLines - записать готовые строки кадра с сохранением курсора.
 //
 // Вызывается только из idleLoop под мьютексом и только при поднятой
 // привязке (mascotAnchored): курсор стоит на строке приглашения, над ним
 // ровно catHeight строк кота и строка статуса. Курсор сохраняется (ESC7)
 // и восстанавливается (ESC8): строка состояния, приглашение и то, что
 // пользователь уже набрал, не затрагиваются. Запись идёт напрямую в
-// u.out — RawWrite здесь нельзя, он сбросил бы привязку, которую мы
+// u.out - RawWrite здесь нельзя, он сбросил бы привязку, которую мы
 // как раз проверяем.
 func (u *UI) mascotRedrawLines(lines []string) {
 	var b strings.Builder
@@ -432,12 +432,12 @@ func (u *UI) mascotRedrawLines(lines []string) {
 	u.put(b.String())
 }
 
-// MascotIdleStart — усадить кота на пост и запустить его фоновую жизнь:
+// MascotIdleStart - усадить кота на пост и запустить его фоновую жизнь:
 // моргает, скучает и засыпает, пока пользователь не ответил.
 //
 // Вызывается сразу после приглашения к вводу: с этой точки курсор стоит
 // на строке приглашения, и перерисовка знает, где сидит кот. Простой
-// отсчитывается заново от каждой усадки — кот не засыпает сразу после
+// отсчитывается заново от каждой усадки - кот не засыпает сразу после
 // команды только потому, что старый таймер не остановлен.
 func (u *UI) MascotIdleStart() {
 	if !u.canMascot() || u.sink() != nil {
@@ -453,7 +453,7 @@ func (u *UI) MascotIdleStart() {
 	u.mascotAnchored = true
 	// Привязка: строк между котом и приглашением могло напечатать что угодно
 	// (панель метрик, подсказку). Кот поднимется ровно на столько строк,
-	// сколько их было, — иначе он окажется поверх ответа.
+	// сколько их было, - иначе он окажется поверх ответа.
 	u.mascotAnchor = u.mascotLines
 	u.idleSince = time.Now()
 	if u.idleOn {
@@ -465,15 +465,15 @@ func (u *UI) MascotIdleStart() {
 	go u.idleLoop(u.idleStop, u.idleDone)
 }
 
-// idleLoop — цикл фоновой анимации простоя.
+// idleLoop - цикл фоновой анимации простоя.
 //
 // Каждый тик атомарно проверяет состояние под мьютексом: цикл гаснет,
 // если его остановили, и молчит, если привязка сброшена любой другой
-// печатью. Проверка и запись — один критический участок, поэтому чужой
+// печатью. Проверка и запись - один критический участок, поэтому чужой
 // вывод физически не может вклиниться в середину кадра.
 //
 // Кадр пишется только когда он реально изменился: кот моргает раз в 6
-// секунд, а не перепечатывается каждые 0,9 с. Меньше записей в терминал —
+// секунд, а не перепечатывается каждые 0,9 с. Меньше записей в терминал -
 // меньше мерцания на Windows и меньше шансов встретиться с чужим выводом
 // в уязвимое окно после Enter.
 func (u *UI) idleLoop(stop, done chan struct{}) {
@@ -500,7 +500,7 @@ func (u *UI) idleLoop(stop, done chan struct{}) {
 			lines := catLines(u.mascotFrameOf(state, frame))
 			key := strings.Join(lines, "\n")
 			if key == last {
-				// Кадр не менялся — терминал не трогаем.
+				// Кадр не менялся - терминал не трогаем.
 				u.mu.Unlock()
 				continue
 			}
@@ -511,7 +511,7 @@ func (u *UI) idleLoop(stop, done chan struct{}) {
 	}
 }
 
-// MascotIdleStop — остановить фоновую жизнь кота. Ждёт завершения
+// MascotIdleStop - остановить фоновую жизнь кота. Ждёт завершения
 // кадра, чтобы вывод хода не столкнулся с перерисовкой. Привязка к
 // строке приглашения сбрасывается: после Enter курсор уехал вниз, и
 // старая точка перерисовки стала ложной.
@@ -529,18 +529,18 @@ func (u *UI) MascotIdleStop() {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		// Не зависаем: кадр перерисовки занимает миллисекунды, секунда —
+		// Не зависаем: кадр перерисовки занимает миллисекунды, секунда -
 		// с запасом. Если что-то пошло не так, просто идём дальше.
 	}
 }
 
 // ---------- Перелив «thinking...» ----------
 
-// shimmerWord — слово с цветной волной, которая бежит по нему по кругу:
+// shimmerWord - слово с цветной волной, которая бежит по нему по кругу:
 // «thinking...» переливается до самого конца ожидания, как неоновая
-// вывеска. Волна — «комета»: яркое ядро и тёплый хвост позади.
+// вывеска. Волна - «комета»: яркое ядро и тёплый хвост позади.
 //
-// Цвет строится на лету из палитры «УГЛЯ»: база — тлеющий уголь, ядро —
+// Цвет строится на лету из палитры «УГЛЯ»: база - тлеющий уголь, ядро -
 // светлая охра, пик добеляется. Фронт ходит по кольцу длиной в слово,
 // поэтому ядро никогда не уезжает за край и строка не гаснет в статичный
 // камень.
@@ -553,7 +553,7 @@ func (u *UI) shimmerWord(word string, t float64) string {
 	if word == "" {
 		return ""
 	}
-	// Цвет выключен (-no-color, -json, NO_COLOR, пайп) — переливать нечем,
+	// Цвет выключен (-no-color, -json, NO_COLOR, пайп) - переливать нечем,
 	// и любой escape-код здесь был бы мусором в выводе.
 	if !u.opts.Color || u.quiet {
 		return word
@@ -573,7 +573,7 @@ func (u *UI) shimmerWord(word string, t float64) string {
 
 	// Фронт идёт по кольцу длиной в слово: ядро кометы никогда не покидает
 	// буквы, хвост тянется за ним по кругу, а в полкруга от фронта идёт
-	// вторая, тусклая комета — чтобы перелив читался движением даже в
+	// вторая, тусклая комета - чтобы перелив читался движением даже в
 	// паузах между «пробегами» ядра.
 	ring := float64(n)
 	front := math.Mod(math.Mod(t*shimmerSpeed, ring)+ring, ring)
@@ -589,7 +589,7 @@ func (u *UI) shimmerWord(word string, t float64) string {
 		}
 		x := float64(i)
 		// Расстояние вдоль кольца: кратчайшая дуга между фронтом и буквой.
-		// Обычный |front-x| давал бы на стыке слова скачок цвета — там
+		// Обычный |front-x| давал бы на стыке слова скачок цвета - там
 		// буквы «...» и «t» оказывались бы по разные стороны фронта.
 		d := math.Abs(front - x)
 		if d > ring/2 {
@@ -599,7 +599,7 @@ func (u *UI) shimmerWord(word string, t float64) string {
 		// Хвост кометы позади фронта: идём от буквы вперёд по кольцу.
 		behind := math.Mod(front-x, ring)
 		k += shimmerTailK * gauss((behind-shimmerTail)/(shimmerSigma*2.4))
-		// Вторая комета — вдвое слабее и вдвое шире первой.
+		// Вторая комета - вдвое слабее и вдвое шире первой.
 		d2 := math.Abs(second - x)
 		if d2 > ring/2 {
 			d2 = ring - d2
@@ -614,7 +614,7 @@ func (u *UI) shimmerWord(word string, t float64) string {
 	// 16 цветов: настоящего градиента нет, но восемь ступеней достаточно,
 	// чтобы фронт волны читался. Палитра упорядочена от тусклого к яркому.
 	//
-	// Ключевой момент: нижняя ступень — тёмно-красный уголь, а НЕ серый.
+	// Ключевой момент: нижняя ступень - тёмно-красный уголь, а НЕ серый.
 	// Раньше порог k<=0.02 отдавал камень серым, и на 16-цветном терминале
 	// половина шкалы (idx 0..2) попадала в ту же серую «базу»: фронт волны
 	// был виден только в верхней трети цвета. Теперь каждый уровень шкалы
@@ -661,7 +661,7 @@ func (u *UI) shimmerWord(word string, t float64) string {
 }
 
 // Параметры перелива. Волна идёт по кольцу длиной в слово со скоростью
-// shimmerSpeed колонок в секунду, ядро — шириной в shimmerSigma колонок,
+// shimmerSpeed колонок в секунду, ядро - шириной в shimmerSigma колонок,
 // хвост тянется на shimmerTail колонок позади фронта. Вторая комета идёт
 // в полкруга от первой и слабее неё в shimmerSecondK раз.
 const (
@@ -672,10 +672,10 @@ const (
 	shimmerSecondK = 0.30
 )
 
-// gauss — гауссова кривая: 1 в нуле, быстро гаснет по краям.
+// gauss - гауссова кривая: 1 в нуле, быстро гаснет по краям.
 func gauss(x float64) float64 { return math.Exp(-x * x) }
 
-// shimmerElapsed — округлённые секунды строки ожидания.
+// shimmerElapsed - округлённые секунды строки ожидания.
 func shimmerElapsed(d time.Duration) string {
 	return d.Truncate(time.Second).String()
 }

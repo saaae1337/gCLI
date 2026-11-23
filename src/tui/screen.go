@@ -61,19 +61,6 @@ func Lighten(c Color, t float64) Color { return Mix(c, RGB(255, 255, 255), t) }
 // Darken — затемнить цвет к чёрному на t.
 func Darken(c Color, t float64) Color { return Mix(c, RGB(0, 0, 0), t) }
 
-// Dim — приглушить цвета всего экрана (фон открытого окна).
-func (s *Screen) Dim(t float64) {
-	for i := range s.Cells {
-		c := &s.Cells[i]
-		if c.S.FG.On {
-			c.S.FG = Darken(c.S.FG, t)
-		}
-		if c.S.BG.On {
-			c.S.BG = Darken(c.S.BG, t)
-		}
-	}
-}
-
 // Style — оформление клетки.
 type Style struct {
 	FG, BG                                        Color
@@ -108,6 +95,11 @@ func (s Style) With(attrs ...string) Style {
 }
 
 // ---------- Экран ----------
+//
+// Кадр — сетка клеток. Клетка хранит руну, её хвост-кластер и стиль:
+// составные символы (ZWJ, флаги) рисуются терминалом одной картинкой,
+// поэтому хвост обязан уезжать в вывод вместе с базой. Широкие
+// символы (CJK) занимают две клетки — вторая помечена Cont.
 
 // Cell — одна клетка экрана.
 type Cell struct {
@@ -154,11 +146,6 @@ func (s *Screen) Set(x, y int, r rune, st Style) {
 }
 
 // setCluster — поставить графический кластер шириной w клеток.
-//
-// base — базовый символ, rest — его продолжения (ZWJ, модификаторы,
-// вторая руна флага). Продолжения занимают ноль клеток на экране, но
-// обязаны попасть в вывод вместе с базой: терминал рисует кластер одной
-// картинкой, и если хвост потерять, на его месте останется мусор.
 func (s *Screen) setCluster(x, y, w int, base rune, rest string, st Style) {
 	if !s.In(x, y) {
 		return
@@ -191,15 +178,7 @@ func (s *Screen) setCluster(x, y, w int, base rune, rest string, st Style) {
 	s.Cells[y*s.W+x] = Cell{R: base, Rest: rest, S: st}
 }
 
-// Char — поставить один символ, не трогая остальное.
-func (s *Screen) Char(x, y int, r rune, st Style) { s.Set(x, y, r, st) }
-
 // Text — нарисовать строку, вернуть следующую колонку.
-//
-// Строка разбирается по графическим кластерам: составной символ (флаг,
-// ZWJ-последовательность, эмодзи с тоном кожи) занимает ровно столько
-// клеток, сколько рисует терминал, и целиком хранится в базовой клетке.
-// Управляющие символы и ANSI-разметка в кадр не попадают.
 func (s *Screen) Text(x, y int, text string, st Style) int {
 	text = wcwidth.ValidUTF8(text)
 	for i := 0; i < len(text); {
@@ -243,6 +222,19 @@ func (s *Screen) Fill(x, y, w, h int, st Style) {
 	}
 }
 
+// Dim — приглушить цвета всего экрана (фон открытого окна).
+func (s *Screen) Dim(t float64) {
+	for i := range s.Cells {
+		c := &s.Cells[i]
+		if c.S.FG.On {
+			c.S.FG = Darken(c.S.FG, t)
+		}
+		if c.S.BG.On {
+			c.S.BG = Darken(c.S.BG, t)
+		}
+	}
+}
+
 // HLine — горизонтальная линия.
 func (s *Screen) HLine(x, y, w int, r rune, st Style) {
 	for i := 0; i < w; i++ {
@@ -257,16 +249,17 @@ func (s *Screen) VLine(x, y, h int, r rune, st Style) {
 	}
 }
 
-// Corners — набор символов рамки.
+// Corners — набор символов рамки. Оставлен для совместимости вызовов,
+// но в ASCII-интерфейсе все варианты рисуют одно и то же: «+ - |».
 type Corners struct {
 	TL, TR, BL, BR, H, V rune
 }
 
-// Rounded — скруглённая рамка.
-var Rounded = Corners{'╭', '╮', '╰', '╯', '─', '│'}
+// Rounded — рамка (историческое имя; в ASCII-режиме совпадает с Square).
+var Rounded = Corners{glyphTL, glyphTR, glyphBL, glyphBR, glyphH, glyphV}
 
-// Square — обычная рамка.
-var Square = Corners{'┌', '┐', '└', '┘', '─', '│'}
+// Square — та же ASCII-рамка.
+var Square = Rounded
 
 // Box — нарисовать рамку (без заливки).
 func (s *Screen) Box(x, y, w, h int, c Corners, st Style) {
@@ -320,8 +313,7 @@ func (s *Screen) Plain() string {
 // только изменившиеся клетки, а не весь кадр.
 type Renderer struct {
 	// mu защищает поля ниже: Start/Close/Invalidate зовутся из горутины
-	// Run, а Draw/Cursor/HideCursor — из той, что рисует кадр (Text и др.).
-	// Без общего лока на Linux с -race это была настоящая гонка данных.
+	// Run, а Draw/Cursor/HideCursor — из той, что рисует кадр.
 	mu     sync.Mutex
 	w      io.Writer
 	color  bool
@@ -333,22 +325,19 @@ type Renderer struct {
 	last   Style
 	ready  bool
 	// wrote — в Draw что-то писалось: курсор мог уехать физически, и
-	// следующему Cursor() нельзя пропускать перемещение, даже если
-	// логическая позиция не менялась. Лишние CUP — источник дрожания
-	// курсора в кадрах анимации.
+	// следующему Cursor() нельзя пропускать перемещение.
 	wrote bool
 }
 
 // NewRenderer — создать рендерер.
 //
 // colors — глубина цвета: 0 — truecolor, 16 или 256 — ближайшая палитра.
-// Одни терминалы (macOS Terminal.app) не понимают 24-битные коды и молча
-// игнорируют цвет; тогда интерфейс потерял бы акценты и границы.
 func NewRenderer(w io.Writer, color bool, colors int) *Renderer {
 	return &Renderer{w: w, color: color, colors: colors, last: Style{}, curX: -1, curY: -1}
 }
 
-// Start — перейти в полноэкранный режим.
+// Start — перейти в полноэкранный режим. Аргумент unicode оставлен в
+// сигнатуре для совместимости: интерфейс теперь всегда ASCII.
 func (r *Renderer) Start(unicode bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -385,7 +374,7 @@ func (r *Renderer) Invalidate() {
 	r.mu.Unlock()
 }
 
-// Draw — вывести изменившиеся клетки кадра и вернуть позицию курсора.
+// Draw — вывести изменившиеся клетки кадра.
 func (r *Renderer) Draw(s *Screen) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -444,9 +433,7 @@ func (r *Renderer) Draw(s *Screen) {
 				ch = ' '
 			}
 			b.WriteRune(ch)
-			// Хвост кластера печатается вместе с базой: терминал
-			// рисует всю последовательность одной картинкой и
-			// сдвигает курсор ровно на w клеток.
+			// Хвост кластера печатается вместе с базой.
 			if c.Rest != "" {
 				b.WriteString(c.Rest)
 			}
@@ -470,7 +457,7 @@ func (r *Renderer) moveTo(b *strings.Builder, x, y int) {
 	b.WriteByte('H')
 }
 
-// Cursor — показать курсор в позиции (x,y) и вернуть true.
+// Cursor — показать курсор в позиции (x,y).
 func (r *Renderer) Cursor(x, y int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -478,9 +465,6 @@ func (r *Renderer) Cursor(x, y int) {
 		return
 	}
 	if x == r.curX && y == r.curY && r.shown && !r.wrote {
-		// Позиция та же и с прошлого раза ничего не писалось:
-		// перемещение не нужно — иначе анимация дёргает курсор
-		// девять раз в секунду без всякой пользы.
 		return
 	}
 	var b strings.Builder
@@ -512,10 +496,6 @@ func (r *Renderer) HideCursor() {
 }
 
 // Raw — пропустить управляющую последовательность в терминал мимо кадра.
-//
-// Служит для OSC52 (копирование в системный буфер): последовательность
-// не рисует ничего, её нельзя пропускать через Screen — клетки хранят
-// только видимые символы, и стриптер ANSI её уничтожил бы.
 func (r *Renderer) Raw(s string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -594,7 +574,7 @@ func (r *Renderer) writeColor(b *strings.Builder, c Color, bg bool) {
 }
 
 // xterm256 — ближайший цвет палитры xterm-256: серая шкала для почти
-// серых, куб 6×6×6 для остальных.
+// серых, куб 6x6x6 для остальных.
 func xterm256(c Color) int {
 	r, g, bl := int(c.R), int(c.G), int(c.B)
 	gray := (r + g + bl) / 3
@@ -631,10 +611,6 @@ func xterm256(c Color) int {
 }
 
 // ansi16 — ближайший из 16 базовых цветов ANSI.
-//
-// Для насыщенных цветов важен оттенок, а не расстояние в RGB: тёмно-
-// оранжевый акцент должен остаться жёлтым, а не стать серым. Серые и
-// почти серые раскладываются по яркости, чтобы границы и фон не слились.
 func ansi16(c Color) int {
 	r, g, b := int(c.R), int(c.G), int(c.B)
 	maxc := r

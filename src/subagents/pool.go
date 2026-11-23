@@ -67,7 +67,7 @@ func (r *Run) StatusText() string {
 	case StatusCanceled:
 		return "отменён"
 	}
-	return "—"
+	return "-"
 }
 
 // statusLabel — подпись статуса для UI и сводок.
@@ -262,7 +262,7 @@ func (p *Pool) Running() int {
 // потому что ожидание чужой работы не должно занимать слот вхолостую.
 func (p *Pool) Spawn(ctx context.Context, spec Spec) (out Outcome, err error) {
 	if !p.Enabled() {
-		return Outcome{}, fmt.Errorf("субагенты отключены — включи: /agents on")
+		return Outcome{}, fmt.Errorf("субагенты отключены - включи: /agents on")
 	}
 	if spec.Depth > p.maxDepth {
 		return Outcome{}, fmt.Errorf("достигнута максимальная глубина вложенности субагентов (%d)", p.maxDepth)
@@ -421,7 +421,7 @@ func (p *Pool) joinFlight(ctx context.Context, spec Spec, f *flight) (Outcome, e
 	// Молча вернуть его было бы хуже отказа: модель получила бы «отчёт» из
 	// ничего и пошла бы дальше строить выводы на пустоте.
 	if strings.TrimSpace(out.Full) == "" {
-		return Outcome{}, fmt.Errorf("ведущий запуск такой же задачи не дал результата — повтори задачу")
+		return Outcome{}, fmt.Errorf("ведущий запуск такой же задачи не дал результата - повтори задачу")
 	}
 	// Отчёт свежий (его только что сделали), поэтому время — нынешнее.
 	return p.reuse(spec, out, ReuseFlight, f.srcName, time.Now())
@@ -579,14 +579,14 @@ func (p *Pool) Summary() string {
 		fmt.Fprintf(&b, "Кеш повторов: попаданий %d, промахов %d\n", hits, miss)
 	}
 	for _, r := range runs {
-		mark := ui.Glyph("✔", "+")
+		mark := ui.Glyph("ok", "+")
 		switch r.Status {
 		case StatusRunning:
-			mark = ui.Glyph("◆", "*")
+			mark = ui.Glyph("*", "*")
 		case StatusError:
-			mark = ui.Glyph("✖", "x")
+			mark = ui.Glyph("x", "x")
 		case StatusCanceled:
-			mark = ui.Glyph("⊘", "-")
+			mark = ui.Glyph("-", "-")
 		}
 		fmt.Fprintf(&b, "%s %-16s %-10s %s\n", mark, r.Label(), r.statusLabel(), core.Truncate(core.OneLine(r.Task), 60))
 	}
@@ -597,20 +597,20 @@ func (p *Pool) Summary() string {
 func (p *Pool) Details(name string) string {
 	runs := p.Get(name)
 	if len(runs) == 0 {
-		return "Субагент «" + name + "» не найден. Список: /agents"
+		return "Субагент \"" + name + "\" не найден. Список: /agents"
 	}
 	r := runs[0]
 	var b strings.Builder
 	fmt.Fprintf(&b, "Субагент: %s (%s)\n", r.Label(), r.Type)
-	fmt.Fprintf(&b, "Статус: %s · время: %s · ходов: %d · инструментов: %d\n",
+	fmt.Fprintf(&b, "Статус: %s | время: %s | ходов: %d | инструментов: %d\n",
 		r.statusLabel(), core.HumanDuration(r.Elapsed()), r.Turns, r.Tools)
 	if r.Reuse != ReuseNone {
 		// Отдельно и явно: ходов и инструментов этот вызов не тратил, они
 		// достались вместе с чужим отчётом.
-		fmt.Fprintf(&b, "Отчёт переиспользован (%s) от субагента «%s» — новый запуск не выполнялся\n",
+		fmt.Fprintf(&b, "Отчёт переиспользован (%s) от субагента \"%s\" - новый запуск не выполнялся\n",
 			r.Reuse, r.ReusedFrom)
 	}
-	fmt.Fprintf(&b, "Токены: ↑%s ↓%s\n", core.Kfmt(r.Usage.PromptTokens), core.Kfmt(r.Usage.CompletionTokens))
+	fmt.Fprintf(&b, "Токены: in %s out %s\n", core.Kfmt(r.Usage.PromptTokens), core.Kfmt(r.Usage.CompletionTokens))
 	if r.Model != "" {
 		fmt.Fprintf(&b, "Модель: %s\n", r.Model)
 	}

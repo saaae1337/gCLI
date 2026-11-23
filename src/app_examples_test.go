@@ -80,7 +80,7 @@ func TestExamplesSkillsParse(t *testing.T) {
 			t.Errorf("навык %s: в front matter нет name", filepath.Base(f))
 		}
 		if fm["description"] == "" {
-			t.Errorf("навык %s: в front matter нет description — агент не поймёт, когда звать навык", filepath.Base(f))
+			t.Errorf("навык %s: в front matter нет description - агент не поймёт, когда звать навык", filepath.Base(f))
 		}
 	}
 }
@@ -101,7 +101,7 @@ func TestExamplesCommandsParse(t *testing.T) {
 		}
 		c := parseCustomCommand(string(data))
 		if c.Description == "" {
-			t.Errorf("команда %s: пустое description — в /help будет пустая строка", filepath.Base(f))
+			t.Errorf("команда %s: пустое description - в /help будет пустая строка", filepath.Base(f))
 		}
 		if len(c.Body) == 0 {
 			t.Errorf("команда %s: пустое тело", filepath.Base(f))
@@ -142,7 +142,7 @@ func TestExamplesExtensionsParse(t *testing.T) {
 	r := tools.New(tools.Env{WorkDir: work})
 	exts := r.LoadExtensions()
 	if len(exts) != len(files) {
-		t.Errorf("загрузилось %d расширений из %d — пример не в том формате, который ждёт загрузчик",
+		t.Errorf("загрузилось %d расширений из %d - пример не в том формате, который ждёт загрузчик",
 			len(exts), len(files))
 	}
 	for _, e := range exts {

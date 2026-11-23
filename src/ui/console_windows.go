@@ -27,7 +27,7 @@ const (
 	enableVirtualTerminalProcess = 0x0004
 )
 
-// consoleOutputCP — текущая кодовая страница вывода, 0 если консоли нет.
+// consoleOutputCP - текущая кодовая страница вывода, 0 если консоли нет.
 func consoleOutputCP() int {
 	if r, _, _ := procGetConsoleOCP.Call(); r != 0 {
 		return int(r)
@@ -35,13 +35,13 @@ func consoleOutputCP() int {
 	return 0
 }
 
-// switchConsoleToUTF8 — перевести консоль в UTF-8, если она ещё не там.
+// switchConsoleToUTF8 - перевести консоль в UTF-8, если она ещё не там.
 //
 // Возвращает, удалось ли перевести вывод. Ввод переводится попутно и на
 // ответ не влияет: печатать псевдографику можно и тогда, когда читать
 // кириллицу с клавиатуры не вышло.
 //
-// Отказ — норма, а не авария: прав на смену кодовой страницы может не
+// Отказ - норма, а не авария: прав на смену кодовой страницы может не
 // быть, и тогда остаётся ASCII-режим вместо нечитаемых символов.
 func switchConsoleToUTF8() bool {
 	// Ввод: чтобы кириллица с клавиатуры не превращалась в мусор.
@@ -58,9 +58,9 @@ func switchConsoleToUTF8() bool {
 	return false
 }
 
-// ConsoleUTF8 — можно ли печатать псевдографику в эту консоль.
+// ConsoleUTF8 - можно ли печатать псевдографику в эту консоль.
 //
-// tty=false — вывод ушёл в файл или пайп. Тогда UTF-8 всё равно
+// tty=false - вывод ушёл в файл или пайп. Тогда UTF-8 всё равно
 // правильный ответ: Go пишет UTF-8 независимо от консоли, и
 // переключать кодовую страницу пользователя незачем, он этого не просил.
 // Это не мелочь: «gcli -json > отчёт.json» не должен переводить окно
@@ -68,7 +68,7 @@ func switchConsoleToUTF8() bool {
 //
 // Пытается перевести консоль в UTF-8 и только потом отвечает. Смысл: у
 // пользователя не должно быть способа случайно получить «тФВ» вместо
-// «│». Если перевести не вышло — честно откатываемся на ASCII.
+// «|». Если перевести не вышло - честно откатываемся на ASCII.
 func ConsoleUTF8(tty bool) bool {
 	if !tty {
 		return true
@@ -76,7 +76,7 @@ func ConsoleUTF8(tty bool) bool {
 	return consoleCanShowUnicode(consoleOutputCP(), switchConsoleToUTF8())
 }
 
-// EnableVT — включить обработку ANSI-последовательностей для stdout.
+// EnableVT - включить обработку ANSI-последовательностей для stdout.
 // Возвращает true, если escape-коды поддерживаются.
 func EnableVT() bool {
 	h, _, _ := procGetStdHandle.Call(stdOutputHandle)
@@ -103,7 +103,7 @@ type consoleScreenBufferInfo struct {
 	MaximumWindowSize coord
 }
 
-// terminalWidth — ширина терминала в колонках.
+// terminalWidth - ширина терминала в колонках.
 func terminalWidth() int {
 	h, _, _ := procGetStdHandle.Call(stdOutputHandle)
 	if h == 0 || h == ^uintptr(0) {
@@ -121,7 +121,7 @@ func terminalWidth() int {
 	return w
 }
 
-// isTerminal — является ли stdout терминалом.
+// isTerminal - является ли stdout терминалом.
 func isTerminal() bool {
 	fi, err := os.Stdout.Stat()
 	if err != nil {

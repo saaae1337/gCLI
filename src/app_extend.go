@@ -81,7 +81,7 @@ func (a *app) cmdIters() {
 	a.ui.Println("")
 	a.ui.KVPairs([][2]string{
 		{"Лимит хода", strconv.Itoa(base) + " итераций"},
-		{"Продление", "+" + strconv.Itoa(step) + " за раз · не чаще " +
+		{"Продление", "+" + strconv.Itoa(step) + " за раз | не чаще " +
 			strconv.Itoa(maxExtends) + " раз за ход"},
 		{"Потолок", strconv.Itoa(abs) + " итераций (с учётом продлений)"},
 	})
@@ -91,7 +91,7 @@ func (a *app) cmdIters() {
 	ag := a.currentAgent()
 	if ag == nil || ag.ExtendState() == nil {
 		a.ui.Println("")
-		a.ui.Println(a.ui.Gray("Ход не идёт — журнал продлений пуст."))
+		a.ui.Println(a.ui.Gray("Ход не идёт - журнал продлений пуст."))
 		a.ui.Println("")
 		return
 	}
@@ -133,10 +133,10 @@ func (a *app) printMissionIters() {
 		spent := core.FormatDur(tr.Elapsed())
 		if left := tr.Left(); left < 0 {
 			rows = append(rows, [2]string{"Время",
-				spent + " · просрочено на " + core.FormatDur(-left)})
+				spent + " | просрочено на " + core.FormatDur(-left)})
 		} else {
 			rows = append(rows, [2]string{"Время",
-				spent + " · осталось " + core.FormatDur(left)})
+				spent + " | осталось " + core.FormatDur(left)})
 		}
 	} else {
 		rows = append(rows, [2]string{"Время", core.FormatDur(tr.Elapsed())})
@@ -168,7 +168,7 @@ func (a *app) printMissionIters() {
 		rows = append(rows, [2]string{"Чекпоинты", strconv.Itoa(cp)})
 	}
 	if cont := tr.Continues(); cont > 0 {
-		rows = append(rows, [2]string{"Продолжений после «готово»", strconv.Itoa(cont)})
+		rows = append(rows, [2]string{"Продолжений после \"готово\"", strconv.Itoa(cont)})
 	}
 	if done := tr.Stopped(); done != "" {
 		rows = append(rows, [2]string{"Статус",

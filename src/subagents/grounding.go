@@ -591,7 +591,7 @@ func (r *GroundingReport) Score() float64 {
 //
 // Расширение остаётся ASCII намеренно: `строка.Итог` не должен разбираться
 // как ссылка, а настоящие расширения всегда латиницей.
-var ReFileLine = regexp.MustCompile(`([\p{L}\p{N}_][\p{L}\p{N}_./\\-]*\.[A-Za-z0-9]{1,8})\s*:\s*(\d+)(?:\s*[-–—]\s*(\d+))?`)
+var ReFileLine = regexp.MustCompile(`([\p{L}\p{N}_][\p{L}\p{N}_./\\-]*\.[A-Za-z0-9]{1,8})\s*:\s*(\d+)(?:\s*[---]\s*(\d+))?`)
 
 // reFileOnly — упоминание файла без номера строки.
 var reFileOnly = regexp.MustCompile(`[\p{L}\p{N}_][\p{L}\p{N}_./\\-]*\.[A-Za-z0-9]{1,8}`)
@@ -801,7 +801,7 @@ func describe(r *fileRec) string {
 	var parts []string
 	for i, rg := range r.ranges {
 		if i >= 3 {
-			parts = append(parts, "…")
+			parts = append(parts, "...")
 			break
 		}
 		parts = append(parts, fmt.Sprintf("%d-%d", rg.from, rg.to))
@@ -841,16 +841,16 @@ func (g *Grounding) Report(rep *GroundingReport) string {
 		fmt.Fprintf(&b, "- Субагент прочитал %d файл(ов), около %d строк.\n", rep.FilesRead, rep.Total)
 	}
 	if rep.Checked > 0 {
-		fmt.Fprintf(&b, "- Ссылок «файл:строка» проверено: %d, подтверждено чтением: %d.\n", rep.Checked, rep.Supported)
+		fmt.Fprintf(&b, "- Ссылок \"файл:строка\" проверено: %d, подтверждено чтением: %d.\n", rep.Checked, rep.Supported)
 	}
 	if len(rep.Unsupported) > 0 {
-		fmt.Fprintf(&b, "- ⚠ НЕ подтверждено (%d) — субагент не открывал эти места:\n", len(rep.Unsupported))
+		fmt.Fprintf(&b, "- ! НЕ подтверждено (%d) - субагент не открывал эти места:\n", len(rep.Unsupported))
 		for _, c := range rep.Unsupported {
 			fmt.Fprintf(&b, "  - %s (%s)\n", c.Where, c.Why)
 		}
 	}
 	if len(rep.Phantoms) > 0 {
-		fmt.Fprintf(&b, "- ⚠ Упомянуты файлы, которых нет на диске: %s\n", coreTruncate(strings.Join(rep.Phantoms, ", "), 200))
+		fmt.Fprintf(&b, "- ! Упомянуты файлы, которых нет на диске: %s\n", coreTruncate(strings.Join(rep.Phantoms, ", "), 200))
 	}
 	if len(rep.Unread) > 0 {
 		fmt.Fprintf(&b, "- Упомянуты, но не открыты: %s\n", coreTruncate(strings.Join(rep.Unread, ", "), 200))
@@ -869,7 +869,7 @@ func (g *Grounding) Report(rep *GroundingReport) string {
 // `subagents/pool.go`, третий источник — `./subagents/pool.go`.
 func normPath(p string) string {
 	s := strings.TrimSpace(p)
-	s = strings.Trim(s, `"'«»`)
+	s = strings.Trim(s, `"'''`)
 	if s == "" {
 		return ""
 	}
@@ -994,7 +994,7 @@ func coreTruncate(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…"
+	return string(r[:n]) + "..."
 }
 
 // firstNonBlank — первое непустое значение, где пустое — это и «пробельное».

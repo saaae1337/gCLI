@@ -476,7 +476,7 @@ func (a *app) loadMissionResume() {
 	// Обрезанный хвост — это потерянный последний чекпоинт. Молчать об
 	// этом нельзя: человек продолжит прогон, думая, что знает, где встали.
 	if cut && !a.quiet {
-		a.ui.Warn("журнал прогона оборван — последний чекпоинт потерян, продолжаю с предыдущего")
+		a.ui.Warn("журнал прогона оборван - последний чекпоинт потерян, продолжаю с предыдущего")
 	}
 	// Счётчики прошлого прогона переносятся в трекер: иначе продолжение
 	// началось бы с полного бюджета, и человек получил бы работу вдвое
@@ -629,9 +629,9 @@ func (a *app) cmdMission(rest string) {
 // missionHelp — что умеет /mission.
 func (a *app) missionHelp() {
 	a.ui.Println("")
-	a.ui.Println("  /mission — автономный прогон: работа без новых промптов")
+	a.ui.Println("  /mission - автономный прогон: работа без новых промптов")
 	a.ui.Println("")
-	a.ui.Println("    /mission start [режим] [срок] [бюджет] [«цель»]   запустить")
+	a.ui.Println("    /mission start [режим] [срок] [бюджет] [\"цель\"]   запустить")
 	a.ui.Println("    /mission status                                 где сейчас прогон")
 	a.ui.Println("    /mission stop                                   остановить")
 	a.ui.Println("    /mission save                                   сохранить состояние")
@@ -640,8 +640,8 @@ func (a *app) missionHelp() {
 	a.ui.Println("")
 	a.ui.Println("  Режимы: " + missionModesHelp())
 	a.ui.Println("  Срок: 4h, 90m, 120. Бюджет: 500k (токены), 25 (доллары), 500k,25 (оба).")
-	a.ui.Println("  Критерии приёмки — в кавычках, каждый следующий капс: " +
-		"/mission start long-time 4h 1m «цель» «go test ./... зелёные»")
+	a.ui.Println("  Критерии приёмки - в кавычках, каждый следующий капс: " +
+		"/mission start long-time 4h 1m \"цель\" \"go test ./... зелёные\"")
 	a.ui.Println("  Файл задания: " + core.MissionPath(a.workDir))
 	a.ui.Println("")
 }
@@ -677,14 +677,14 @@ func (a *app) startMission(m core.Mission) error {
 		m.Objective = a.missionJob().Objective
 	}
 	if m.Mode == core.MissionNormal && !m.Budgeted() && m.Deadline <= 0 && len(m.Acceptance) == 0 {
-		err := errors.New("нечего запускать: задай режим, срок или бюджет — " +
+		err := errors.New("нечего запускать: задай режим, срок или бюджет - " +
 			"например /mission start long-time 2h 500k")
 		a.ui.Err(err.Error())
 		return err
 	}
 	a.setMissionJob(m.Apply())
 	if !a.startTracker() {
-		err := errors.New("задание не задаёт ни одного потолка — прогон вёл бы себя как обычный ход")
+		err := errors.New("задание не задаёт ни одного потолка - прогон вёл бы себя как обычный ход")
 		a.ui.Err(err.Error())
 		return err
 	}
@@ -724,7 +724,7 @@ func (a *app) missionStop() {
 func (a *app) missionSave() {
 	tr := a.currentMissionTr()
 	if tr == nil {
-		a.ui.Info("прогон не запущен — сохранять нечего")
+		a.ui.Info("прогон не запущен - сохранять нечего")
 		return
 	}
 	if err := a.saveMissionState("сохранено по запросу: " + tr.Status()); err != nil {
@@ -741,7 +741,7 @@ func (a *app) missionStatus() {
 		a.ui.Println("")
 		a.ui.Println("  Автономный прогон не запущен.")
 		a.ui.Println("  Обычный ход: столько итераций, сколько нужно модели.")
-		a.ui.Println("  Задать прогон: /mission start long-time 4h 1m «цель»")
+		a.ui.Println("  Задать прогон: /mission start long-time 4h 1m \"цель\"")
 		a.ui.Println("  Файл задания: " + core.MissionPath(a.workDir))
 		if st, ok, _ := core.LoadMissionState(core.MissionStatePath(a.workDir)); ok && st.Summary != "" {
 			a.ui.Println("  Прошлый прогон: " + core.OneLine(st.Summary))
@@ -830,10 +830,15 @@ type missionField struct {
 }
 
 // openQuotes — символы, открывающие кавычку в аргументах команды.
-const openQuotes = "«“"
+// Пользователь на русской раскладке может набрать «„» — парсер должен
+// принять и их. ASCII-кавычка здесь быть не должна: она симметрична
+// (одинакова с обеих сторон) и живёт в sameQuotes; раньше она стояла
+// и тут, и ветка openQuotes перехватывала закрывающую кавычку раньше
+// closeQuotes — «start "а б" в» склеивался в одно поле.
+const openQuotes = "«„"
 
 // closeQuotes — символы, закрывающие её.
-const closeQuotes = "»”"
+const closeQuotes = "»“"
 
 // sameQuotes — симметричные кавычки: одна и та же с обеих сторон.
 const sameQuotes = "\"'`"
@@ -903,7 +908,7 @@ func (a *app) missionChainAdd(args string) {
 		return
 	}
 	if m.Objective == "" {
-		a.ui.Err("цепочка: у шага должна быть цель — /mission chain add long-time «починить пакет core»")
+		a.ui.Err("цепочка: у шага должна быть цель - /mission chain add long-time \"починить пакет core\"")
 		return
 	}
 	m = m.Apply()
@@ -923,12 +928,12 @@ func (a *app) missionChainAdd(args string) {
 // missionChainList — /mission chain list.
 func (a *app) missionChainList() {
 	if len(a.missionChain.Items) == 0 {
-		a.ui.Info("цепочка пуста — /mission chain add long-time «цель шага»")
+		a.ui.Info("цепочка пуста - /mission chain add long-time \"цель шага\"")
 		return
 	}
 	rows := make([][]string, 0, len(a.missionChain.Items))
 	for i, m := range a.missionChain.Items {
-		state := "—"
+		state := "-"
 		switch {
 		case i < a.missionChain.Index:
 			state = "готово"
@@ -943,7 +948,7 @@ func (a *app) missionChainList() {
 	a.ui.Table([]ui.Column{
 		{Title: "#", Width: 3, Right: true}, {Title: "статус", Width: 10},
 		{Title: "цель", Width: 46}, {Title: "режим", Width: 16}, {Title: "потолки", Width: 22},
-	}, rows, ui.BlockOpts{Title: "Цепочка миссий — " + a.missionChain.Summary()})
+	}, rows, ui.BlockOpts{Title: "Цепочка миссий - " + a.missionChain.Summary()})
 	a.ui.Println("  " + a.ui.Gray("запустить/продолжить: /mission chain run"))
 }
 
@@ -960,7 +965,7 @@ func chainStepPrompt(c *core.MissionChain, m core.Mission) string {
 	}
 	if c.Index > 0 {
 		prev := c.Items[c.Index-1]
-		b.WriteString("Предыдущий шаг («" + core.OneLine(prev.Objective) + "») только что завершился: его результат уже в проекте. Начни с проверки фактического состояния кода, а не с предположений.\n")
+		b.WriteString("Предыдущий шаг (\"" + core.OneLine(prev.Objective) + "\") только что завершился: его результат уже в проекте. Начни с проверки фактического состояния кода, а не с предположений.\n")
 	}
 	b.WriteString("Работай в обычном автономном режиме: сам крути цикл до критериев приёмки или потолка шага.")
 	return b.String()
@@ -972,11 +977,11 @@ func (a *app) chainRun() {
 		a.missionChain = &core.MissionChain{}
 	}
 	if len(a.missionChain.Items) == 0 {
-		a.ui.Warn("цепочка пуста — сначала /mission chain add <режим> <цель>")
+		a.ui.Warn("цепочка пуста - сначала /mission chain add <режим> <цель>")
 		return
 	}
 	if a.missionChain.Done() {
-		a.ui.Info("все шаги цепочки уже отработали — добавьте новые (/mission chain add)")
+		a.ui.Info("все шаги цепочки уже отработали - добавьте новые (/mission chain add)")
 		return
 	}
 	for !a.missionChain.Done() {
@@ -991,7 +996,7 @@ func (a *app) chainRun() {
 		stepNo := a.missionChain.Index + 1
 		a.setMissionJob(next.Apply())
 		if !a.startTracker() {
-			a.ui.Warn("шаг " + strconv.Itoa(stepNo) + " не задаёт потолков — пропущен")
+			a.ui.Warn("шаг " + strconv.Itoa(stepNo) + " не задаёт потолков - пропущен")
 			a.missionChain.Index++
 			if err := a.missionChain.Save(a.workDir); err != nil {
 				a.ui.Err("цепочка не сохранилась: " + err.Error())
@@ -1002,11 +1007,11 @@ func (a *app) chainRun() {
 		if err := a.saveMissionState("цепочка: шаг " + strconv.Itoa(stepNo)); err != nil {
 			a.ui.Warn("состояние прогона не сохранено: " + err.Error())
 		}
-		a.ui.Info(fmt.Sprintf("цепочка: шаг %d/%d запущен — %s",
+		a.ui.Info(fmt.Sprintf("цепочка: шаг %d/%d запущен - %s",
 			stepNo, len(a.missionChain.Items), next.Summary()))
 		if err := a.turn(chainStepPrompt(a.missionChain, next)); err != nil {
 			a.ui.Err("цепочка прервана на шаге " + strconv.Itoa(stepNo) + ": " + err.Error())
-			a.ui.Info("шаг остался текущим — продолжение: /mission chain run повторит его")
+			a.ui.Info("шаг остался текущим - продолжение: /mission chain run повторит его")
 			return
 		}
 		a.missionChain.Index++
@@ -1040,7 +1045,7 @@ func (a *app) missionChainEnsure() {
 	}
 	c, ok, err := core.LoadMissionChain(a.workDir)
 	if err != nil {
-		a.ui.Warn("цепочка: " + err.Error() + " — начинаю с пустой")
+		a.ui.Warn("цепочка: " + err.Error() + " - начинаю с пустой")
 	}
 	if ok && c != nil {
 		a.missionChain = c
@@ -1067,6 +1072,6 @@ func (a *app) cmdMissionChain(rest string) {
 	case "run":
 		a.chainRun()
 	default:
-		a.ui.Warn("не знаю подкоманду «" + sub + "»: add | list | clear | run")
+		a.ui.Warn("не знаю подкоманду \"" + sub + "\": add | list | clear | run")
 	}
 }

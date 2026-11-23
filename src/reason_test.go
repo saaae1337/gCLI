@@ -307,7 +307,7 @@ func TestCtrlOBetweenTurnsShowsLastReason(t *testing.T) {
 		t.Errorf("Ctrl+O между ходами должен показать мысли последнего хода:\n%q", out)
 	}
 	if strings.Contains(out, "размышлений пока нет") {
-		t.Errorf("при непустом reasonLast отвечать «пока нет» нельзя:\n%q", out)
+		t.Errorf("при непустом reasonLast отвечать \"пока нет\" нельзя:\n%q", out)
 	}
 	if !a.reasonPastShown() {
 		t.Error("после показа мыслей REPL должен перерисовать приглашение (reasonPast)")
@@ -351,10 +351,10 @@ func TestCtrlOBranchesOnRunning(t *testing.T) {
 		t.Errorf("во время хода Ctrl+O должен показать мысли текущего хода:\n%q", out)
 	}
 	if strings.Contains(out, "размышлений пока нет") {
-		t.Errorf("во время хода отвечать «пока нет» нельзя:\n%q", out)
+		t.Errorf("во время хода отвечать \"пока нет\" нельзя:\n%q", out)
 	}
 	if a.reasonPastShown() {
-		t.Error("во время хода блок мыслей не «прошлый»: перерисовка не нужна")
+		t.Error("во время хода блок мыслей не \"прошлый\": перерисовка не нужна")
 	}
 
 	a.mu.Lock()

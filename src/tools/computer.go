@@ -37,21 +37,21 @@ import (
 
 // Схемы инструментов компьютера.
 const (
-	schemaClipboard = `{"type":"object","properties":{"action":{"type":"string","enum":["read","write","clear"],"description":"read — прочитать буфер обмена; write — записать текст; clear — очистить (по умолчанию read)"},"text":{"type":"string","description":"Текст для action=write"}}}`
-	schemaOpen      = `{"type":"object","properties":{"target":{"type":"string","description":"URL (http/https) или путь к файлу внутри проекта — открыть системным обработчиком: браузером, просмотрщиком, редактором"},"wait":{"type":"boolean","description":"Ждать закрытия открытой программы (по умолчанию нет)"}},"required":["target"]}`
-	schemaNotify    = `{"type":"object","properties":{"title":{"type":"string","description":"Заголовок уведомления"},"message":{"type":"string","description":"Текст уведомления — что случилось и что с этим делать"}},"required":["title","message"]}`
-	schemaScreen    = `{"type":"object","properties":{"out":{"type":"string","description":"Куда сохранить PNG (по умолчанию .gcli/screenshots/)"},"monitor":{"type":"string","description":"all — все мониторы (по умолчанию), main — основной"}},"description":"Снимок рабочего стола пользователя. Требует подтверждения: это снимок того, что человек видит на экране."}`
+	schemaClipboard = `{"type":"object","properties":{"action":{"type":"string","enum":["read","write","clear"],"description":"read - прочитать буфер обмена; write - записать текст; clear - очистить (по умолчанию read)"},"text":{"type":"string","description":"Текст для action=write"}}}`
+	schemaOpen      = `{"type":"object","properties":{"target":{"type":"string","description":"URL (http/https) или путь к файлу внутри проекта - открыть системным обработчиком: браузером, просмотрщиком, редактором"},"wait":{"type":"boolean","description":"Ждать закрытия открытой программы (по умолчанию нет)"}},"required":["target"]}`
+	schemaNotify    = `{"type":"object","properties":{"title":{"type":"string","description":"Заголовок уведомления"},"message":{"type":"string","description":"Текст уведомления - что случилось и что с этим делать"}},"required":["title","message"]}`
+	schemaScreen    = `{"type":"object","properties":{"out":{"type":"string","description":"Куда сохранить PNG (по умолчанию .gcli/screenshots/)"},"monitor":{"type":"string","description":"all - все мониторы (по умолчанию), main - основной"}},"description":"Снимок рабочего стола пользователя. Требует подтверждения: это снимок того, что человек видит на экране."}`
 )
 
 // registerComputer — инструменты взаимодействия с компьютером.
 func (r *Registry) registerComputer() {
-	r.registerBound("clipboard", "Буфер обмена компьютера: read — прочитать (секреты маскируются), write — записать текст, clear — очистить. Полезно, когда пользователь просит что-то скопировать или вставить, и для переноса текста между программами.",
+	r.registerBound("clipboard", "Буфер обмена компьютера: read - прочитать (секреты маскируются), write - записать текст, clear - очистить. Полезно, когда пользователь просит что-то скопировать или вставить, и для переноса текста между программами.",
 		schemaClipboard, "write", false, func(r *Registry) Handler { return r.hClipboard })
-	r.registerBound("open", "Открыть URL или файл системным обработчиком: ссылка — в браузере, картинка — в просмотрщике, каталог — в файловом менеджере. Сам не читает содержимое: для текста в контексте есть read_file и web_fetch.",
+	r.registerBound("open", "Открыть URL или файл системным обработчиком: ссылка - в браузере, картинка - в просмотрщике, каталог - в файловом менеджере. Сам не читает содержимое: для текста в контексте есть read_file и web_fetch.",
 		schemaOpen, "exec", true, func(r *Registry) Handler { return r.hOpen })
 	r.registerBound("notify", "Уведомление на рабочем столе пользователя: долгая команда завершилась, ход закончился, нужно решение. Ничего не возвращает: отправка считается удачной, если не было ошибки.",
 		schemaNotify, "exec", false, func(r *Registry) Handler { return r.hNotify })
-	r.registerBound("screen", "Снимок рабочего стола компьютера (всех мониторов или основного) — картинкой в контекст. Для снимка страницы есть screenshot. Относись к результату как к личным данным пользователя: без необходимости не вызывай.",
+	r.registerBound("screen", "Снимок рабочего стола компьютера (всех мониторов или основного) - картинкой в контекст. Для снимка страницы есть screenshot. Относись к результату как к личным данным пользователя: без необходимости не вызывай.",
 		schemaScreen, "exec", true, func(r *Registry) Handler { return r.hScreen })
 }
 
@@ -222,12 +222,12 @@ func runStdin(ctx context.Context, name, text string, args ...string) error {
 func (r *Registry) hOpen(ctx context.Context, m map[string]any) (Result, error) {
 	target := strings.TrimSpace(ArgStr(m, "target"))
 	if target == "" {
-		return Result{}, fmt.Errorf("укажи target — URL или путь")
+		return Result{}, fmt.Errorf("укажи target - URL или путь")
 	}
 	wait := ArgBool(m, "wait")
 	if strings.Contains(target, "://") {
 		if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
-			return Result{}, fmt.Errorf("открываются только http:// и https:// — %q не поддерживается", core.OneLine(target))
+			return Result{}, fmt.Errorf("открываются только http:// и https:// - %q не поддерживается", core.OneLine(target))
 		}
 	} else {
 		// Не URL — путь. Песочница режет его как read_file: иначе open
@@ -265,7 +265,7 @@ func openSystem(ctx context.Context, target string, wait bool) error {
 	}
 	bin, err := exec.LookPath("xdg-open")
 	if err != nil {
-		return fmt.Errorf("xdg-open не найден — на этой системе открывать файлы нечем")
+		return fmt.Errorf("xdg-open не найден - на этой системе открывать файлы нечем")
 	}
 	return exec.CommandContext(ctx, bin, target).Start()
 }
@@ -280,16 +280,16 @@ func (r *Registry) hNotify(ctx context.Context, m map[string]any) (Result, error
 		return Result{}, fmt.Errorf("укажи title")
 	}
 	if len([]rune(title)) > 80 {
-		title = string([]rune(title)[:80]) + "…"
+		title = string([]rune(title)[:80]) + "..."
 	}
 	if len([]rune(message)) > 300 {
-		message = string([]rune(message)[:300]) + "…"
+		message = string([]rune(message)[:300]) + "..."
 	}
 	if err := notifySystem(ctx, title, message); err != nil {
 		return Result{}, err
 	}
 	return Result{
-		Text:    fmt.Sprintf("Уведомление отправлено: «%s».", title),
+		Text:    fmt.Sprintf("Уведомление отправлено: \"%s\".", title),
 		Summary: "уведомление: " + title,
 	}, nil
 }
@@ -317,7 +317,7 @@ $n.Dispose()
 		return err
 	}
 	if _, err := exec.LookPath("notify-send"); err != nil {
-		return fmt.Errorf("notify-send не найден (пакет libnotify) — уведомления недоступны")
+		return fmt.Errorf("notify-send не найден (пакет libnotify) - уведомления недоступны")
 	}
 	// Аргументы передаются отдельными параметрами: кавычки внутри текста
 	// безопасны без экранирования.
@@ -355,7 +355,7 @@ func (r *Registry) hScreen(ctx context.Context, m map[string]any) (Result, error
 		return Result{}, fmt.Errorf("снимок сделан, но не прочитан: %v", err)
 	}
 	if len(data) == 0 {
-		return Result{}, fmt.Errorf("снимок пустой — утилита захвата вернулась без кадра")
+		return Result{}, fmt.Errorf("снимок пустой - утилита захвата вернулась без кадра")
 	}
 	return Result{
 		Text: fmt.Sprintf(

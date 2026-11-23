@@ -64,7 +64,7 @@ func TestHandoffSavesAndReadsBack(t *testing.T) {
 		}
 	}
 	// Незакрытый пункт помечен, закрытый — галочкой.
-	if !strings.Contains(back.Text, "▸") || !strings.Contains(back.Text, "☐") {
+	if !strings.Contains(back.Text, ">") || !strings.Contains(back.Text, "[ ]") {
 		t.Errorf("статусы пунктов не отражены:\n%s", back.Text)
 	}
 }

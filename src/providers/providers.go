@@ -67,7 +67,7 @@ func Presets() []*Provider {
 			ContextLimit: 200_000,
 		},
 		{
-			ID: "openrouter", Label: "OpenRouter · 300+ моделей", Kind: ProtoOpenAI,
+			ID: "openrouter", Label: "OpenRouter | 300+ моделей", Kind: ProtoOpenAI,
 			BaseURL: EnvOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 			KeyEnvs: []string{"OPENROUTER_API_KEY"},
 			Models: []string{
@@ -116,7 +116,7 @@ func Presets() []*Provider {
 			ContextLimit: 1_000_000,
 		},
 		{
-			ID: "groq", Label: "Groq · быстрый инференс", Kind: ProtoOpenAI,
+			ID: "groq", Label: "Groq | быстрый инференс", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
 			KeyEnvs:      []string{"GROQ_API_KEY"},
 			Models:       []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b"},
@@ -243,7 +243,7 @@ func Build(cfg core.Config) *Registry {
 			if kind != ProtoAnthropic {
 				kind = ProtoOpenAI
 			}
-			p = &Provider{ID: id, Label: id + " · свой", Kind: kind, Custom: true}
+			p = &Provider{ID: id, Label: id + " | свой", Kind: kind, Custom: true}
 			r.All = append(r.All, p)
 		}
 		if pc.BaseURL != "" {
@@ -457,9 +457,9 @@ func (p *Provider) Ready() bool { return p != nil && p.HasKey() && p.BaseURL != 
 func MaskKey(k string) string {
 	r := []rune(k)
 	if len(r) <= 12 {
-		return strings.Repeat("•", len(r))
+		return strings.Repeat("*", len(r))
 	}
-	return string(r[:5]) + "…" + string(r[len(r)-4:])
+	return string(r[:5]) + "..." + string(r[len(r)-4:])
 }
 
 // CleanKey — нормализовать вставленный ключ: убрать пробелы, кавычки, "Bearer ".

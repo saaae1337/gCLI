@@ -138,7 +138,7 @@ func (s *Sandbox) checkOne(abs string) error {
 	// открываться обходом через «..» или через вложенный путь.
 	for _, d := range s.deny {
 		if within(abs, d) {
-			return fmt.Errorf("песочница: доступ запрещён — %s", d)
+			return fmt.Errorf("песочница: доступ запрещён - %s", d)
 		}
 	}
 	for _, root := range s.roots {
@@ -146,7 +146,7 @@ func (s *Sandbox) checkOne(abs string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("песочница: путь вне рабочего каталога — %s (разрешено: %s)",
+	return fmt.Errorf("песочница: путь вне рабочего каталога - %s (разрешено: %s)",
 		abs, strings.Join(s.roots, ", "))
 }
 

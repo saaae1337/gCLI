@@ -115,7 +115,7 @@ func TestHandleCommandKnownRoutes(t *testing.T) {
 		}
 		got := out(buf)
 		if strings.Contains(got, "неизвестная команда") {
-			t.Errorf("%q попала в «неизвестная команда»", line)
+			t.Errorf("%q попала в \"неизвестная команда\"", line)
 		}
 		if got == "" {
 			t.Errorf("%q ничего не напечатала", line)
@@ -156,7 +156,7 @@ func TestHandleCommandCustomFallback(t *testing.T) {
 	}
 	got := out(buf)
 	if strings.Contains(got, "неизвестная команда") {
-		t.Errorf("кастомная команда попала в «неизвестная»: %q", got)
+		t.Errorf("кастомная команда попала в \"неизвестная\": %q", got)
 	}
 	if !strings.Contains(got, "пуста") {
 		t.Errorf("пустой промпт должен быть назван пустым: %q", got)
@@ -207,7 +207,7 @@ func TestAutopilotToggleNeverTurnsOnAll(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		a.cmdAutopilot("")
 		if a.sess.Perms.AutopilotAll {
-			t.Fatal("переключение без аргумента включило режим all — рискованный режим должен требовать явного ввода")
+			t.Fatal("переключение без аргумента включило режим all - рискованный режим должен требовать явного ввода")
 		}
 	}
 	// Четыре переключения из off: on → off → on → off.
@@ -282,7 +282,7 @@ func TestThinkStates(t *testing.T) {
 	// Русские синонимы и пустой аргумент обязаны работать: /help их рекламирует.
 	a.cmdThink("вкл")
 	if a.repo.Cfg.Think != "on" {
-		t.Errorf("«вкл» не понято: %q", a.repo.Cfg.Think)
+		t.Errorf("\"вкл\" не понято: %q", a.repo.Cfg.Think)
 	}
 	buf := &strings.Builder{}
 	a.ui = testUI(buf)
@@ -432,7 +432,7 @@ func TestClearStartsNewSession(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("старая сессия должна сохраниться — иначе /clear крадёт историю")
+		t.Error("старая сессия должна сохраниться - иначе /clear крадёт историю")
 	}
 }
 
@@ -622,6 +622,6 @@ func TestCopyUsesLastAssistantAnswer(t *testing.T) {
 		t.Errorf("ожидался OSC52: %q", got)
 	}
 	if strings.Contains(got, "старый ответ") {
-		t.Error("скопирован не тот ответ — берётся последний assistant с текстом")
+		t.Error("скопирован не тот ответ - берётся последний assistant с текстом")
 	}
 }

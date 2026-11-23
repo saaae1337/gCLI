@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// captureSink — приёмник для проверки: запоминает события.
+// captureSink - приёмник для проверки: запоминает события.
 type captureSink struct {
 	mu      sync.Mutex
 	text    strings.Builder
@@ -45,7 +45,7 @@ func (c *captureSink) String() string {
 	return c.text.String()
 }
 
-// lockedBuf — потокобезопасный писатель для теста гонки.
+// lockedBuf - потокобезопасный писатель для теста гонки.
 type lockedBuf struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -69,7 +69,7 @@ func (l *lockedBuf) Len() int {
 	return l.b.Len()
 }
 
-// TestSinkReceivesOutput — при подключённом приёмнике байты в терминал не
+// TestSinkReceivesOutput - при подключённом приёмнике байты в терминал не
 // идут, а структурные события доходят.
 func TestSinkReceivesOutput(t *testing.T) {
 	var out lockedBuf
@@ -105,7 +105,7 @@ func TestSinkReceivesOutput(t *testing.T) {
 	}
 }
 
-// TestSinkConcurrentSwitch — подключение приёмника не гоняется с печатью.
+// TestSinkConcurrentSwitch - подключение приёмника не гоняется с печатью.
 func TestSinkConcurrentSwitch(t *testing.T) {
 	out := &lockedBuf{}
 	u := New(Options{Width: 80, Out: out})

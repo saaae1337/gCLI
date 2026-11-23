@@ -56,7 +56,7 @@ func winptyRelaunch(machine bool) (bool, string) {
 	}
 	winpty, err := exec.LookPath("winpty")
 	if err != nil {
-		return false, "Git Bash/mintty: консольный ввод недоступен, а winpty не найден — " +
+		return false, "Git Bash/mintty: консольный ввод недоступен, а winpty не найден - " +
 			"полноэкранный интерфейс здесь не поднимется (запусти в Windows Terminal или cmd)"
 	}
 	exe, err := os.Executable()
@@ -75,7 +75,7 @@ func winptyRelaunch(machine bool) (bool, string) {
 		if ee, ok := err.(*exec.ExitError); ok {
 			os.Exit(ee.ExitCode())
 		}
-		return false, fmt.Sprintf("winpty не смог запустить gcli (%v) — продолжаю в построчном режиме", err)
+		return false, fmt.Sprintf("winpty не смог запустить gcli (%v) - продолжаю в построчном режиме", err)
 	}
 	// Наследник отработал (exit 0) — выходим с его кодом.
 	os.Exit(0)

@@ -109,12 +109,12 @@ func diffWindow(ops []diffOp, maxLines int) []diffOp {
 	for i, op := range ops {
 		if keep[i] {
 			if skipped > 0 {
-				out = append(out, diffOp{' ', "⋯"})
+				out = append(out, diffOp{' ', "..."})
 				skipped = 0
 			}
 			out = append(out, op)
 			if len(out) >= maxLines {
-				out = append(out, diffOp{' ', "…"})
+				out = append(out, diffOp{' ', "..."})
 				break
 			}
 		} else {

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// uiAt — UI с заданным уровнем цвета, пишущий в буфер.
+// uiAt - UI с заданным уровнем цвета, пишущий в буфер.
 func uiAt(grade ColorLevel, width int) (*UI, *strings.Builder) {
 	buf := &strings.Builder{}
 	u := New(Options{
@@ -24,10 +24,10 @@ func TestTitleFlatStyle(t *testing.T) {
 	u, buf := uiAt(ColorNone, 60)
 	u.Title("Заголовок")
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "◆") || !strings.Contains(out, "Заголовок") {
+	if !strings.Contains(out, "*") || !strings.Contains(out, "Заголовок") {
 		t.Errorf("заголовок должен быть помечен ромбом:\n%s", out)
 	}
-	if strings.Contains(out, "╭") || strings.Contains(out, "┌") {
+	if strings.Contains(out, "+") || strings.Contains(out, "+-") {
 		t.Errorf("рамка в заголовке не нужна:\n%s", out)
 	}
 }
@@ -96,7 +96,7 @@ func TestNoColorDisablesForcedColor(t *testing.T) {
 	}
 }
 
-// TERM=dumb — терминал без управления: цвета и escape-коды в него писать
+// TERM=dumb - терминал без управления: цвета и escape-коды в него писать
 // нельзя, даже если Windows-ветка по умолчанию считает иначе.
 func TestTermDumbDisablesColor(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
@@ -120,14 +120,14 @@ func TestRailPushPopIndents(t *testing.T) {
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 	// Во вложенном вызове появляется дополнительный отступ с рельсом.
-	if !strings.HasPrefix(StripANSI(lines[1]), "  │ ") {
+	if !strings.HasPrefix(StripANSI(lines[1]), "  | ") {
 		t.Errorf("во вложенном вызове нет дополнительного рельса:\n%s", buf.String())
 	}
-	if !strings.HasPrefix(StripANSI(lines[0]), "  ◆") {
+	if !strings.HasPrefix(StripANSI(lines[0]), "  *") {
 		t.Errorf("базовый вызов должен начинаться с отступа 2:\n%s", buf.String())
 	}
 	// После выхода из вложенности отступ возвращается.
-	if strings.HasPrefix(StripANSI(lines[2]), "  │ ") {
+	if strings.HasPrefix(StripANSI(lines[2]), "  | ") {
 		t.Errorf("после RailPop отступ не восстановился:\n%s", buf.String())
 	}
 }
@@ -137,7 +137,7 @@ func TestRailEndChainCloses(t *testing.T) {
 	u.ToolStart(ToolCall{Name: "grep", Args: "TODO", Kind: "read"})
 	u.RailEndChain("готово")
 	out := buf.String()
-	if !strings.Contains(StripANSI(out), "⎿") {
+	if !strings.Contains(StripANSI(out), ">-") {
 		t.Errorf("серия вызовов должна закрываться зубцом:\n%s", out)
 	}
 }
@@ -145,10 +145,10 @@ func TestRailEndChainCloses(t *testing.T) {
 func TestStatusGlyphs(t *testing.T) {
 	u, _ := uiAt(ColorNone, 60)
 	cases := map[string]string{
-		"ok":     "✔",
-		"fail":   "✖",
-		"denied": "⊘",
-		"skip":   "⊘",
+		"ok":     "+",
+		"fail":   "x",
+		"denied": "-",
+		"skip":   "-",
 	}
 	for status, want := range cases {
 		got, color := u.emberStatusGlyph(status)
@@ -203,12 +203,12 @@ func TestColorLevelApplied(t *testing.T) {
 }
 
 func TestGradientOnlyWithRichColor(t *testing.T) {
-	// Без цвета градиент — обычный текст.
+	// Без цвета градиент - обычный текст.
 	u, _ := uiAt(ColorNone, 60)
 	if got := u.Gradient("текст", [3]int{1, 2, 3}, [3]int{4, 5, 6}); got != "текст" {
 		t.Errorf("без цвета градиент должен вернуть исходный текст, получено %q", got)
 	}
-	// В truecolor — escape-последовательности с настоящим градиентом.
+	// В truecolor - escape-последовательности с настоящим градиентом.
 	u, _ = uiAt(ColorRGB, 60)
 	got := u.Gradient("abc", [3]int{255, 0, 0}, [3]int{0, 0, 255})
 	if !strings.Contains(got, "\033[38;2;") {
@@ -225,7 +225,7 @@ func TestCodeFenceShowsLanguage(t *testing.T) {
 	if !strings.Contains(StripANSI(open), "go") {
 		t.Errorf("язык не показан: %q", open)
 	}
-	if !strings.Contains(StripANSI(open), "◆") {
+	if !strings.Contains(StripANSI(open), "*") {
 		t.Errorf("блок кода должен быть помечен ромбом: %q", open)
 	}
 }
@@ -258,7 +258,7 @@ func TestRGBTo256Mapping(t *testing.T) {
 	if got := rgbTo256([3]int{0, 0, 0}); got != 16 {
 		t.Errorf("rgbTo256(0,0,0) = %d, ожидалось 16", got)
 	}
-	// Белый — либо куб, либо верх серой шкалы.
+	// Белый - либо куб, либо верх серой шкалы.
 	if got := rgbTo256([3]int{255, 255, 255}); got != 231 {
 		t.Errorf("rgbTo256(255,255,255) = %d, ожидалось 231", got)
 	}

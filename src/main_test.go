@@ -4,14 +4,16 @@ import "testing"
 
 func boolPtr(b bool) *bool { return &b }
 
-// animBase — обычные условия: цветной терминал, юникод, не машинный режим.
+// animBase — обычные условия: цветной терминал, не машинный режим.
+// ASCII и юникод в решении больше не участвуют: интерфейс всегда ASCII,
+// а эффект появления держится на ANSI, который рисует любой терминал.
 func animBase() animEnv {
-	return animEnv{Color: true, UnicodeOK: true}
+	return animEnv{Color: true}
 }
 
 func TestAnimsAutoOn(t *testing.T) {
 	if !animsEnabled(animBase()) {
-		t.Error("в цветном терминале с юникодом анимации должны быть включены")
+		t.Error("в цветном терминале анимации должны быть включены")
 	}
 }
 
@@ -57,18 +59,13 @@ func TestAnimsOffInJSON(t *testing.T) {
 	}
 }
 
-func TestAnimsOffInASCII(t *testing.T) {
-	e := animBase()
-	e.ASCII = true
-	if animsEnabled(e) {
-		t.Error("в -ascii анимаций быть не должно")
-	}
-
-	// Терминал без юникода (GCLI_ASCII или локаль не в UTF-8) — то же самое.
-	e = animBase()
-	e.UnicodeOK = false
-	if animsEnabled(e) {
-		t.Error("без юникода анимаций быть не должно")
+// TestAnimsOnInASCII — флаг -ascii больше ничего не меняет: интерфейс
+// всегда ASCII, а эффект появления держится на ANSI (\033[K, \r), который
+// рисует любой терминал Win10/11. Раньше -ascii и отсутствие юникода
+// выключали анимации — теперь решение зависит только от цвета.
+func TestAnimsOnInASCII(t *testing.T) {
+	if animsEnabled(animBase()) != true {
+		t.Fatal("цветной терминал должен иметь анимации")
 	}
 }
 
@@ -130,7 +127,7 @@ func TestExplicitColorForcesColorWithoutTTY(t *testing.T) {
 // хотя цвет и его требования выполнялись.
 func TestAnimsSeeExplicitColor(t *testing.T) {
 	color, _ := resolveColor(colorEnv{TTY: false, VT: false, Mode: "truecolor"})
-	if !animsEnabled(animEnv{Color: color, UnicodeOK: true}) {
+	if !animsEnabled(animEnv{Color: color}) {
 		t.Error("явный -color должен включать и анимации, а не только цвет")
 	}
 
@@ -139,7 +136,7 @@ func TestAnimsSeeExplicitColor(t *testing.T) {
 	if color {
 		t.Error("-no-color должен выигрывать у -color")
 	}
-	if animsEnabled(animEnv{Color: color, UnicodeOK: true}) {
+	if animsEnabled(animEnv{Color: color}) {
 		t.Error("анимации без цвета быть не должно")
 	}
 }

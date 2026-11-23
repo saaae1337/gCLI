@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// renderTable — строки таблицы с выравниванием по ширине. Все колонки,
-// включая последнюю, добиваются пробелами до своей ширины — так
+// renderTable - строки таблицы с выравниванием по ширине. Все колонки,
+// включая последнюю, добиваются пробелами до своей ширины - так
 // строки обязаны стать одной длины.
 func renderTable(rows [][]string, widths []int) []string {
 	out := make([]string, 0, len(rows))
@@ -21,7 +21,7 @@ func renderTable(rows [][]string, widths []int) []string {
 				b.WriteString(strings.Repeat(" ", pad))
 			}
 			if i < len(row)-1 {
-				b.WriteString(" │ ")
+				b.WriteString(" . ")
 			}
 		}
 		out = append(out, b.String())
@@ -33,17 +33,17 @@ func renderTable(rows [][]string, widths []int) []string {
 // разъезжаются на ячейку каждая.
 func TestStatusColumnKeepsTableAligned(t *testing.T) {
 	rows := [][]string{
-		{"✔", "прочитать файл", "42 строки"},
-		{"✖", "записать файл", "ошибка доступа"},
-		{"▲", "запустить сборку", "долго"},
-		{"◆", "вызвать субагента", "готов"},
+		{"+", "прочитать файл", "42 строки"},
+		{"x", "записать файл", "ошибка доступа"},
+		{"!", "запустить сборку", "долго"},
+		{"*", "вызвать субагента", "готов"},
 	}
 	out := renderTable(rows, []int{1, 20, 14})
 
 	want := cellWidth(out[0])
 	for i, line := range out {
 		if got := cellWidth(line); got != want {
-			t.Errorf("строка %d: ширина %d вместо %d — столбец поехал\n  %q",
+			t.Errorf("строка %d: ширина %d вместо %d - столбец поехал\n  %q",
 				i, got, want, line)
 		}
 	}
@@ -52,15 +52,15 @@ func TestStatusColumnKeepsTableAligned(t *testing.T) {
 // Список из знаков статуса обязан занимать одинаковое место, иначе по
 // нему не выровнять столбец.
 func TestStatusMarkersUniform(t *testing.T) {
-	for _, m := range []string{"✔", "✖", "▲", "◆", "●", "○"} {
+	for _, m := range []string{"+", "x", "!", "*", "*", "o"} {
 		if w := cellWidth(m); w != 1 {
-			t.Errorf("маркер %q занимает %d ячеек, а должен одну — иначе "+
+			t.Errorf("маркер %q занимает %d ячеек, а должен одну - иначе "+
 				"выровнять по нему столбец нельзя", m, w)
 		}
 	}
 }
 
-// Явно заданная Width — предел колонки: длинная CJK-ячейка не должна
+// Явно заданная Width - предел колонки: длинная CJK-ячейка не должна
 // сдвигать разделитель и ломать сетку таблицы.
 func TestTableExplicitWidthTruncatesOverlongCells(t *testing.T) {
 	u, buf := testUI()
@@ -80,7 +80,7 @@ func TestTableExplicitWidthTruncatesOverlongCells(t *testing.T) {
 		if w := cellWidth(line); w != 17 {
 			t.Errorf("строка таблицы шириной %d вместо 17: %q", w, line)
 		}
-		idx := strings.Index(line, " · ")
+		idx := strings.Index(line, " . ")
 		if idx < 0 {
 			t.Fatalf("разделитель колонок не найден: %q", line)
 		}
@@ -97,7 +97,7 @@ func TestTableExplicitWidthTruncatesOverlongCells(t *testing.T) {
 // Обрезка по ширине не должна разрывать глиф и не должна выходить за
 // лимит: иначе строка переползает на следующую.
 func TestTruncateKeepsGlyphIntact(t *testing.T) {
-	line := "✔ задача выполнена полностью"
+	line := "+ задача выполнена полностью"
 	got := truncateCellsEll(line, 12)
 	if got == "" {
 		t.Fatal("обрезка съела всё")

@@ -61,16 +61,16 @@ func TestSessionSnapshotIsDeepCopy(t *testing.T) {
 	a.recordSubagent(core.SubagentRecord{ID: "s1", Name: "исследователь", Status: "done"})
 
 	if len(snap.Messages) != 1 {
-		t.Errorf("в снимке %d сообщений, ожидалось 1 — срез не скопирован", len(snap.Messages))
+		t.Errorf("в снимке %d сообщений, ожидалось 1 - срез не скопирован", len(snap.Messages))
 	}
 	if len(snap.Perms.BashExact) != 1 || snap.Perms.BashExact["rm -rf /"] {
 		t.Errorf("карта грантов в снимке общая с сессией: %v", snap.Perms.BashExact)
 	}
 	if len(snap.SubagentRuns) != 0 {
-		t.Errorf("в снимке %d записей журнала, ожидалось 0 — срез не скопирован", len(snap.SubagentRuns))
+		t.Errorf("в снимке %d записей журнала, ожидалось 0 - срез не скопирован", len(snap.SubagentRuns))
 	}
 	if got := a.subagentRunCount(); got != 1 {
-		t.Errorf("журнал живой сессии = %d, ожидалось 1 — снимок не должен писать в оригинал", got)
+		t.Errorf("журнал живой сессии = %d, ожидалось 1 - снимок не должен писать в оригинал", got)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestSaveSessionDoesNotHoldSessMuDuringSave(t *testing.T) {
 	_ = a.Messages()
 	waited := time.Since(start)
 	if waited > 400*time.Millisecond {
-		t.Fatalf("Messages() ждала %v — saveSession держит sessMu на marshal и записи", waited)
+		t.Fatalf("Messages() ждала %v - saveSession держит sessMu на marshal и записи", waited)
 	}
 	select {
 	case <-done:

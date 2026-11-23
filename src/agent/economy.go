@@ -162,7 +162,7 @@ func pruneMessages(msgs []core.Message, opt economyOptions) ([]core.Message, int
 			m := out[i]
 			key := m.Name + "\x00" + m.Content
 			if last, ok := lastSeen[key]; ok && last != i {
-				out[i].Content = "[повтор результата " + m.Name + " — тот же вывод ниже]"
+				out[i].Content = "[повтор результата " + m.Name + " - тот же вывод ниже]"
 				pruned++
 			}
 		}
@@ -262,7 +262,7 @@ func pruneMessages(msgs []core.Message, opt economyOptions) ([]core.Message, int
 			}
 			old := m.Content
 			lines := len(core.SplitLines(old))
-			m.Content = "[свёрнуто: старая вставка пользователя — " + strconv.Itoa(lines) +
+			m.Content = "[свёрнуто: старая вставка пользователя - " + strconv.Itoa(lines) +
 				" строк, начало и конец ниже]\n" + core.Digest(old, opt.OldUserTokens)
 			pruned++
 		}
@@ -294,7 +294,7 @@ func argsElidable(name string) bool {
 }
 
 // elideMarker — подпись элизированной строки.
-const elideMarker = "[выполнено — содержимое записано в файл, см. результат вызова]"
+const elideMarker = "[выполнено - содержимое записано в файл, см. результат вызова]"
 
 // elideMinChars — строки короче этого размера не трогаются: указатель
 // длиннее полезной нагрузки только раздувал бы историю.

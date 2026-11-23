@@ -49,7 +49,7 @@ func TestRawEnterCRandLF(t *testing.T) {
 		}
 		s.feed(eol)
 		if got := line(t, s); got != "прив" {
-			t.Errorf("eol=%q: строка = %q, ждали «прив»", eol, got)
+			t.Errorf("eol=%q: строка = %q, ждали \"прив\"", eol, got)
 		}
 	}
 }
@@ -67,7 +67,7 @@ func TestRawBackspaceErasesRune(t *testing.T) {
 	// Если бы Backspace резал по байтам, здесь остался бы обкусанный
 	// «к» плюс байт-продолжение «и» — рунический срез оставляет ровно «к».
 	if got := line(t, s); got != "к" {
-		t.Errorf("после одного Backspace = %q, ждали «к»", got)
+		t.Errorf("после одного Backspace = %q, ждали \"к\"", got)
 	}
 	if !bytes.Contains(echo.Bytes(), []byte("\b \b")) {
 		t.Errorf("эхо затирания не напечатано: %q", echo.String())
@@ -79,7 +79,7 @@ func TestRawBackspaceErasesRune(t *testing.T) {
 	s.feed('!')
 	s.feed('\r')
 	if got := line(t, s); got != "!" {
-		t.Errorf("после лишних Backspace строка = %q, ждали «!»", got)
+		t.Errorf("после лишних Backspace строка = %q, ждали \"!\"", got)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestEscapeSequenceAcrossFeeds(t *testing.T) {
 	s.feed('z')
 	s.feed('\r')
 	if got := line(t, s); got != "z" {
-		t.Errorf("строка = %q, ждали «z»", got)
+		t.Errorf("строка = %q, ждали \"z\"", got)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestRawIgnoresRandomControlBytes(t *testing.T) {
 	s.feed('b')
 	s.feed('\r')
 	if got := line(t, s); got != "ab" {
-		t.Errorf("строка = %q, ждали «ab»", got)
+		t.Errorf("строка = %q, ждали \"ab\"", got)
 	}
 }
 
@@ -190,7 +190,7 @@ func TestCookedModeUnchanged(t *testing.T) {
 	}
 	s.feed('\n')
 	if got := line(t, s); got != "аб" {
-		t.Errorf("строка = %q, ждали «аб»", got)
+		t.Errorf("строка = %q, ждали \"аб\"", got)
 	}
 	s.feed(ctrlO)
 	select {
@@ -209,7 +209,7 @@ func TestCookedModeUnchanged(t *testing.T) {
 	s.feed('y')
 	s.feed('\n')
 	if got := line(t, s); got != "xy" {
-		t.Errorf("строка = %q, ждали «xy»", got)
+		t.Errorf("строка = %q, ждали \"xy\"", got)
 	}
 }
 

@@ -16,7 +16,7 @@ import (
 )
 
 // Version — версия приложения (обновляется при сборке через -ldflags).
-var Version = "0.9.2"
+var Version = "0.9.3"
 
 // ---------- Типы диалога ----------
 
@@ -703,7 +703,7 @@ func TruncateUTF8(s string, head, tail int) string {
 	if len(r) <= head+tail {
 		return s
 	}
-	return string(r[:head]) + "\n…[обрезано, символов: " +
+	return string(r[:head]) + "\n...[обрезано, символов: " +
 		strconvItoa(len(r)-head-tail) + "]\n" + string(r[len(r)-tail:])
 }
 

@@ -242,7 +242,7 @@ func exprString(e ast.Expr) string {
 	case *ast.ChanType:
 		return "chan " + exprString(t.Value)
 	}
-	return "…"
+	return "..."
 }
 
 // typeHead — вид объявления типа: у struct и interface — «{».
@@ -340,7 +340,7 @@ func clip(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	return strings.TrimSpace(string(r[:n])) + "…"
+	return strings.TrimSpace(string(r[:n])) + "..."
 }
 
 // outlineLang — человеческое имя языка для заголовка ответа.
@@ -380,7 +380,7 @@ func (r *Registry) hOutline(_ context.Context, m map[string]any) (Result, error)
 	if !ok {
 		return Result{
 			Text: fmt.Sprintf("Язык %s не разбирается (%s).\n"+
-				"Точный разбор есть для Go, эвристика — для Python, TypeScript, JavaScript, "+
+				"Точный разбор есть для Go, эвристика - для Python, TypeScript, JavaScript, "+
 				"Rust и Java.\nДля остальных ищи объявления через grep.",
 				ext, rel),
 			Summary: "язык не разбирается",
@@ -404,7 +404,7 @@ func (r *Registry) hOutline(_ context.Context, m map[string]any) (Result, error)
 		var parsed bool
 		decls, parsed = outlineGo(p, src)
 		if !parsed || len(decls) == 0 {
-			exactness = "разбор не дал объявлений — файл, возможно, негодный"
+			exactness = "разбор не дал объявлений - файл, возможно, негодный"
 		}
 	} else {
 		decls = outlineHeuristic(ext, lines)
@@ -425,7 +425,7 @@ func (r *Registry) hOutline(_ context.Context, m map[string]any) (Result, error)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Структура: %s\n%s, %d строк, объявлений: %d — %s\n",
+	fmt.Fprintf(&b, "# Структура: %s\n%s, %d строк, объявлений: %d - %s\n",
 		rel, lang, len(lines), len(decls), exactness)
 	if truncated {
 		fmt.Fprintf(&b, "[внимание: файл больше %s, разобран только его начало]\n",
@@ -434,9 +434,9 @@ func (r *Registry) hOutline(_ context.Context, m map[string]any) (Result, error)
 	if len(decls) == 0 {
 		b.WriteString("\nОбъявлений не найдено.")
 		if ext == ".go" {
-			b.WriteString(" У go/parser нечего показать — файл не разбирается или пуст.")
+			b.WriteString(" У go/parser нечего показать - файл не разбирается или пуст.")
 		} else {
-			b.WriteString(" Эвристика могла не узнать синтаксис — проверь файл через read_file.")
+			b.WriteString(" Эвристика могла не узнать синтаксис - проверь файл через read_file.")
 		}
 		return Result{Text: b.String(), Summary: "объявлений нет"}, nil
 	}
@@ -448,16 +448,16 @@ func (r *Registry) hOutline(_ context.Context, m map[string]any) (Result, error)
 		shown, cut = shown[:outlineMaxSymbols], true
 	}
 	for _, d := range shown {
-		fmt.Fprintf(&b, "%6d │ %s", d.line, d.sig)
+		fmt.Fprintf(&b, "%6d | %s", d.line, d.sig)
 		if d.doc != "" {
-			fmt.Fprintf(&b, "  — %s", d.doc)
+			fmt.Fprintf(&b, "  - %s", d.doc)
 		}
 		b.WriteByte('\n')
 	}
 	if cut {
-		fmt.Fprintf(&b, "\n[показано %d из %d — сузь список через filter]\n", len(shown), len(decls))
+		fmt.Fprintf(&b, "\n[показано %d из %d - сузь список через filter]\n", len(shown), len(decls))
 	}
-	b.WriteString("\nНомера строк — для read_file с offset, чтобы открыть нужное место целиком.\n" +
+	b.WriteString("\nНомера строк - для read_file с offset, чтобы открыть нужное место целиком.\n" +
 		"Это карта, а не содержание: тел функций здесь нет, и судить о поведении по ней нельзя.")
 	return Result{
 		Text:    b.String(),

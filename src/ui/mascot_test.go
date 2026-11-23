@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// mascotUI — UI с включённым маскотом и отключённым цветом.
+// mascotUI - UI с включённым маскотом и отключённым цветом.
 func mascotUI() (*UI, *strings.Builder) {
 	buf := &strings.Builder{}
 	u := New(Options{
@@ -24,7 +24,7 @@ func mascotUI() (*UI, *strings.Builder) {
 	return u, buf
 }
 
-// testStates — все состояния от первого до последнего.
+// testStates - все состояния от первого до последнего.
 func testStates() []MascotState {
 	out := make([]MascotState, 0, int(mascotLast)+1)
 	for s := MascotIdle; s <= mascotLast; s++ {
@@ -33,7 +33,7 @@ func testStates() []MascotState {
 	return out
 }
 
-// У всех 19 состояний должны быть кадры, и каждый кадр — ровно три
+// У всех 19 состояний должны быть кадры, и каждый кадр - ровно три
 // строки референса: уши, мордочка в скобках, лапы «> ^ <».
 func TestMascotIsTheReferenceCat(t *testing.T) {
 	u, _ := mascotUI()
@@ -75,11 +75,11 @@ func TestMascotFacesMatchReference(t *testing.T) {
 		{MascotIdle, "^.^", ""},
 		{MascotThink, "-.-", ""},
 		{MascotWork, ">.<", ""},
-		{MascotHappy, "^ω^", ""},
+		{MascotHappy, "^o^", ""},
 		{MascotOops, "x_x", ""},
 		{MascotSleep, "-.-", " zZ"},
-		{MascotListen, "°.°", ""},
-		{MascotSurprised, "°□°", ""},
+		{MascotListen, "o.o", ""},
+		{MascotSurprised, "o.O", ""},
 		{MascotBored, "-.-", ""},
 		{MascotEat, "~.~", ""},
 		{MascotBlink, "-.-", ""},
@@ -87,9 +87,9 @@ func TestMascotFacesMatchReference(t *testing.T) {
 		{MascotContent, "^_^", ""},
 		{MascotShy, "^//^", ""},
 		{MascotCry, "T_T", ""},
-		{MascotAngry, "Ò_Ó", ""},
+		{MascotAngry, "O_O", ""},
 		{MascotPensive, "-.-", "?"},
-		{MascotScared, "°△°", ""},
+		{MascotScared, "O.o", ""},
 		{MascotPurr, "^~^", ""},
 	}
 	for _, c := range cases {
@@ -104,8 +104,8 @@ func TestMascotFacesMatchReference(t *testing.T) {
 	}
 }
 
-// Анимированные состояния живут: у idle есть моргание, у сна — zZ,
-// у радости — смена кадров, у задумчивости — знак вопроса.
+// Анимированные состояния живут: у idle есть моргание, у сна - zZ,
+// у радости - смена кадров, у задумчивости - знак вопроса.
 func TestMascotAnimatedStates(t *testing.T) {
 	u, _ := mascotUI()
 	if got := len(u.MascotFrames(MascotIdle)); got < 3 {
@@ -125,7 +125,7 @@ func TestMascotAnimatedStates(t *testing.T) {
 	}
 }
 
-// ASCII-версия: только латиница, цифры и знаки препинания — никаких
+// ASCII-версия: только латиница, цифры и знаки препинания - никаких
 // юникод-кракозябр в терминалах без псевдографики.
 func TestMascotASCIIFaces(t *testing.T) {
 	u, _ := emberASCIIUI()
@@ -162,17 +162,15 @@ func TestMascotRender(t *testing.T) {
 	}
 }
 
-// В ASCII-режиме облачко реплики тоже ASCII: рамка «╭»/«╰» в консоли
+// В ASCII-режиме облачко реплики тоже ASCII: рамка «+»/«+» в консоли
 // без юникода превращается в кракозябры.
 func TestMascotSpeakASCIICloud(t *testing.T) {
 	u, buf := emberASCIIUI()
 	u.MascotSpeak(MascotIdle, "привет")
 
 	out := buf.String()
-	for _, bad := range []string{"╭", "╰"} {
-		if strings.Contains(out, bad) {
-			t.Errorf("в ASCII-облачке осталась юникод-рамка %q:\n%s", bad, out)
-		}
+	if !isASCIIString(out) {
+		t.Errorf("в ASCII-облачке остался юникод:\n%s", out)
 	}
 	if !strings.Contains(out, "+----------") {
 		t.Errorf("нет ASCII-хвоста облачка:\n%s", out)
@@ -190,7 +188,7 @@ func TestMascotInline(t *testing.T) {
 	}
 }
 
-// Перелив: без 256 цветов слово статично, с ними — волна меняет кадры.
+// Перелив: без 256 цветов слово статично, с ними - волна меняет кадры.
 func TestShimmerWord(t *testing.T) {
 	u, _ := mascotUI()
 	if got := u.shimmerWord("thinking...", 0); got != "thinking..." {
@@ -202,7 +200,7 @@ func TestShimmerWord(t *testing.T) {
 	w0 := u2.shimmerWord("thinking...", 0)
 	w1 := u2.shimmerWord("thinking...", 0.35)
 	// Каждый символ окрашен отдельно, поэтому «thinking» ищем
-	// в тексте без ANSI, а коды волны — в сыром выводе.
+	// в тексте без ANSI, а коды волны - в сыром выводе.
 	if !strings.Contains(StripANSI(w0), "thinking") || !strings.Contains(w0, "\033[") {
 		t.Fatalf("перелив должен раскрашивать слово: %q", w0)
 	}
@@ -216,7 +214,7 @@ func TestShimmerWord(t *testing.T) {
 
 // Перелив не должен гаснуть: фронт волны ходит по кольцу длиной в слово и
 // никогда не покидает его, поэтому на любой секунде ожидания в слове есть
-// яркий символ — хоть на третьей минуте.
+// яркий символ - хоть на третьей минуте.
 func TestShimmerNeverGoesStatic(t *testing.T) {
 	word := "thinking..."
 	for _, grade := range []ColorLevel{Color16, Color256, ColorRGB} {
@@ -227,7 +225,7 @@ func TestShimmerNeverGoesStatic(t *testing.T) {
 				t.Fatalf("grade=%v, t=%.2f: слово искажено: %q", grade, sec, StripANSI(frame))
 			}
 			if !shimmerHasHighlight(frame) {
-				t.Fatalf("grade=%v, t=%.2f: перелив погас — слово стало статичным: %q",
+				t.Fatalf("grade=%v, t=%.2f: перелив погас - слово стало статичным: %q",
 					grade, sec, StripANSI(frame))
 			}
 		}
@@ -262,14 +260,14 @@ func TestShimmerHasVisibleContrast(t *testing.T) {
 			// Хвост кометы держит градиент: без него кадр состоит из
 			// яркого пятна и ровного фона, и перелив читается как мигание.
 			if min > 0.75 {
-				t.Errorf("grade=%v, t=%.1f: нет тусклой части слова (мин %.2f) — перелив мигает, а не переливается",
+				t.Errorf("grade=%v, t=%.1f: нет тусклой части слова (мин %.2f) - перелив мигает, а не переливается",
 					grade, sec, min)
 			}
 		}
 	}
 }
 
-// shimmerLevels — яркость каждого символа слова в кадре (пересчёт той же
+// shimmerLevels - яркость каждого символа слова в кадре (пересчёт той же
 // формулы, что в shimmerWord). Нужен тестам: сравнивать цвета по escape-
 // кодам нельзя, они не упорядочены, а нам важна ширина градиента.
 func shimmerLevels(u *UI, word string, t float64) []float64 {
@@ -304,9 +302,9 @@ func shimmerLevels(u *UI, word string, t float64) []float64 {
 	return out
 }
 
-// shimmerHasHighlight — есть ли в кадре символ ярче базового (не камень).
+// shimmerHasHighlight - есть ли в кадре символ ярче базового (не камень).
 // Считаем escape-последовательности: у кадра есть и цветной код, и сброс,
-// а серое основание — это ровно серый код на каждой букве.
+// а серое основание - это ровно серый код на каждой букве.
 func shimmerHasHighlight(frame string) bool {
 	const grayCode = "\033[90m"
 	// Все символы слова серые, кроме, может быть, последнего перед сбросом.
@@ -324,11 +322,11 @@ func TestShimmerIsCyclic(t *testing.T) {
 	}
 	c := u.shimmerWord("thinking...", period/2)
 	if a == c {
-		t.Error("в середине периода кадр должен отличаться — волна прошла половину слова")
+		t.Error("в середине периода кадр должен отличаться - волна прошла половину слова")
 	}
 }
 
-// У кошки один пост — над строкой состояния. Баннер кота не рисует:
+// У кошки один пост - над строкой состояния. Баннер кота не рисует:
 // раньше на первом экране было два одинаковых кота подряд.
 func TestMascotPerch(t *testing.T) {
 	u, buf := mascotUI()
@@ -341,7 +339,7 @@ func TestMascotPerch(t *testing.T) {
 	if !strings.Contains(out, "/\\_/\\") {
 		t.Errorf("кот потерял уши:\n%s", out)
 	}
-	// Без маскота — тишина.
+	// Без маскота - тишина.
 	u2, buf2 := mascotUI()
 	u2.SetMascot(false)
 	u2.MascotPerch()
@@ -350,7 +348,7 @@ func TestMascotPerch(t *testing.T) {
 	}
 }
 
-// idleMood — хронология простоя: бодрствует со морганием, потом
+// idleMood - хронология простоя: бодрствует со морганием, потом
 // скучает, после долгой паузы засыпает по-настоящему.
 func TestIdleMood(t *testing.T) {
 	u, _ := mascotUI()
@@ -376,7 +374,7 @@ func TestIdleMood(t *testing.T) {
 	}
 }
 
-// syncBuf — потокобезопасный буфер: фоновая анимация пишет в него из
+// syncBuf - потокобезопасный буфер: фоновая анимация пишет в него из
 // своей горутины, тест читает из своей.
 type syncBuf struct {
 	mu sync.Mutex
@@ -415,19 +413,19 @@ func TestMascotIdleStartStop(t *testing.T) {
 	})
 	u.SetMascot(true)
 	u.MascotIdleStart()
-	u.MascotIdleStart() // повторный старт — тихий no-op
+	u.MascotIdleStart() // повторный старт - тихий no-op
 	time.Sleep(2 * time.Second)
 	if buf.Len() == 0 {
 		t.Errorf("фоновая анимация не нарисовала ни одного кадра")
 	}
-	// Каждый кадр — атомарная перерисовка: сохранение и возврат курсора.
+	// Каждый кадр - атомарная перерисовка: сохранение и возврат курсора.
 	for _, frame := range strings.Split(buf.String(), "\0337") {
 		if frame != "" && !strings.Contains(frame, "\0338") {
 			t.Errorf("кадр без восстановления курсора: %q", frame)
 		}
 	}
 	u.MascotIdleStop()
-	u.MascotIdleStop() // повторный стоп — тоже
+	u.MascotIdleStop() // повторный стоп - тоже
 	after := buf.Len()
 	time.Sleep(150 * time.Millisecond)
 	if buf.Len() != after {
@@ -442,7 +440,7 @@ func TestMascotIdleStartStop(t *testing.T) {
 	}
 }
 
-// mascotRedrawLines — атомарный кадр с сохранением и восстановлением курсора.
+// mascotRedrawLines - атомарный кадр с сохранением и восстановлением курсора.
 func TestMascotRedrawAtomic(t *testing.T) {
 	buf := &syncBuf{}
 	u := New(Options{
@@ -464,7 +462,7 @@ func TestMascotRedrawAtomic(t *testing.T) {
 	if !strings.Contains(out, "\0337") || !strings.Contains(out, "\0338") {
 		t.Errorf("перерисовка должна сохранять и восстанавливать курсор: %q", out)
 	}
-	// Без цвета кадр — чистый текст: лицо и уши ищем напрямую
+	// Без цвета кадр - чистый текст: лицо и уши ищем напрямую
 	// (StripANSI здесь не годится: он глотает всё до ближайшего «m»).
 	if !strings.Contains(out, "-.-") || !strings.Contains(out, "/\\_/\\") {
 		t.Errorf("поза «думаю» не нарисована: %q", out)
@@ -475,8 +473,8 @@ func TestMascotRedrawAtomic(t *testing.T) {
 	}
 }
 
-// Привязка к строке приглашения: любая печать её сбрасывает, усадка —
-// поднимает. Пока привязки нет, фоновая анимация не трогает экран —
+// Привязка к строке приглашения: любая печать её сбрасывает, усадка -
+// поднимает. Пока привязки нет, фоновая анимация не трогает экран -
 // именно слепые перерисовки портили статус и оставляли двойные лапы.
 func TestMascotAnchorGuard(t *testing.T) {
 	buf := &syncBuf{}
@@ -503,7 +501,7 @@ func TestMascotAnchorGuard(t *testing.T) {
 		t.Errorf("усадка не сбросила таймер простоя: %v", time.Since(idleSince))
 	}
 
-	// Пока привязка поднята — кадры рисуются.
+	// Пока привязка поднята - кадры рисуются.
 	deadline := time.Now().Add(2 * time.Second)
 	for buf.Len() == 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
@@ -512,7 +510,7 @@ func TestMascotAnchorGuard(t *testing.T) {
 		t.Fatal("фоновая анимация не рисует при поднятой привязке")
 	}
 
-	// Любая печать сбрасывает привязку — кадры замирают.
+	// Любая печать сбрасывает привязку - кадры замирают.
 	u.Info("проверка привязки")
 	u.mu.Lock()
 	anchored = u.mascotAnchored

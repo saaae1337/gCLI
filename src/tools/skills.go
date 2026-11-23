@@ -53,8 +53,8 @@ func ValidSkillName(s string) bool { return reSkillName.MatchString(s) }
 
 const skillTemplate = `---
 name: %s
-description: <краткое описание — когда агенту применять этот навык>
-when: <необязательно: уточнение триггеров — слова, по которым навык подбирается>
+description: <краткое описание - когда агенту применять этот навык>
+when: <необязательно: уточнение триггеров - слова, по которым навык подбирается>
 ---
 
 # %s
@@ -62,7 +62,7 @@ when: <необязательно: уточнение триггеров — с�
 Инструкции для агента. Пиши конкретно: шаги, правила, примеры команд,
 чего избегать. Навык загружается инструментом load_skill по запросу модели.
 
-В тексте можно писать $ARGUMENTS — на вызов load_skill вместо этого
+В тексте можно писать $ARGUMENTS - на вызов load_skill вместо этого
 маркера подставится значение аргумента args.
 `
 
@@ -186,8 +186,8 @@ func (r *Registry) SkillsPromptBlock() string {
 	}
 	var b strings.Builder
 	b.WriteString("# Навыки (skills)\n")
-	b.WriteString("Подключаемые навыки. Если задача попадает под описание навыка — сначала вызови инструмент load_skill с его name и следуй инструкциям.\n")
-	b.WriteString("Не помнишь точного имени — вызови load_skill с query (что делаешь) и args: подберёт навык сам; впиши args, если в инструкциях есть $ARGUMENTS.\n")
+	b.WriteString("Подключаемые навыки. Если задача попадает под описание навыка - сначала вызови инструмент load_skill с его name и следуй инструкциям.\n")
+	b.WriteString("Не помнишь точного имени - вызови load_skill с query (что делаешь) и args: подберёт навык сам; впиши args, если в инструкциях есть $ARGUMENTS.\n")
 	n := 0
 	for _, s := range skills {
 		if r.SkillOff(s.Name) {
@@ -197,7 +197,7 @@ func (r *Registry) SkillsPromptBlock() string {
 		if w := skillDesc(s.When); w != "" {
 			desc += " [" + w + "]"
 		}
-		fmt.Fprintf(&b, "- %s — %s\n", s.Name, desc)
+		fmt.Fprintf(&b, "- %s - %s\n", s.Name, desc)
 		n++
 		if n >= 20 {
 			break
@@ -217,18 +217,18 @@ func (r *Registry) SkillsPromptBlock() string {
 func skillDesc(d string) string {
 	d = core.Truncate(core.OneLine(d), maxSkillDesc)
 	if len([]rune(d)) >= maxSkillDesc {
-		d = strings.TrimRight(d, " ,.;:") + " …"
+		d = strings.TrimRight(d, " ,.;:") + " ..."
 	}
 	return d
 }
 
-const schemaLoadSkill = `{"type":"object","properties":{"name":{"type":"string","description":"Имя навыка из списка skills в системном промпте"},"query":{"type":"string","description":"Если точного имени нет — что ты делаешь. Навык подберётся по совпадению с описанием."},"args":{"type":"string","description":"Значение для $ARGUMENTS в тексте навыка: путь, имя команды, номера строк."}}}`
+const schemaLoadSkill = `{"type":"object","properties":{"name":{"type":"string","description":"Имя навыка из списка skills в системном промпте"},"query":{"type":"string","description":"Если точного имени нет - что ты делаешь. Навык подберётся по совпадению с описанием."},"args":{"type":"string","description":"Значение для $ARGUMENTS в тексте навыка: путь, имя команды, номера строк."}}}`
 
 // RegisterSkills — зарегистрировать инструмент load_skill.
 func (r *Registry) RegisterSkills() {
 	r.registerBound("load_skill", "Загрузить навык (skill) из библиотеки пользователя: полный текст инструкций по имени. "+
-		"Укажи name — или query (что ты делаешь), и навык подберётся сам. args подставится вместо $ARGUMENTS в тексте. "+
-		"Список доступных навыков — в системном промпте и в /skills.",
+		"Укажи name - или query (что ты делаешь), и навык подберётся сам. args подставится вместо $ARGUMENTS в тексте. "+
+		"Список доступных навыков - в системном промпте и в /skills.",
 		schemaLoadSkill, "read", false, func(r *Registry) Handler { return r.hLoadSkill })
 }
 
@@ -237,7 +237,7 @@ func (r *Registry) hLoadSkill(_ context.Context, m map[string]any) (Result, erro
 	name := ArgStr(m, "name")
 	query := ArgStr(m, "query")
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(query) == "" {
-		return Result{}, fmt.Errorf("укажи name навыка или query — что ты делаешь (тогда навык подберётся сам)")
+		return Result{}, fmt.Errorf("укажи name навыка или query - что ты делаешь (тогда навык подберётся сам)")
 	}
 	skills := r.LoadSkills()
 	var s Skill
@@ -255,7 +255,7 @@ func (r *Registry) hLoadSkill(_ context.Context, m map[string]any) (Result, erro
 			if len(names) > 0 {
 				hint = " доступные: " + strings.Join(names, ", ")
 			}
-			return Result{}, fmt.Errorf("навык «%s» не найден%s", name, hint)
+			return Result{}, fmt.Errorf("навык \"%s\" не найден%s", name, hint)
 		}
 	default:
 		top, alts, err := r.MatchSkillTop(query)
@@ -265,7 +265,7 @@ func (r *Registry) hLoadSkill(_ context.Context, m map[string]any) (Result, erro
 			if len(names) > 0 {
 				hint = " доступные: " + strings.Join(names, ", ")
 			}
-			return Result{}, fmt.Errorf("%w%s — укажи name точно или переформулируй", err, hint)
+			return Result{}, fmt.Errorf("%w%s - укажи name точно или переформулируй", err, hint)
 		}
 		s = top
 		if len(alts) > 0 {
@@ -277,7 +277,7 @@ func (r *Registry) hLoadSkill(_ context.Context, m map[string]any) (Result, erro
 		}
 	}
 	if r.SkillOff(s.Name) {
-		return Result{}, fmt.Errorf("навык «%s» выключен — включи: /skill on %s", s.Name, s.Name)
+		return Result{}, fmt.Errorf("навык \"%s\" выключен - включи: /skill on %s", s.Name, s.Name)
 	}
 	args := ArgStr(m, "args")
 	if args == "" {
@@ -374,16 +374,16 @@ func (r *Registry) SkillsPromptBlockFor(query string) string {
 
 	var b strings.Builder
 	b.WriteString("# Навыки (skills)\n")
-	b.WriteString("Подключаемые навыки. Если задача попадает под навык — сначала вызови инструмент load_skill с его name и следуй инструкциям.\n")
-	b.WriteString("Не помнишь точного имени — вызови load_skill с query (что делаешь) и args: подберёт навык сам; впиши args, если в инструкциях есть $ARGUMENTS.\n")
+	b.WriteString("Подключаемые навыки. Если задача попадает под навык - сначала вызови инструмент load_skill с его name и следуй инструкциям.\n")
+	b.WriteString("Не помнишь точного имени - вызови load_skill с query (что делаешь) и args: подберёт навык сам; впиши args, если в инструкциях есть $ARGUMENTS.\n")
 	if len(described) > 0 {
-		b.WriteString("Подробное описание — только у навыков под задачу; у остальных только имя (описание возьми через load_skill).\n")
+		b.WriteString("Подробное описание - только у навыков под задачу; у остальных только имя (описание возьми через load_skill).\n")
 		for _, s := range described {
 			desc := skillDesc(s.Desc)
 			if w := skillDesc(s.When); w != "" {
 				desc += " [" + w + "]"
 			}
-			fmt.Fprintf(&b, "- %s — %s\n", s.Name, desc)
+			fmt.Fprintf(&b, "- %s - %s\n", s.Name, desc)
 		}
 	}
 	var others []string

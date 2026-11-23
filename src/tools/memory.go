@@ -72,10 +72,10 @@ func (m *Memory) Collect() string {
 	return strings.TrimSpace(b.String())
 }
 
-const memoryTemplate = `# GCLI.md — память проекта для gcli
+const memoryTemplate = `# GCLI.md - память проекта для gcli
 
 > Этот файл подмешивается в системный промпт агента в каждой сессии.
-> Заполни разделы — агент будет учитывать их при работе с кодом.
+> Заполни разделы - агент будет учитывать их при работе с кодом.
 
 ## О проекте
 - Назначение: <что это за проект>
@@ -159,11 +159,11 @@ func ApplyMentions(workDir, text string) string {
 			continue
 		}
 		if info.IsDir() {
-			blocks = append(blocks, fmt.Sprintf("@%s: это каталог — посмотри через list_dir", ref))
+			blocks = append(blocks, fmt.Sprintf("@%s: это каталог - посмотри через list_dir", ref))
 			continue
 		}
 		if info.Size() > 120*1024 {
-			blocks = append(blocks, fmt.Sprintf("@%s: файл большой (%s) — прочитай часть через read_file", ref, core.HumanSize(int(info.Size()))))
+			blocks = append(blocks, fmt.Sprintf("@%s: файл большой (%s) - прочитай часть через read_file", ref, core.HumanSize(int(info.Size()))))
 			continue
 		}
 		data, err := os.ReadFile(p)
@@ -172,11 +172,11 @@ func ApplyMentions(workDir, text string) string {
 			continue
 		}
 		if core.IsBinary(data) {
-			blocks = append(blocks, fmt.Sprintf("@%s: двоичный файл — не приложен", ref))
+			blocks = append(blocks, fmt.Sprintf("@%s: двоичный файл - не приложен", ref))
 			continue
 		}
 		if total+len(data) > 400*1024 {
-			blocks = append(blocks, "[достигнут лимит объёма приложений — 400 КБ]")
+			blocks = append(blocks, "[достигнут лимит объёма приложений - 400 КБ]")
 			break
 		}
 		total += len(data)

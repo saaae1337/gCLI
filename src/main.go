@@ -1,8 +1,8 @@
-// gcli — ИИ-агент в терминале.
+// gcli - ИИ-агент в терминале.
 //
 // Агент не просто отвечает, а выполняет задачи: правит файлы, запускает
 // команды, ищет в интернете, ведёт план работ и делегирует подзадачи
-// субагентам. Работает с любым провайдером — от Z.ai GLM и OpenRouter
+// субагентам. Работает с любым провайдером - от Z.ai GLM и OpenRouter
 // до локальной Ollama. Только стандартная библиотека Go.
 //
 // Сборка:  go build -o gcli .
@@ -10,7 +10,7 @@
 //
 //	./gcli -p "запрос"         один запрос и выход
 //	./gcli -c                  продолжить последнюю сессию
-//	./gcli -r 2                возобновить сессию №2
+//	./gcli -r 2                возобновить сессию N2
 //	./gcli --help              справка
 package main
 
@@ -37,7 +37,7 @@ import (
 	"gcli/ui"
 )
 
-// buildVersion — переопределяется при сборке:
+// buildVersion - переопределяется при сборке:
 // -ldflags "-X main.buildVersion=5.0.1".
 var buildVersion = ""
 
@@ -48,7 +48,7 @@ func version() string {
 	return core.Version
 }
 
-// app — всё состояние приложения.
+// app - всё состояние приложения.
 type app struct {
 	repo    *core.Repo
 	ui      *ui.UI
@@ -56,19 +56,19 @@ type app struct {
 	workDir string
 	stdin   *stdinReader
 
-	// tui — полноэкранный интерфейс. nil в обычном построчном режиме
+	// tui - полноэкранный интерфейс. nil в обычном построчном режиме
 	// (пайп, CI, -p, -json, -ascii, -plain).
 	tui *tui.App
-	// tuiWanted — интерфейс выбран при старте; создаётся после загрузки
+	// tuiWanted - интерфейс выбран при старте; создаётся после загрузки
 	// сессии и модели (имя модели нужно шапке).
 	tuiWanted bool
 
-	// lsp — хаб language servers: один на процесс, переживает пересборки
-	// реестра. Создаётся лениво по первому .go/.ts/… файлу; Shutdown — перед
+	// lsp - хаб language servers: один на процесс, переживает пересборки
+	// реестра. Создаётся лениво по первому .go/.ts/... файлу; Shutdown - перед
 	// выходом, чтобы не оставлять процессы-сироты gopls.
 	lsp *tools.LSPHub
 
-	// missionChain — текущая цепочка миссий (nil = ещё не загружалась;
+	// missionChain - текущая цепочка миссий (nil = ещё не загружалась;
 	// missionChainEnsure лениво читает .gcli/mission_chain.json).
 	missionChain *core.MissionChain
 
@@ -83,18 +83,18 @@ type app struct {
 
 	sess *core.Session
 
-	// sessSwap — барьер между ходом и подменой сессии. Ход держит RLock
+	// sessSwap - барьер между ходом и подменой сессии. Ход держит RLock
 	// всё время работы; /fork, /resume и /clear берут Lock на подмену
 	// a.sess. Менять указатель под ногами идущего хода нельзя: история и
 	// usage уйдут в чужую сессию, а ход из cron/watch не прикрыт busy-
 	// очередью TUI, поэтому барьер общий для всех путей запуска хода.
 	sessSwap sync.RWMutex
 
-	// turnMu — сериализация ходов. Ход запускается не только из читателя
+	// turnMu - сериализация ходов. Ход запускается не только из читателя
 	// ввода, но и из фоновых горутин (cron, watch), а REPL-цикл и TUI
 	// принимают ввод, пока чужой ход идёт: cronTick, проскочивший между
 	// проверкой running и её установкой в turn, запускал бы второй ход
-	// параллельно первому — два агента писали бы в один поток, затирали
+	// параллельно первому - два агента писали бы в один поток, затирали
 	// a.cancel (Ctrl+C отменял бы только последнего) и дважды сохранили
 	// бы сессию. Замок внешний: под ним sessSwap, sessMu, a.mu; обратного
 	// пути нет.
@@ -105,7 +105,7 @@ type app struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
-	// turnInteractive — текущий ход запущен из читателя ввода (REPL, TUI),
+	// turnInteractive - текущий ход запущен из читателя ввода (REPL, TUI),
 	// а не из фоновой горутины (cron). Только интерактивному ходу можно
 	// задавать вопросы поверх stdin (readAns, ask_user, askTrustCode):
 	// второй Scan украл бы строку у REPL-цикла, а вопрос без человека
@@ -115,119 +115,119 @@ type app struct {
 	notes           []string
 	quiet           bool
 
-	// lastTurnFailed — предыдущий ход завершился ошибкой: на второй
+	// lastTurnFailed - предыдущий ход завершился ошибкой: на второй
 	// ошибке подряд кот не хандрит, а сердится.
 	lastTurnFailed bool
 
-	// lastAgent — агент текущего хода. Нужен инструменту self_status,
+	// lastAgent - агент текущего хода. Нужен инструменту self_status,
 	// чтобы агент видел свой настоящий системный промпт, а не базовый.
 	lastAgent *agent.Agent
 
-	// mission — задание автономного прогона и его трекер. Живут на app,
+	// mission - задание автономного прогона и его трекер. Живут на app,
 	// а не внутри агента: mission.json переживает перезапуск, а агент
 	// создаётся на каждый ход заново.
 	mission   core.Mission
 	missionTr *core.Tracker
-	// missionJournal — append-only журнал прогона. Отдельный файл от
+	// missionJournal - append-only журнал прогона. Отдельный файл от
 	// mission_state.json по той же причине, что и там: снимок перезаписывается
 	// и при падении на записи теряется, а журнал дописывается и битый хвост
 	// просто отбрасывается при чтении.
 	missionJournal *core.Journal
-	// missionResume — снимок прошлого прогона, подхваченный при старте.
+	// missionResume - снимок прошлого прогона, подхваченный при старте.
 	// Показывается в статусе и уходит в историю первого хода: модель
 	// должна начать продолжение не с нуля.
 	missionResume string
-	// missionResumeState — тот же снимок целиком, со счётчиками. Строка
-	// идёт в историю модели, а числа — в трекер: одно без другого
-	// половина работы, потому что модель продолжает «с прошлого места»,
+	// missionResumeState - тот же снимок целиком, со счётчиками. Строка
+	// идёт в историю модели, а числа - в трекер: одно без другого
+	// половина работы, потому что модель продолжает "с прошлого места",
 	// а бюджет при этом начинается с полного.
 	missionResumeState *core.MissionState
-	// missionResumedOnce — приглашение к продолжению уже ушло в историю
+	// missionResumedOnce - приглашение к продолжению уже ушло в историю
 	// модели в этом сеансе. Именно модельную обязанность, а не запись в
 	// журнал: она должна уйти ровно один раз, даже если журнал не
-	// открылся (диск занят) — иначе история засорялась бы одинаковыми
-	// «продолжаем с прошлого места» на каждом ходе.
+	// открылся (диск занят) - иначе история засорялась бы одинаковыми
+	// "продолжаем с прошлого места" на каждом ходе.
 	missionResumedOnce bool
-	// missionResumeJournalled — запись «resume» уже попала в журнал.
+	// missionResumeJournalled - запись "resume" уже попала в журнал.
 	//
 	// Отдельный флаг, потому что у него другое последствие сбоя: запись в
-	// журнале не удалась → её надо повторить, а не считать сделанной.
+	// журнале не удалась -> её надо повторить, а не считать сделанной.
 	// Одним флагом на обе обязанности подхват либо терялся навсегда, либо
 	// повторялся дважды.
 	missionResumeJournalled bool
-	// missionJournalEnd — в журнал уже записана окончательная запись
+	// missionJournalEnd - в журнал уже записана окончательная запись
 	// прогона (stop или close). Без этого флага выход из сеанса дописал
 	// бы вторую копию одной и той же остановки: журнал append-only, и
-	// два одинаковых «остановлен» читались бы как две разные причины.
+	// два одинаковых "остановлен" читались бы как две разные причины.
 	missionJournalEnd bool
 
-	// msnMu — защита задания прогона и журнального состояния (mission,
-	// missionResume*, missionJournal вместе с handle). Писатели —
-	// /mission start|stop и chainRun из очереди ввода, в serve-режиме —
-	// HTTP-горутина, из хода — Stopped движка и Checkpoint. Читатели —
+	// msnMu - защита задания прогона и журнального состояния (mission,
+	// missionResume*, missionJournal вместе с handle). Писатели -
+	// /mission start|stop и chainRun из очереди ввода, в serve-режиме -
+	// HTTP-горутина, из хода - Stopped движка и Checkpoint. Читатели -
 	// attachMission и missionDeps в ходе из cron/цепочки. Порядок: msnMu
-	// внешний — под ним берутся a.mu (трекер), provMu (пара), svcMu
+	// внешний - под ним берутся a.mu (трекер), provMu (пара), svcMu
 	// (toolsReg в saveMissionState); пути наоборот нет.
 	msnMu sync.Mutex
 
-	// setupNotes — замечания при старте, показываются под баннером одной
+	// setupNotes - замечания при старте, показываются под баннером одной
 	// группой. Снимок startupNotes на момент последней сборки реестра.
 	setupNotes []string
 
-	// sessionStart — когда началась сессия. В панели метрик видно, сколько
-	// времени агент работает: «сессия 4м 12с».
+	// sessionStart - когда началась сессия. В панели метрик видно, сколько
+	// времени агент работает: "сессия 4м 12с".
 	sessionStart time.Time
-	// activeTotal — суммарное время работы агента (ходы целиком: запросы,
-	// инструменты, субагенты), activeSince — старт текущего незавершённого
+	// activeTotal - суммарное время работы агента (ходы целиком: запросы,
+	// инструменты, субагенты), activeSince - старт текущего незавершённого
 	// хода. Счётчик времени сессии раньше тикал по настенным часам с момента
 	// запуска: пока человек читал, думал или обедал, время росло. Теперь
 	// считается только время, когда агент действительно занят.
 	activeTotal time.Duration
 	activeSince time.Time
 	activeMu    sync.Mutex // защищает счётчики выше (turn зовётся из горутин TUI и cron)
-	// lastRate — токенов в секунду по последнему запросу, lastElapsed —
+	// lastRate - токенов в секунду по последнему запросу, lastElapsed -
 	// его длительность. Обновляются в onUsage, читаются в панели метрик.
 	lastRate    float64
 	lastElapsed time.Duration
 
-	// cron — автономные итерации. Агент сам берёт задачу «продолжить
-	// работу над проектом: найди баги, проблемы, уязвимости, улучшай»,
-	// когда пользователь молчит дольше интервала (15–20 мин) после
+	// cron - автономные итерации. Агент сам берёт задачу "продолжить
+	// работу над проектом: найди баги, проблемы, уязвимости, улучшай",
+	// когда пользователь молчит дольше интервала (15-20 мин) после
 	// завершения хода. Выключено по умолчанию.
 	cronEnabled    bool
-	cronInterval   time.Duration // 15–20 мин, уточняется на каждом цикле
+	cronInterval   time.Duration // 15-20 мин, уточняется на каждом цикле
 	cronLastActive time.Time     // время последней активности (ход, ввод, команда)
-	cronDone       chan struct{} // закрыть — остановить фоновую горутину
+	cronDone       chan struct{} // закрыть - остановить фоновую горутину
 	cronMu         sync.Mutex    // защищает cron-поля выше
-	// saveErrShown — ошибка записи сессии уже показана. Сессию пишут на
+	// saveErrShown - ошибка записи сессии уже показана. Сессию пишут на
 	// каждый ход и учёт токенов: спамить предупреждением на каждую попытку
 	// хуже, чем показать одну и замолчать.
 	saveErrShown atomic.Bool
 
-	// startupNotes — то, что не относится к реестру и должно печататься под
+	// startupNotes - то, что не относится к реестру и должно печататься под
 	// баннером: например, включённая песочница. Список реестра (setupNotes)
 	// buildTools пересобирает начисто, а эти замечания при пересборке
 	// терялись бы: после /sandbox on пользователь не увидел бы слова
-	// «Песочница: пути ограничены…».
+	// "Песочница: пути ограничены...".
 	startupNotes []string
 
-	// modelsCache — список моделей с endpoint-а текущего провайдера
+	// modelsCache - список моделей с endpoint-а текущего провайдера
 	// (/models). Каталог запрашивается при каждом вызове команды заново
 	// и каждый раз стоил секунду ожидания ради одинаковых данных: теперь
 	// список живёт десять минут и сбрасывается при смене провайдера.
-	// shown — последняя показанная таблица: по номеру из неё работает
-	// «/models 3». Пишется и читается только из очереди ввода —
+	// shown - последняя показанная таблица: по номеру из неё работает
+	// "/models 3". Пишется и читается только из очереди ввода -
 	// без мьютекса.
 	modelsCache modelsCacheEntry
 
-	// rules — правила разрешений, собранные из слоёв конфигов
+	// rules - правила разрешений, собранные из слоёв конфигов
 	// (core.LayeredRules). Хранятся готовыми, потому что собираются
 	// один раз при старте: правило, которое перечиталось бы на каждом
 	// подтверждении, могло бы измениться посреди хода, и агент получил бы
 	// разные ответы на одинаковые вопросы.
 	rules core.Rules
 
-	// sandbox — граница файловой системы для инструментов. По умолчанию
+	// sandbox - граница файловой системы для инструментов. По умолчанию
 	// включена: она защищает от чтения ~/.gcli с ключами и ~/.ssh, а ломает
 	// работу только там, где агент ходит за пределы проекта по делу, и это
 	// лечится одной командой /sandbox off. setupSandbox решает по флагу,
@@ -239,54 +239,54 @@ type app struct {
 	// reasonBuf целиком, и Ctrl+O показывает их на лету либо выводит
 	// уже накопленные задним числом.
 	//
-	// reasonLive — воля пользователя, она переживает ходы: нажал
-	// «показать» — значит показывать дальше, пока не свернёт. Остальное —
+	// reasonLive - воля пользователя, она переживает ходы: нажал
+	// "показать" - значит показывать дальше, пока не свернёт. Остальное -
 	// состояние текущего хода, обнуляется в resetReason.
 	reasonMu  sync.Mutex
 	reasonBuf strings.Builder
-	// reasonPrint — порядок печати. Стриминг и Ctrl+O печатают в один и тот
+	// reasonPrint - порядок печати. Стриминг и Ctrl+O печатают в один и тот
 	// же буфер, и без этого мьютекса они перемешиваются: Ctrl+O напечатает
 	// накопленное, а пришедший следом кусок допишется перед ним, и отметка
-	// «показано всё» съест кусок, который на экране так и не появился.
-	// Порядок блокировок всегда reasonPrint → reasonMu → мьютекс UI,
+	// "показано всё" съест кусок, который на экране так и не появился.
+	// Порядок блокировок всегда reasonPrint -> reasonMu -> мьютекс UI,
 	// обратный порядок приводит к дедлоку со строкой ожидания.
 	reasonPrint sync.Mutex
 	reasonLive  bool // пользователь хочет видеть размышления (после Ctrl+O)
 	reasonShown bool // размышления уже показывались в этом ходу
 	reasonOpen  bool // на экране открыт поток размышлений (нужен перевод строки)
 	reasonAny   bool // модель вообще присылала размышления в этом ходу
-	// reasonHinted — подсказка про Ctrl+O уже показана в этом ходу.
+	// reasonHinted - подсказка про Ctrl+O уже показана в этом ходу.
 	reasonHinted bool
-	// reasonPast — между ходами на экране уже напечатан блок размышлений
+	// reasonPast - между ходами на экране уже напечатан блок размышлений
 	// последнего хода (showLastReason). По нему REPL рисует приглашение
 	// усадкой, как после команды или хода, иначе кот со строкой состояния
 	// нарисовался бы поверх мыслей, а анимация заикалась бы на только что
 	// дописанных строках.
 	reasonPast bool
-	// reasonPrintedLen — сколько байт буфера уже показано на экране.
+	// reasonPrintedLen - сколько байт буфера уже показано на экране.
 	// Нужно, чтобы задним числом не напечатать один блок дважды.
 	reasonPrintedLen int
 
-	// reasonLast — размышления последнего ЗАВЕРШЁННОГО хода. Живут отдельно
+	// reasonLast - размышления последнего ЗАВЕРШЁННОГО хода. Живут отдельно
 	// от reasonBuf и переживают resetReason: Ctrl+O после ответа должен
-	// показывать мысли, а не «размышлений пока нет». Раньше буфер обнулялся
+	// показывать мысли, а не "размышлений пока нет". Раньше буфер обнулялся
 	// в начале следующего хода, и посмотреть мысли задним числом было уже
-	// нечем — а именно для этого Ctrl+O и нужен.
+	// нечем - а именно для этого Ctrl+O и нужен.
 	// Пишет только finishReason (конец хода): внутри хода Ctrl+O смотрит на
 	// reasonBuf, так что гасить прошлый блок на каждом куске незачем.
 	reasonLast string
 
-	// snapErr — последняя ошибка теневых снимков. Снимок — страховка, а не
+	// snapErr - последняя ошибка теневых снимков. Снимок - страховка, а не
 	// критический путь: ошибка не ломает ход, но /snapshots должен показать,
 	// почему страховки нет, иначе человек узнает о ней только при попытке
-	// откатиться — слишком поздно.
+	// откатиться - слишком поздно.
 	snapErr error
 }
 
-// setSnapErr/lastSnapErr — запись и чтение snapErr под мьютексом.
+// setSnapErr/lastSnapErr - запись и чтение snapErr под мьютексом.
 //
-// Писатель — turn(): он зовётся не только из горутины ввода, но и из cron,
-// watch и цепочки миссий; читатель — /snapshots из другой горутины.
+// Писатель - turn(): он зовётся не только из горутины ввода, но и из cron,
+// watch и цепочки миссий; читатель - /snapshots из другой горутины.
 // Без лока это была бы гонка на интерфейсе error.
 func (a *app) setSnapErr(err error) {
 	a.mu.Lock()
@@ -300,7 +300,7 @@ func (a *app) lastSnapErr() error {
 	return a.snapErr
 }
 
-// provMu — защита пары «провайдер + модель». Писатели — команды ввода
+// provMu - защита пары "провайдер + модель". Писатели - команды ввода
 // (/model, /provider, /setup, /resume): очередь ввода сериализует их между
 // собой, но ход из cron/watch/цепочки читает пару из своей горутины.
 // Читатели на чужих горутинах берут снимок пары (providerModel): провайдер
@@ -308,14 +308,14 @@ func (a *app) lastSnapErr() error {
 // провайдера со старой моделью и неверными лимитами контекста.
 var provMu sync.Mutex
 
-// providerModel — снимок пары для горутин вне очереди ввода.
+// providerModel - снимок пары для горутин вне очереди ввода.
 func (a *app) providerModel() (*providers.Provider, string) {
 	provMu.Lock()
 	defer provMu.Unlock()
 	return a.prov, a.model
 }
 
-// setProviderModel — подмена пары целиком (/provider, /resume).
+// setProviderModel - подмена пары целиком (/provider, /resume).
 func (a *app) setProviderModel(p *providers.Provider, m string) {
 	provMu.Lock()
 	a.prov = p
@@ -323,15 +323,15 @@ func (a *app) setProviderModel(p *providers.Provider, m string) {
 	provMu.Unlock()
 }
 
-// setProvider — подмена одного провайдера (/provider key, /setup).
+// setProvider - подмена одного провайдера (/provider key, /setup).
 func (a *app) setProvider(p *providers.Provider) {
 	provMu.Lock()
 	a.prov = p
 	provMu.Unlock()
 }
 
-// reasonHint — подсказка на строке ожидания.
-const reasonHint = "(Ctrl+O — показать размышления)"
+// reasonHint - подсказка на строке ожидания.
+const reasonHint = "(Ctrl+O - показать размышления)"
 
 func main() {
 	flag.Usage = usage
@@ -344,10 +344,10 @@ func main() {
 		flagAgent        = flag.String("agent", "", "агентный режим: on | off")
 		flagYolo         = flag.Bool("yolo", false, "не спрашивать подтверждений (кроме опасных команд)")
 		flagSandbox      = flag.String("sandbox", "", "песочница файлов: on | off (ограничить доступ рабочим каталогом)")
-		flagSnapshots    = flag.String("snapshots", "", "теневые снимки проекта на каждый ход: on | off (откат — /revert)")
+		flagSnapshots    = flag.String("snapshots", "", "теневые снимки проекта на каждый ход: on | off (откат - /revert)")
 		flagAutopilot    = flag.String("autopilot", "", "автопилот: on | off (сам одобряет безопасные действия)")
 		flagAutopilotAll = flag.String("autopilot-all", "", "автопилот повышенного риска: on | off (одобряет всё)")
-		flagSetup        = flag.Bool("setup", false, "мастер настройки: провайдер → ключ → модель")
+		flagSetup        = flag.Bool("setup", false, "мастер настройки: провайдер -> ключ -> модель")
 		flagVersion      = flag.Bool("v", false, "версия и платформа")
 		flagJSON         = flag.Bool("json", false, "машиночитаемый вывод (только ответ, без UI)")
 		flagColor        = flag.String("color", "", "уровень цвета: auto | 16 | 256 | truecolor | none")
@@ -361,11 +361,11 @@ func main() {
 		flagBudget       = flag.String("budget", "", "бюджет прогона: токены, деньги или оба через запятую (500000 или 500000,25)")
 		flagObjective    = flag.String("objective", "", "цель прогона одной строкой")
 		flagStats        = flag.Bool("stats", false, "дашборд расходов по сессиям и выход")
-		flagWatch        = flag.String("watch", "", "режим слежения: команда проверки; упала — агент чинит (gcli -watch \"go test ./...\")")
+		flagWatch        = flag.String("watch", "", "режим слежения: команда проверки; упала - агент чинит (gcli -watch \"go test ./...\")")
 		flagMCPServe     = flag.Bool("mcp-serve", false, "работать MCP-сервером по stdio (для MCP-хостов: Claude Desktop и др.)")
 		flagBench        = flag.String("bench", "", "self-bench: каталог задач (по умолчанию .gcli/bench); прогон и счёт")
 		flagCron         = flag.String("cron", "", "автономные итерации: on | off (агент сам находит и чинит баги, проблемы, уязвимости, когда пользователь молчит)")
-		flagCronInterval = flag.Duration("cron-interval", 0, "интервал между автономными итерациями: 15m-20m (по умолчанию 15–20 мин со случайным сдвигом)")
+		flagCronInterval = flag.Duration("cron-interval", 0, "интервал между автономными итерациями: 15m-20m (по умолчанию 15-20 мин со случайным сдвигом)")
 	)
 	flag.Parse()
 
@@ -376,16 +376,16 @@ func main() {
 		*flagWatch != "" || *flagMCPServe || *flagPlain
 
 	// Консоль готовим до первого же вывода, а не внутри setupUI: до неё
-	// уже печатаются -v и -help, где тоже есть «·». На Windows консоль
-	// по умолчанию CP866, и UTF-8 там читается как «тФВ».
+	// уже печатаются -v и -help, где тоже есть "|". На Windows консоль
+	// по умолчанию CP866, и UTF-8 там читается как "тФВ".
 	unicodeOK = unicodeSupported()
 
 	if *flagVersion {
-		fmt.Println("gcli v" + version() + " · " + runtime.GOOS + "/" + runtime.GOARCH + " · " + runtime.Version())
+		fmt.Println("gcli v" + version() + " | " + runtime.GOOS + "/" + runtime.GOARCH + " | " + runtime.Version())
 		return
 	}
 
-	// MCP-сервер: stdio — протокол, stdout трогать нельзя. Поэтому это
+	// MCP-сервер: stdio - протокол, stdout трогать нельзя. Поэтому это
 	// раньше всего остального: ни UI, ни баннера, ни хранилища.
 	if *flagMCPServe {
 		runMCPServer()
@@ -400,10 +400,12 @@ func main() {
 	a.store.Ensure()
 
 	a.setupUI(*flagNoColor, *flagUnicode, *flagCompact, *flagJSON, *flagColor)
-	a.tuiWanted = a.tuiReady(isTerminal(), !*flagUnicode && unicodeOK, *flagJSON)
+	// Интерфейс целиком ASCII, поэтому полноэкранный режим доступен на
+	// любом терминале с VT - раньше он требовал поддержку юникода.
+	a.tuiWanted = a.tuiReady(isTerminal(), true, *flagJSON)
 	// mintty (Git Bash) не даёт нативной программе консольных хэндлов:
 	// stdin/stdout приходят пайпами, и полноэкранный интерфейс там
-	// недостижим в принципе. Перезапускаем себя под winpty — он входит
+	// недостижим в принципе. Перезапускаем себя под winpty - он входит
 	// в Git for Windows и решает это ровно так же, как у fzf.
 	if relaunched, note := winptyRelaunch(*flagJSON); relaunched {
 		return // наследник отработал, код выхода уже применён
@@ -426,8 +428,8 @@ func main() {
 	a.model = providers.ResolveModel(a.prov, *flagModel, a.repo.Cfg.Model)
 
 	// Флаги переопределяют конфиг. Опечатка не должна молча выключать
-	// защиту: для -snapshots «любое не on» раньше означало off, и
-	// «-snapshots of» тихо отключал страховку.
+	// защиту: для -snapshots "любое не on" раньше означало off, и
+	// "-snapshots of" тихо отключал страховку.
 	if s := strings.ToLower(strings.TrimSpace(*flagSubagent)); s != "" {
 		switch s {
 		case "on", "вкл", "1", "true", "да":
@@ -436,7 +438,7 @@ func main() {
 			a.repo.Cfg.Subagents = false
 		default:
 			a.startupNotes = append(a.startupNotes,
-				"Флаг -subagent: не понял "+strconv.Quote(*flagSubagent)+" — ждал on или off, оставляю как в конфиге")
+				"Флаг -subagent: не понял "+strconv.Quote(*flagSubagent)+" - ждал on или off, оставляю как в конфиге")
 		}
 	}
 	if s := strings.ToLower(strings.TrimSpace(*flagSnapshots)); s != "" {
@@ -449,7 +451,7 @@ func main() {
 			a.repo.Cfg.Snapshots = &on
 		default:
 			a.startupNotes = append(a.startupNotes,
-				"Флаг -snapshots: не понял "+strconv.Quote(*flagSnapshots)+" — ждал on или off, оставляю как в конфиге")
+				"Флаг -snapshots: не понял "+strconv.Quote(*flagSnapshots)+" - ждал on или off, оставляю как в конфиге")
 		}
 	}
 	// Песочница включается флагом или переменной окружения. Сначала
@@ -461,8 +463,8 @@ func main() {
 	}
 
 	a.memory = tools.NewMemory(a.workDir, a.store)
-	// LSP: включён, если конфигом не запрещён; пресеты серверов — в tools/lsp.go,
-	// переопределения — ключ lsp в config.json.
+	// LSP: включён, если конфигом не запрещён; пресеты серверов - в tools/lsp.go,
+	// переопределения - ключ lsp в config.json.
 	if a.repo.Cfg.LSPEnabled == nil || *a.repo.Cfg.LSPEnabled {
 		a.lsp = tools.NewLSPHub(a.repo.Cfg.LSP, true)
 	} else {
@@ -508,7 +510,7 @@ func main() {
 		on := s == "on" || s == "вкл" || s == "1" || s == "true"
 		a.setAutopilotAll(on)
 	}
-	// Автономные итерации: конфиг → флаг (флаг сильнее).
+	// Автономные итерации: конфиг -> флаг (флаг сильнее).
 	if *flagCron != "" {
 		a.cronEnabled = *flagCron == "on" || *flagCron == "вкл" || *flagCron == "1" || *flagCron == "true"
 	} else {
@@ -534,7 +536,7 @@ func main() {
 	}
 	defer a.saveSession()
 
-	// Задание автономного прогона: файл проекта, поверх — флаги.
+	// Задание автономного прогона: файл проекта, поверх - флаги.
 	// Читается после сессии: бюджет миссии меряется от расхода сессии,
 	// и трекеру нужен реальный провайдер с моделью для цены токенов.
 	if err := a.setupMission(*flagMission, *flagDeadline, *flagBudget, *flagObjective, ""); err != nil {
@@ -583,7 +585,7 @@ func main() {
 		a.store.Ensure()
 		if a.runBench(*flagBench) {
 			a.shutdown()
-			os.Exit(1) // провалы — ненулевой код выхода для CI
+			os.Exit(1) // провалы - ненулевой код выхода для CI
 		}
 		return
 	}
@@ -595,7 +597,7 @@ func main() {
 		a.runSetup()
 	}
 	// -stats: дашборд и выход, до входа в REPL. Данные из sessions/*.json,
-	// поэтому достаточно ui и репо — агент и провайдеры не нужны.
+	// поэтому достаточно ui и репо - агент и провайдеры не нужны.
 	if *flagStats {
 		a.printStats(a.repo.ListSessionInfos(), 30)
 		return
@@ -605,17 +607,17 @@ func main() {
 		a.replTUI()
 		return
 	}
-	// Raw-режим stdin — ровно на время REPL. Без него Ctrl+O не работал:
+	// Raw-режим stdin - ровно на время REPL. Без него Ctrl+O не работал:
 	// canonical-режим терминала перехватывал байт (VDISCARD при IEXTEN) и
 	// до watchKeys он не доходил, а Ctrl+S замораживал вывод (IXON).
-	// Не терминал (пайп, CI) — enableRaw сам не включится.
+	// Не терминал (пайп, CI) - enableRaw сам не включится.
 	a.stdin.enableRaw()
 	defer a.stdin.disableRaw()
 	// Ctrl+O читаем ровно один раз на весь сеанс (см. watchKeys): и во
 	// время хода, и между ходами. Иначе мысли последнего ответа уехали
 	// бы вверх по экрану навсегда, а на границе ходов нажатие
 	// обрабатывалось бы двумя конкурирующими читателями. В машинных
-	// режимах (-p, -bench) клавиатура не нужна — читатель там
+	// режимах (-p, -bench) клавиатура не нужна - читатель там
 	// только висел бы лишней горутиной.
 	keys := a.startWatcher(a.ctrlO)
 	defer keys.stopWatcher()
@@ -632,26 +634,27 @@ func must[T any](v T, err error) T {
 
 // ---------- Анимации ----------
 
-// animEnv — входные данные для решения «включать ли анимации».
+// animEnv - входные данные для решения "включать ли анимации".
 // Вынесено в структуру, чтобы правило приоритетов можно было проверить
 // тестом, не подменяя окружение и не читая ~/.gcli/config.json.
+// ASCII и юникод тут больше не участвуют: интерфейс всегда ASCII,
+// а эффект появления - только ANSI-последовательности (\033[K, \r),
+// которые рисует любой терминал Win10/11 с включённым VT.
 type animEnv struct {
 	Color     bool  // терминал умеет цвет
 	Machine   bool  // -json: машинный вывод
-	ASCII     bool  // -ascii
-	UnicodeOK bool  // терминал умеет псевдографику
 	NoAnimEnv bool  // выставлена GCLI_NO_ANIM
 	Cfg       *bool // ключ "animations" в config.json (nil = не задан)
 }
 
-// animsEnabled — правило включения анимаций.
+// animsEnabled - правило включения анимаций.
 //
 // Приоритет от сильного к слабому:
 //
-//	GCLI_NO_ANIM      — принудительное «выключить всё»;
-//	-json, ASCII      — вывод машинный или кракозябрный;
-//	config.json       — пользовательская настройка;
-//	автоопределение   — цвет и настоящий терминал.
+//	GCLI_NO_ANIM      - принудительное "выключить всё";
+//	-json             - машинный вывод;
+//	config.json       - пользовательская настройка;
+//	автоопределение   - цвет.
 //
 // Раньше config.json стоял выше GCLI_NO_ANIM, и переменная окружения молча
 // не работала: у кого в конфиге стояло "animations": true, тот получал
@@ -660,7 +663,7 @@ func animsEnabled(e animEnv) bool {
 	if e.NoAnimEnv {
 		return false
 	}
-	if e.Machine || e.ASCII || !e.UnicodeOK || !e.Color {
+	if e.Machine || !e.Color {
 		return false
 	}
 	if e.Cfg != nil {
@@ -669,9 +672,9 @@ func animsEnabled(e animEnv) bool {
 	return true
 }
 
-// colorEnv — входные данные для решения «включать ли цвет».
+// colorEnv - входные данные для решения "включать ли цвет".
 type colorEnv struct {
-	TTY        bool   // stdout — терминал
+	TTY        bool   // stdout - терминал
 	VT         bool   // Windows: включён режим виртуального терминала
 	NoColor    bool   // -no-color
 	Machine    bool   // -json
@@ -679,7 +682,7 @@ type colorEnv struct {
 	Mode       string // -color <уровень> или GCLI_COLOR ("" = авто)
 }
 
-// resolveColor — автоопределение цвета и уровня.
+// resolveColor - автоопределение цвета и уровня.
 //
 // Уровень: флаг -color важнее GCLI_COLOR, тот важнее автоопределения.
 // Явно запрошенный уровень принудительно включает окраску, даже если
@@ -687,7 +690,7 @@ type colorEnv struct {
 // где isTerminal() иногда врёт).
 //
 // Решение вынесено в чистую функцию: анимации считаются ПОСЛЕ него и
-// обязаны видеть итоговый color. Считать анимации раньше — значит молча
+// обязаны видеть итоговый color. Считать анимации раньше - значит молча
 // выключить эффекты при -color true.
 func resolveColor(e colorEnv) (color bool, grade ui.ColorLevel) {
 	color = e.TTY && e.VT && !e.NoColor && !e.NoColorEnv && !e.Machine
@@ -703,13 +706,18 @@ func resolveColor(e colorEnv) (color bool, grade ui.ColorLevel) {
 	return color, grade
 }
 
-// setupUI — создать интерфейс с учётом возможностей терминала.
+// setupUI - создать интерфейс с учётом возможностей терминала.
 func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 	vtOK := ui.EnableVT()
 	tty := isTerminal()
-	// Решение принято один раз, до первого вывода: ascii — явное требование
+	// Решение принято один раз, до первого вывода: ascii - явное требование
 	// пользователя, а unicodeOK к этому моменту уже известно.
-	useUnicode := !ascii && unicodeOK
+	// Интерфейс печатает только ASCII: рамки "+ - |", статусы "ok x !".
+	// Декоративные юникод-символы (* ✓ ❯ ╭ ⠋ и т.п.) не используются
+	// вовсе - они ломаются на терминалах, которые их не рисуют
+	// (классическая консоль Windows 10/11). Флаг -ascii остался
+	// совместимости ради и больше ничего не меняет.
+	useUnicode := false
 	// Единое решение для строк вне UI-рендерера: отчёты инструментов и
 	// субагентов берут глифы через ui.Glyph, а не печатают юникод напрямую.
 	ui.SetUnicodeOutput(useUnicode)
@@ -733,18 +741,16 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 		width = 100
 	}
 
-	// Анимации — строго после решения о цвете: они требуют цвета.
+	// Анимации - строго после решения о цвете: они требуют цвета.
 	animations := animsEnabled(animEnv{
 		Color:     color,
 		Machine:   machine,
-		ASCII:     ascii,
-		UnicodeOK: useUnicode,
 		NoAnimEnv: os.Getenv("GCLI_NO_ANIM") != "",
 		Cfg:       a.repo.Cfg.Animations,
 	})
 
 	a.ui = ui.New(ui.Options{
-		Theme:      "ember", // стиль один — «УГОЛЬ»
+		Theme:      "ember", // стиль один - "УГОЛЬ"
 		Unicode:    useUnicode,
 		Color:      color,
 		Animations: animations,
@@ -752,7 +758,7 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 		ShowTime:   a.cfgShowTime(),
 		Width:      width,
 		Grade:      grade,
-		// Блоки и таблицы — в скруглённых рамках: свой интерфейс вместо
+		// Блоки и таблицы - в скруглённых рамках: свой интерфейс вместо
 		// потока текста.
 		Panels: true,
 	})
@@ -768,7 +774,7 @@ func (a *app) cfgShowTime() bool {
 	return false
 }
 
-// loadInitialSession — определить стартовую сессию по флагам.
+// loadInitialSession - определить стартовую сессию по флагам.
 func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 	if resume > 0 {
 		ss := a.repo.ListSessionInfos()
@@ -778,7 +784,7 @@ func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 			}
 		}
 		if !a.quiet {
-			a.ui.Warn(fmt.Sprintf("сессия №%d не найдена — создаю новую", resume))
+			a.ui.Warn(fmt.Sprintf("сессия N%d не найдена - создаю новую", resume))
 		}
 	}
 	if cont {
@@ -792,9 +798,9 @@ func (a *app) loadInitialSession(resume int, cont bool) *core.Session {
 	return a.repo.NewSession(a.prov.ID, a.model, a.workDir)
 }
 
-// saveSession — записать сессию на диск. Под sessMu — только снимок:
+// saveSession - записать сессию на диск. Под sessMu - только снимок:
 // marshal + fsync идут за пределами замка, иначе медленный диск
-// останавливал бы всё — историю, confirm'ы, учёт субагентов, метрики.
+// останавливал бы всё - историю, confirm'ы, учёт субагентов, метрики.
 func (a *app) saveSession() {
 	if a.sess == nil {
 		return
@@ -803,14 +809,14 @@ func (a *app) saveSession() {
 	a.sess.Updated = time.Now()
 	snap := a.sessionSnapshotLocked()
 	sessMu.Unlock()
-	// MarshalIndent + fsync — не мгновение: на подвисшем диске это
+	// MarshalIndent + fsync - не мгновение: на подвисшем диске это
 	// секунды. Диск ждёт готовый снимок; параллельные записи файлов
-	// безопасны — WriteAtomic пишет во временный файл с уникальным
+	// безопасны - WriteAtomic пишет во временный файл с уникальным
 	// именем и переименовывает атомарно.
 	err := a.repo.SaveSession(snap)
 	// Ошибка записи молча глоталась: полный диск или недоступный путь
 	// означали, что сессия перестаёт переживать перезапуск без единого
-	// слова — история потеряна, а пользователь уверен в обратном.
+	// слова - история потеряна, а пользователь уверен в обратном.
 	// Показываем один раз за прогон: сессию пишут на каждый ход, и спам
 	// хуже одной honest-строки.
 	if err != nil && !a.saveErrShown.Swap(true) {
@@ -818,12 +824,12 @@ func (a *app) saveSession() {
 	}
 }
 
-// sessionSnapshotLocked — глубокая копия сессии для записи на диск;
+// sessionSnapshotLocked - глубокая копия сессии для записи на диск;
 // зовётся под sessMu. Копируются все срезы, которые писатели дописывают
 // (Messages, Todos, Checkpoints, SubagentRuns), и карта грантов
 // (Perms.Clone): marshal снимка идёт за пределами замка, и общий массив
 // с append'ом писателя был бы гонкой чтения с записью. Элементы истории
-// на месте не правит никто — только append и замена целиком (AddMessage,
+// на месте не правит никто - только append и замена целиком (AddMessage,
 // ReplaceMessages), поэтому поэлементной копии не требуется; при
 // появлении такого письма копировать придётся и элементы.
 func (a *app) sessionSnapshotLocked() *core.Session {
@@ -836,7 +842,7 @@ func (a *app) sessionSnapshotLocked() *core.Session {
 	return &c
 }
 
-// shutdown — закрыть всё, что переживёт процесс: дочерние MCP-серверы и
+// shutdown - закрыть всё, что переживёт процесс: дочерние MCP-серверы и
 // language servers, затем журнал миссии. Идемпотентна: её зовут и defer,
 // и аварийные ветки перед os.Exit, и сигнал.
 func (a *app) shutdown() {
@@ -858,7 +864,7 @@ func (a *app) shutdown() {
 	a.cronMu.Unlock()
 }
 
-// buildTools — собрать реестр инструментов.
+// buildTools - собрать реестр инструментов.
 func (a *app) buildTools() {
 	// Замечания относятся к конкретной сборке реестра. Без сброса повторная
 	// сборка (смена песочницы, /ext trust) дописывала бы их в конец старого
@@ -885,12 +891,12 @@ func (a *app) buildTools() {
 		Extend:     a.extendTurn,
 		OnProgress: a.onProgress,
 		// Доверие к коду из проекта. Хранилище всегда есть, даже если файл
-		// согласий пуст: тогда «нет согласия» и «хранилища нет» — одно и то же.
+		// согласий пуст: тогда "нет согласия" и "хранилища нет" - одно и то же.
 		Trust: tools.NewTrustStore(a.store.Root),
 		LSP:   a.lsp,
 	}
 	// Сборка в локальную переменную: реестр появляется в a.tools одним
-	// свопом под svcMu — читатели хода не видят полусобранный реестр
+	// свопом под svcMu - читатели хода не видят полусобранный реестр
 	// (без скиллов и расширений) посреди перестройки.
 	reg := tools.New(env)
 	reg.RegisterSkills()
@@ -901,7 +907,7 @@ func (a *app) buildTools() {
 	reg.RegisterExtTools()
 	n, warns := reg.RegisterMCP()
 	if n > 0 && !a.quiet {
-		a.setupNotes = append(a.setupNotes, fmt.Sprintf("MCP: подключено инструментов — %d", n))
+		a.setupNotes = append(a.setupNotes, fmt.Sprintf("MCP: подключено инструментов - %d", n))
 	}
 	// Одно подключённое расширение не должно прятать предупреждения
 	// о соседних: раньше они терялись, если n > 0.
@@ -910,11 +916,11 @@ func (a *app) buildTools() {
 	a.reportPendingCode()
 }
 
-// reportPendingCode — сказать при старте, что код из проекта ждёт подтверждения.
+// reportPendingCode - сказать при старте, что код из проекта ждёт подтверждения.
 //
 // Молчать нельзя: иначе выглядит так, будто расширений и MCP-серверов просто
-// нет, а на самом деле их инструменты не подключены — и агент будет
-// уверенно говорить «такого инструмента у меня нет».
+// нет, а на самом деле их инструменты не подключены - и агент будет
+// уверенно говорить "такого инструмента у меня нет".
 func (a *app) reportPendingCode() {
 	if a.quiet {
 		return
@@ -936,13 +942,13 @@ func (a *app) reportPendingCode() {
 		core.Truncate(strings.Join(names, ", "), 70), kind))
 }
 
-// sandboxMode — разобрать один источник режима песочницы.
+// sandboxMode - разобрать один источник режима песочницы.
 //
 // Опечатка (например -sandbox выклклено) не должна молча откатываться
 // на следующий источник: при GCLI_SANDBOX=off или sandbox=off в конфиге
 // защита выключилась бы именно там, где человек её явно просил не
-// трогать. Непонятное значение — это включённая песочница плюс
-// предупреждение, а не «продолжить искать дальше».
+// трогать. Непонятное значение - это включённая песочница плюс
+// предупреждение, а не "продолжить искать дальше".
 func (a *app) sandboxMode(source, val string) core.SandboxMode {
 	mode, ok := core.ParseSandboxMode(val)
 	if ok {
@@ -950,15 +956,15 @@ func (a *app) sandboxMode(source, val string) core.SandboxMode {
 	}
 	if strings.TrimSpace(val) != "" {
 		a.startupNotes = append(a.startupNotes,
-			"Песочница: не понял "+source+"="+strconv.Quote(val)+" — ждал on или off, действует включённая")
+			"Песочница: не понял "+source+"="+strconv.Quote(val)+" - ждал on или off, действует включённая")
 		return core.SandboxOn
 	}
 	return core.SandboxUnset
 }
 
-// setupRules — собрать правила разрешений из всех слоёв конфигов.
+// setupRules - собрать правила разрешений из всех слоёв конфигов.
 //
-// Порядок слоёв и почему он такой — в core.LayeredRulesFrom. Здесь важно
+// Порядок слоёв и почему он такой - в core.LayeredRulesFrom. Здесь важно
 // другое: битый gcli.json не должен пройти молча. Если файл есть, но не
 // разбирается, агент продолжил бы работать по старым правилам, и человек
 // удивился бы, почему его deny не сработал. Поэтому ошибка попадает в
@@ -967,7 +973,7 @@ func (a *app) setupRules() core.Rules {
 	pc, path, err := core.LoadProjectConfig(a.workDir)
 	var notes []string
 	if err != nil {
-		notes = append(notes, "Правила разрешений: "+err.Error()+" — правила из этого файла не применены")
+		notes = append(notes, "Правила разрешений: "+err.Error()+" - правила из этого файла не применены")
 		pc, path = nil, ""
 	}
 	rules, ruleErr := core.LayeredRulesFrom(&a.repo.Cfg, pc)
@@ -987,16 +993,16 @@ func (a *app) setupRules() core.Rules {
 	return rules
 }
 
-// setupSandbox — решить, включать ли песочницу, и собрать её.
+// setupSandbox - решить, включать ли песочницу, и собрать её.
 //
 // Три источника, по убыванию приоритета: флаг -sandbox, переменная
 // GCLI_SANDBOX, значение из конфига.
 //
-// Дефолт — включено. Раньше здесь стоял «выключено, пока не попросят»:
+// Дефолт - включено. Раньше здесь стоял "выключено, пока не попросят":
 // это было сделано до того, как песочницу начали проверять в bash, и тогда
 // ограничение было лишь подсказкой. Теперь, когда защита настоящая, выключенная
 // по умолчанию песочница означала бы, что уязвимым является обычный запуск,
-// а защищённым — специальный. Пользователь выключает её руками (-sandbox off,
+// а защищённым - специальный. Пользователь выключает её руками (-sandbox off,
 // /sandbox off или конфиг), и это решение запоминается.
 func (a *app) setupSandbox(flagVal string) *tools.Sandbox {
 	mode := a.sandboxMode("флаг -sandbox", flagVal)
@@ -1007,7 +1013,7 @@ func (a *app) setupSandbox(flagVal string) *tools.Sandbox {
 		mode = a.repo.Cfg.Sandbox
 	}
 	if mode == core.SandboxUnset {
-		// Не задано нигде — действует дефолт: песочница включена.
+		// Не задано нигде - действует дефолт: песочница включена.
 		mode = core.SandboxOn
 	}
 	if mode == core.SandboxOff {
@@ -1028,10 +1034,10 @@ func (a *app) setupSandbox(flagVal string) *tools.Sandbox {
 	return sb
 }
 
-// buildPool — собрать пул субагентов.
+// buildPool - собрать пул субагентов.
 func (a *app) buildPool() {
 	// Runner оборачивается слоем прочности: временный обрыв сети и
-	// негодный (пустой/обрезанный) отчёт — это не повод оставлять
+	// негодный (пустой/обрезанный) отчёт - это не повод оставлять
 	// главного агента без результата. Раньше такие сбои доходили до
 	// него как есть, и он получал обрывок вместо ответа.
 	runner := a.runSubagent
@@ -1050,7 +1056,7 @@ func (a *app) buildPool() {
 	}))
 }
 
-// installSignalHandler — Ctrl+C: прервать генерацию, повторное — выход.
+// installSignalHandler - Ctrl+C: прервать генерацию, повторное - выход.
 func (a *app) installSignalHandler() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)
@@ -1068,7 +1074,7 @@ func (a *app) installSignalHandler() {
 			// В полноэкранном режиме терминал возвращает не os.Exit, а
 			// цикл интерфейса: он снимет raw-режим и выйдет из
 			// альтернативного экрана. Иначе Ctrl+C (присланный извне)
-			// оставил бы консоль в «слепом» состоянии.
+			// оставил бы консоль в "слепом" состоянии.
 			if tuiApp != nil {
 				tuiApp.Quit()
 				continue
@@ -1079,7 +1085,7 @@ func (a *app) installSignalHandler() {
 			}
 			// Терминал обязан вернуться в исходный режим ДО os.Exit:
 			// defer не выполнится, и после второго Ctrl+C пользователь
-			// остался бы со «слепым» терминалом без эха.
+			// остался бы со "слепым" терминалом без эха.
 			if a.stdin != nil {
 				a.stdin.disableRaw()
 			}
@@ -1093,7 +1099,7 @@ func (a *app) installSignalHandler() {
 	}()
 }
 
-// SetTodos/Todos — интерфейс сессии для инструментов.
+// SetTodos/Todos - интерфейс сессии для инструментов.
 func (a *app) SetTodos(todos []tools.TodoItem) {
 	sessMu.Lock()
 	a.sess.Todos = a.sess.Todos[:0]
@@ -1113,7 +1119,7 @@ func (a *app) Todos() []tools.TodoItem {
 	return out
 }
 
-// sessionTodos — копия плана для безопасного чтения из UI-потока.
+// sessionTodos - копия плана для безопасного чтения из UI-потока.
 func (a *app) sessionTodos() []core.Todo {
 	sessMu.Lock()
 	defer sessMu.Unlock()
@@ -1122,7 +1128,7 @@ func (a *app) sessionTodos() []core.Todo {
 	return out
 }
 
-// sessionTitle — заголовок сессии для UI-потока: его пишет turn()
+// sessionTitle - заголовок сессии для UI-потока: его пишет turn()
 // (в том числе из cron-горутины), а читают команды другого потока.
 func (a *app) sessionTitle() string {
 	sessMu.Lock()
@@ -1163,20 +1169,20 @@ func (a *app) notesText() string {
 //      reasonPrintedLen    сколько байт буфера уже на экране
 //
 // Печать всегда под reasonPrint: ею пользуются и стриминг, и Ctrl+O.
-// reasonOpen держим честным — он равен «маркер напечатан и ещё не закрыт»,
-// а не «пользователь что-то просил»: строка ожидания могла уже погаснуть
+// reasonOpen держим честным - он равен "маркер напечатан и ещё не закрыт",
+// а не "пользователь что-то просил": строка ожидания могла уже погаснуть
 // сама, и тогда ThinkChunk в ThinkMarker поставит лишний заголовок.
 
-// onReason — кусок размышлений модели.
+// onReason - кусок размышлений модели.
 //
 // Показ по умолчанию выключен. Куски всегда копятся в буфере (иначе показать
 // их задним числом было бы нечем), а на экран попадают только если
-// пользователь включил показ по Ctrl+O. Показать накопленное целиком —
+// пользователь включил показ по Ctrl+O. Показать накопленное целиком -
 // работа toggleReason; здесь мы дописываем кусок в буфер и, если показ уже
 // включён, печатаем его в открытый поток.
 //
-// Метод зовётся из горутины стриминга, поэтому всё состояние — под
-// reasonMu, порядок печати — под reasonPrint.
+// Метод зовётся из горутины стриминга, поэтому всё состояние - под
+// reasonMu, порядок печати - под reasonPrint.
 func (a *app) onReason(s string) {
 	if s == "" || a.quiet {
 		return
@@ -1193,14 +1199,14 @@ func (a *app) onReason(s string) {
 
 	if !live {
 		// Пользователь ещё не просил показывать: молча копим и подсказываем,
-		// что посмотреть можно. Подсказку ставим даже при свернутом показе —
+		// что посмотреть можно. Подсказку ставим даже при свернутом показе -
 		// свернул он сам, значит знает про Ctrl+O.
 		a.hintReason()
 		return
 	}
 	if !open {
 		// Пользователь нажал Ctrl+O до первого куска: поток ещё не открыт,
-		// печатать в него рано — сначала маркер, иначе мысль уйдёт в строку
+		// печатать в него рано - сначала маркер, иначе мысль уйдёт в строку
 		// ответа без заголовка.
 		a.openThinkStream()
 	}
@@ -1208,18 +1214,18 @@ func (a *app) onReason(s string) {
 	a.markReasonPrinted(len(s))
 }
 
-// onReasonPub — onReason: размышления доезжают до подписчиков, не поднимая
+// onReasonPub - onReason: размышления доезжают до подписчиков, не поднимая
 // агента. (SSE-шина удалена вместе с веб-интерфейсом.)
 func (a *app) onReasonPub(s string) {
 	a.onReason(s)
 }
 
-// openThinkStream — открыть на экране поток размышлений: погасить строку
+// openThinkStream - открыть на экране поток размышлений: погасить строку
 // ожидания и напечатать маркер события. Дальше текст печатается через
 // ThinkChunk, и перевод строки закрывает ThinkEnd.
 //
 // reasonPrint здесь уже взят: блокировки строго в порядке
-// reasonPrint → reasonMu → UI, поэтому вложиться в свой же мьютекс нельзя.
+// reasonPrint -> reasonMu -> UI, поэтому вложиться в свой же мьютекс нельзя.
 func (a *app) openThinkStream() {
 	a.reasonMu.Lock()
 	already := a.reasonOpen
@@ -1231,15 +1237,15 @@ func (a *app) openThinkStream() {
 	a.ui.ThinkMarker()
 }
 
-// closeThinkStream — свернуть открытый на экране поток размышлений.
+// closeThinkStream - свернуть открытый на экране поток размышлений.
 //
 // Модель перешла к ответу (или к следующей итерации с инструментами):
 // закрываем поток переводом строки, иначе ответ допишется в хвост мысли.
-// Накопленное не выбрасываем — Ctrl+O покажет его снова целиком.
+// Накопленное не выбрасываем - Ctrl+O покажет его снова целиком.
 //
 // Здесь reasonPrint не нужен: перевод строки ничего не печатает из буфера,
-// а закрыть поток после живого куска нельзя — кусок приходит из другой
-// горутины, и «свернуть» против неё бессмысленно.
+// а закрыть поток после живого куска нельзя - кусок приходит из другой
+// горутины, и "свернуть" против неё бессмысленно.
 func (a *app) closeThinkStream() {
 	a.reasonMu.Lock()
 	open := a.reasonOpen
@@ -1250,7 +1256,7 @@ func (a *app) closeThinkStream() {
 	}
 }
 
-// hintReason — показать на строке ожидания подсказку про Ctrl+O, один раз.
+// hintReason - показать на строке ожидания подсказку про Ctrl+O, один раз.
 func (a *app) hintReason() {
 	a.reasonMu.Lock()
 	if a.reasonHinted || a.reasonShown {
@@ -1262,30 +1268,30 @@ func (a *app) hintReason() {
 	a.ui.SetSpinHint(reasonHint)
 }
 
-// markReasonPrinted — отметить, что в конец буфера показано n байт.
+// markReasonPrinted - отметить, что в конец буфера показано n байт.
 func (a *app) markReasonPrinted(n int) {
 	a.reasonMu.Lock()
 	defer a.reasonMu.Unlock()
 	a.reasonPrintedLen += n
 }
 
-// toggleReason — Ctrl+O: показать размышления или свернуть их обратно.
+// toggleReason - Ctrl+O: показать размышления или свернуть их обратно.
 //
 // Первое нажатие показывает накопленное и включает показ дальше по ходу,
 // повторное сворачивает поток и останавливает показ. Накопленное при этом
-// не выбрасывается: «скрыть» значит «убрать с глаз», а не «выбросить».
+// не выбрасывается: "скрыть" значит "убрать с глаз", а не "выбросить".
 //
 // Между ходами модель не думает и в буфере текущего хода пусто, но мысли
-// предыдущего ответа ещё интересны — тогда показываем reasonLast. Раньше
-// нажатие после ответа упиралось в пустой буфер и отвечало «размышлений пока
-// нет», хотя текст был на экране минуту назад.
+// предыдущего ответа ещё интересны - тогда показываем reasonLast. Раньше
+// нажатие после ответа упиралось в пустой буфер и отвечало "размышлений пока
+// нет", хотя текст был на экране минуту назад.
 func (a *app) toggleReason() {
 	if a.quiet {
 		return
 	}
 	// Ждём конца текущей печати: иначе Ctrl+O напечатает накопленное, а
 	// пришедший следом кусок допишется в начало потока, а отметка
-	// «показано N байт» окажется оптимистичной.
+	// "показано N байт" окажется оптимистичной.
 	a.reasonPrint.Lock()
 	defer a.reasonPrint.Unlock()
 
@@ -1294,16 +1300,16 @@ func (a *app) toggleReason() {
 	hasAny := a.reasonAny
 	open := a.reasonOpen
 	// Показать нечего: модель ещё думает, первый кусок не пришёл. Воля
-	// пользователя сохраняется — мысли пойдут на экран сами, — но поток на
+	// пользователя сохраняется - мысли пойдут на экран сами, - но поток на
 	// экране не открываем: печатать всё равно нечего.
 	if !hasAny {
 		a.reasonLive = true
 		a.reasonMu.Unlock()
-		a.ui.Info("размышлений пока нет — модель ещё думает")
+		a.ui.Info("размышлений пока нет - модель ещё думает")
 		return
 	}
-	// Модель ещё думает: переключаем показ. Уже открытый поток на экране —
-	// повод свернуть. Показ был выключен — повод открыть.
+	// Модель ещё думает: переключаем показ. Уже открытый поток на экране -
+	// повод свернуть. Показ был выключен - повод открыть.
 	if !a.reasonLive || !open {
 		a.reasonLive = true
 		fresh := ""
@@ -1317,8 +1323,8 @@ func (a *app) toggleReason() {
 		a.reasonOpen = true
 		a.reasonMu.Unlock()
 		// Маркер нужен только если есть что показать. Раньше он печатался
-		// при каждом открытии потока: показал всё → свернул → снова
-		// открыл — и под первым заголовком появлялся второй пустой.
+		// при каждом открытии потока: показал всё -> свернул -> снова
+		// открыл - и под первым заголовком появлялся второй пустой.
 		// Пустое переоткрытие печатает ничего: первый же кусок откроет
 		// заголовок сам (ThinkChunk ставит маркер, если его не было).
 		if !open && fresh != "" {
@@ -1335,10 +1341,10 @@ func (a *app) toggleReason() {
 	a.ui.ThinkEnd()
 }
 
-// showLastReason — Ctrl+O между ходами: показать размышления последнего
+// showLastReason - Ctrl+O между ходами: показать размышления последнего
 // завершённого хода. Отдельный путь, а не toggleReason: повторное нажатие
 // здесь должно печатать заново (мысли уже уехали вверх по экрану), а воля
-// показа «дальше» к будущему ходу отношения не имеет.
+// показа "дальше" к будущему ходу отношения не имеет.
 //
 // Ждёт reasonPrint: пока идёт печать ответа, печатать мысли в её хвост
 // нельзя.
@@ -1355,7 +1361,7 @@ func (a *app) showLastReason() {
 	a.reasonShown = true
 	// На экране появился новый блок: REPL обязан перерисовать приглашение
 	// усадкой, иначе кот со строкой состояния ляжет прямо на мысли. Пустой
-	// блок и честное «пока нет» такой перерисовки не требуют.
+	// блок и честное "пока нет" такой перерисовки не требуют.
 	a.reasonPast = open || strings.TrimSpace(text) != ""
 	a.reasonMu.Unlock()
 
@@ -1374,16 +1380,16 @@ func (a *app) showLastReason() {
 	a.closeThinkStream()
 }
 
-// reasonPastShown — печатал ли REPL вывод после последнего блока мыслей.
+// reasonPastShown - печатал ли REPL вывод после последнего блока мыслей.
 // Читает флаг только REPL (единственный поток управления, вызывающий ctrlO),
-// а пишут showLastReason/clearReasonPast — поэтому доступ идёт под reasonMu.
+// а пишут showLastReason/clearReasonPast - поэтому доступ идёт под reasonMu.
 func (a *app) reasonPastShown() bool {
 	a.reasonMu.Lock()
 	defer a.reasonMu.Unlock()
 	return a.reasonPast
 }
 
-// clearReasonPast — REPL отрисовал приглашение поверх блока мыслей: с этого
+// clearReasonPast - REPL отрисовал приглашение поверх блока мыслей: с этого
 // момента анимациям и усадке снова можно работать как обычно.
 func (a *app) clearReasonPast() {
 	a.reasonMu.Lock()
@@ -1391,12 +1397,12 @@ func (a *app) clearReasonPast() {
 	a.reasonMu.Unlock()
 }
 
-// resetReason — новый ход: буфер и состояние хода обнуляются, воля
+// resetReason - новый ход: буфер и состояние хода обнуляются, воля
 // пользователя (reasonLive) сохраняется.
 //
 // Размышления ПРЕДЫДУЩЕГО хода (reasonLast) здесь не трогаем: они нужны
 // именно для просмотра между ходами, и обнулять их на старте нового хода
-// означало бы вернуть баг «после ответа посмотреть нечего». Обновляет их
+// означало бы вернуть баг "после ответа посмотреть нечего". Обновляет их
 // конец хода (finishReason).
 func (a *app) resetReason() {
 	a.reasonMu.Lock()
@@ -1409,10 +1415,10 @@ func (a *app) resetReason() {
 	a.reasonMu.Unlock()
 }
 
-// finishReason — ход закончился: размышления текущего хода становятся
-// «последними», и Ctrl+O между ходами покажет именно их.
+// finishReason - ход закончился: размышления текущего хода становятся
+// "последними", и Ctrl+O между ходами покажет именно их.
 //
-// Модель могла не размышлять вовсе (быстрый ответ, вызов инструмента) —
+// Модель могла не размышлять вовсе (быстрый ответ, вызов инструмента) -
 // тогда прошлые мысли остаются в силе: они всё ещё последние, что есть.
 func (a *app) finishReason() {
 	a.reasonPrint.Lock()
@@ -1424,11 +1430,11 @@ func (a *app) finishReason() {
 	a.reasonMu.Unlock()
 }
 
-// ctrlO — единственная реакция на Ctrl+O.
+// ctrlO - единственная реакция на Ctrl+O.
 //
-// Идёт ход — переключаем показ размышлений текущего хода; ход закончен —
+// Идёт ход - переключаем показ размышлений текущего хода; ход закончен -
 // показываем мысли последнего завершённого (reasonLast). Разветвление по
-// a.running, а не по «есть ли что показать»: ход мог начаться, а первый кусок
+// a.running, а не по "есть ли что показать": ход мог начаться, а первый кусок
 // размышлений ещё не пришёл, и a.reasonAny == false там ничего не говорит.
 func (a *app) ctrlO() {
 	a.mu.Lock()
@@ -1441,11 +1447,11 @@ func (a *app) ctrlO() {
 	a.showLastReason()
 }
 
-// watchKeys — читать горячие клавиши, пока жив done, и звать onCtrlO.
+// watchKeys - читать горячие клавиши, пока жив done, и звать onCtrlO.
 //
 // Ровно один читатель keys на всё время работы: канал единственный, и два
 // конкурирующих читателя обработали бы одно нажатие дважды либо потеряли бы
-// его на границе ходов. Ввод строк не трогаем — его читает repl (см.
+// его на границе ходов. Ввод строк не трогаем - его читает repl (см.
 // stdinReader), поэтому Ctrl+O не может доесть первую букву запроса.
 func (a *app) watchKeys(done <-chan struct{}, onCtrlO func()) {
 	if a.stdin == nil || onCtrlO == nil {
@@ -1466,7 +1472,7 @@ func (a *app) watchKeys(done <-chan struct{}, onCtrlO func()) {
 	}
 }
 
-// keyWatcher — горутина чтения горячих клавиш и её остановка.
+// keyWatcher - горутина чтения горячих клавиш и её остановка.
 //
 // stop закрывают, чтобы прекратить чтение, done ждёт, чтобы убедиться, что
 // читатель действительно вышел.
@@ -1476,7 +1482,7 @@ type keyWatcher struct {
 	once sync.Once
 }
 
-// startWatcher — запустить читателя клавиш с заданной реакцией на Ctrl+O.
+// startWatcher - запустить читателя клавиш с заданной реакцией на Ctrl+O.
 func (a *app) startWatcher(onCtrlO func()) *keyWatcher {
 	w := &keyWatcher{stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
@@ -1486,10 +1492,10 @@ func (a *app) startWatcher(onCtrlO func()) *keyWatcher {
 	return w
 }
 
-// stopWatcher — остановить читателя клавиш и дождаться его конца.
+// stopWatcher - остановить читателя клавиш и дождаться его конца.
 //
 // Идемпотентна: её зовут и defer в main, и тесты по кругу, а второе
-// закрытие того же канала — паника.
+// закрытие того же канала - паника.
 func (w *keyWatcher) stopWatcher() {
 	if w == nil {
 		return
@@ -1498,7 +1504,7 @@ func (w *keyWatcher) stopWatcher() {
 	<-w.done
 }
 
-// turnActive — идёт ли сейчас ход. Команды, подменяющие сессию (/fork,
+// turnActive - идёт ли сейчас ход. Команды, подменяющие сессию (/fork,
 // /resume, /clear), проверяют это до Lock в sessSwap: предупреждение
 // честнее молчаливого ожидания, а Lock после проверки закрывает окно,
 // в котором cron-ход мог начаться между проверкой и подменой.
@@ -1508,7 +1514,7 @@ func (a *app) turnActive() bool {
 	return a.running
 }
 
-// turn — один ход из читателя ввода (REPL-цикл, TUI): подтверждения и
+// turn - один ход из читателя ввода (REPL-цикл, TUI): подтверждения и
 // вопросы можно задавать человеку у терминала.
 func (a *app) turn(text string) error {
 	a.turnMu.Lock()
@@ -1516,7 +1522,7 @@ func (a *app) turn(text string) error {
 	return a.turnLocked(text, true)
 }
 
-// cronTurn — ход из cron-горутины. Пока cron ждал turnMu, пользователь
+// cronTurn - ход из cron-горутины. Пока cron ждал turnMu, пользователь
 // мог вернуться и что-то ввести: под замком перепроверяем активность,
 // иначе итерация била бы сразу после хода человека, хотя тот уже не
 // молчит. Заодно перепроверяем /cron off, пока ждём очереди. turnLocked
@@ -1533,9 +1539,9 @@ func (a *app) cronTurn(text string) error {
 	return a.turnLocked(text, false)
 }
 
-// turnLocked — тело хода под turnMu. interactive говорит, можно ли ходу
+// turnLocked - тело хода под turnMu. interactive говорит, можно ли ходу
 // спрашивать человека у терминала (см. turnInteractive): ход из читателя
-// ввода — да, фоновый из cron — нет.
+// ввода - да, фоновый из cron - нет.
 func (a *app) turnLocked(text string, interactive bool) error {
 	// Ход держит барьер на подмену сессии: без него /fork или /clear,
 	// выполненные в TUI во время cron-хода, подменяли бы a.sess прямо
@@ -1546,7 +1552,7 @@ func (a *app) turnLocked(text string, interactive bool) error {
 		fmt.Fprintf(os.Stderr, "TURN IN: %q (len=%d)\n", text, len(text))
 	}
 	text = tools.ApplyMentions(a.workDir, text)
-	// Заголовок — под sessMu: turn() зовётся и из cron/watch/цепочки,
+	// Заголовок - под sessMu: turn() зовётся и из cron/watch/цепочки,
 	// а /export и /fork читают его из другой горутины.
 	sessMu.Lock()
 	if a.sess.Title == "" {
@@ -1555,8 +1561,8 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	sessMu.Unlock()
 
 	// Снимок проекта до начала хода: /revert должен уметь откатить и
-	// «плохой» ход целиком — включая правки, сделанные bash-командами,
-	// мимо чекпоинтов /undo. Ошибка не ломает ход: снапшоты — страховка.
+	// "плохой" ход целиком - включая правки, сделанные bash-командами,
+	// мимо чекпоинтов /undo. Ошибка не ломает ход: снапшоты - страховка.
 	if a.repo.Cfg.SnapshotsEnabled() {
 		if _, _, err := core.TakeSnapshot(a.workDir, text); err != nil {
 			a.setSnapErr(err)
@@ -1573,17 +1579,17 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	a.agentActiveBegin()
 	defer a.agentActiveEnd()
 	// Размышления нового хода начинаются с чистого листа; включённость
-	// показа (Ctrl+O) при этом сохраняется — она настройка пользователя,
+	// показа (Ctrl+O) при этом сохраняется - она настройка пользователя,
 	// а не состояние хода.
 	a.resetReason()
-	// Любой ход — активность: сбрасываем таймер автономных итераций.
+	// Любой ход - активность: сбрасываем таймер автономных итераций.
 	a.cronTouch()
 	defer func() {
-		// Сначала «закрываем» ход: размышления становятся последними, и Ctrl+O
-		// между ходами показывает именно их. Потом — running=false: держать
+		// Сначала "закрываем" ход: размышления становятся последними, и Ctrl+O
+		// между ходами показывает именно их. Потом - running=false: держать
 		// ход открытым до конца сохранения сессии нельзя, иначе нажатие
-		// Ctrl+O в этот зазор смотрело бы в пустой буфер и отвечало «пока
-		// нет», хотя мысли уже есть.
+		// Ctrl+O в этот зазор смотрело бы в пустой буфер и отвечало "пока
+		// нет", хотя мысли уже есть.
 		a.finishReason()
 		a.mu.Lock()
 		a.running = false
@@ -1592,15 +1598,15 @@ func (a *app) turnLocked(text string, interactive bool) error {
 		a.mu.Unlock()
 		cancel()
 		a.saveSession()
-		// Ход завершён — обновим метку активности для cron.
+		// Ход завершён - обновим метку активности для cron.
 		a.cronTouch()
 	}()
 
 	ag := a.newAgent(false)
-	// Кот работает: строка «thinking...» с его мордочкой переливается
-	// под эхом задачи. Первый delta гасит строку, конец хода — тоже.
+	// Кот работает: строка "thinking..." с его мордочкой переливается
+	// под эхом задачи. Первый delta гасит строку, конец хода - тоже.
 	// Поза кота над строкой состояния не трогаем: после Enter курсор
-	// уехал вниз, и перерисовка «вслепую» попадала по чужим строкам.
+	// уехал вниз, и перерисовка "вслепую" попадала по чужим строкам.
 	if !a.quiet {
 		a.ui.MascotIdleStop()
 		state, word := ui.MascotThink, "thinking..."
@@ -1608,7 +1614,7 @@ func (a *app) turnLocked(text string, interactive bool) error {
 			state, word = ui.MascotPensive, "planning..."
 		}
 		// В полноэкранном режиме запрос уже стоит в ленте: печатать эхо
-		// второй раз — дублировать его.
+		// второй раз - дублировать его.
 		if a.tuiApp() == nil {
 			a.ui.RequestEcho(text)
 		}
@@ -1618,7 +1624,7 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	// Ctrl+O не держит своего читателя: он уже работает весь сеанс
 	// (см. main), иначе на границе ходов два конкурирующих читателя
 	// канала либо обработали бы одно нажатие дважды, либо потеряли бы
-	// его. Мысли хода отдаёт defer — так они успевают стать последними
+	// его. Мысли хода отдаёт defer - так они успевают стать последними
 	// ещё до снятия флага running.
 	err := ag.Run(ctx, text)
 	a.ui.SpinnerStop()
@@ -1630,7 +1636,7 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	return err
 }
 
-// cronTouch — пометить момент активности (ход или ввод пользователя).
+// cronTouch - пометить момент активности (ход или ввод пользователя).
 func (a *app) cronTouch() {
 	a.cronMu.Lock()
 	if a.cronEnabled {
@@ -1639,13 +1645,13 @@ func (a *app) cronTouch() {
 	a.cronMu.Unlock()
 }
 
-// cronNextInterval — следующий интервал ожидания: 15–20 минут со случайным
+// cronNextInterval - следующий интервал ожидания: 15-20 минут со случайным
 // сдвигом, чтобы итерации разных сессий не били в один такт.
 func cronNextInterval() time.Duration {
 	return 15*time.Minute + time.Duration(rand.Int63n(int64(5*time.Minute)))
 }
 
-// cronLoop — фоновая горутина автономных итераций.
+// cronLoop - фоновая горутина автономных итераций.
 // Тикает каждые 30 секунд; если пользователь молчит дольше интервала и
 // агент не занят, отправляет универсальную задачу самосовершенствования.
 func (a *app) cronLoop() {
@@ -1694,12 +1700,12 @@ func (a *app) cronTick() {
 	}
 }
 
-// cronUniversalPrompt — универсальная задача для автономной итерации:
+// cronUniversalPrompt - универсальная задача для автономной итерации:
 // продолжать работу над проектом, искать баги, проблемы, уязвимости,
 // улучшать код.
 func cronUniversalPrompt() string {
 	return "Продолжай работу над проектом самостоятельно.\n\n" +
-		"Твоя задача — найти и исправить баги, проблемы и уязвимости, а затем улучшить проект дальше.\n\n" +
+		"Твоя задача - найти и исправить баги, проблемы и уязвимости, а затем улучшить проект дальше.\n\n" +
 		"Что делать:\n" +
 		"1. Просмотри структуру проекта, ключевые файлы и недавние изменения.\n" +
 		"2. Найди баги: обработка ошибок, пограничные случаи, необработанные nil, паники, утечки ресурсов (файлы, сети, горутины).\n" +
@@ -1708,7 +1714,7 @@ func cronUniversalPrompt() string {
 		"5. Найди проблемы качества: дублирование кода, мёртвый код, непонятные имена, отсутствие типов/проверок.\n" +
 		"6. Исправь найденные проблемы: правь код, добавляй проверки, улучшай обработку ошибок.\n" +
 		"7. После изменений прогони тесты (go test ./...), проверь сборку (go build ./...) и ветеринар (go vet ./...).\n" +
-		"8. Делай чекпоинты перед изменениями — если что-то сломалось, всегда можно откатиться (/revert).\n" +
+		"8. Делай чекпоинты перед изменениями - если что-то сломалось, всегда можно откатиться (/revert).\n" +
 		"9. Не ломай работающий код ради косметики: улучшай только там, где есть реальная выгода.\n" +
 		"10. По итогу напиши краткий отчёт: что нашёл, что исправил, что осталось открытым.\n\n" +
 		"Работай осторожно и пошагово. Сначала изучи, потом исправь, потом проверь."
@@ -1719,11 +1725,11 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 	stream := a.ui.NewStream()
 	a.stream = stream
 	// Снимок пары под provMu: агент целиком живёт на одном провайдере
-	// и модели, а turn() зовётся и из cron-горутины — /model из очереди
+	// и модели, а turn() зовётся и из cron-горутины - /model из очереди
 	// ввода не должен подменять их посреди сборки агента.
 	prov, mdl := a.providerModel()
 	// Снимок конфига под cfgMu: Deps копирует ThinkState-ом весь Config,
-	// а команды ввода (/think, /agents, /plan…) пишут его без очереди busy
+	// а команды ввода (/think, /agents, /plan...) пишут его без очереди busy
 	// пока cron-ход собирает агента. Budget остаётся живым чтением: лимит
 	// может измениться посреди хода, и это нормально.
 	cfg := a.cfgSnap()
@@ -1753,9 +1759,9 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 		Parallel:    cfg.ParallelTools,
 		Quiet:       quiet || a.quiet,
 		OnDelta: func(s string) {
-			// Первый кусок ответа — маскот умолкает и уступает место тексту.
+			// Первый кусок ответа - маскот умолкает и уступает место тексту.
 			a.ui.SpinnerStop()
-			// Ответ пошёл — поток размышлений закрыт. Дальше модель
+			// Ответ пошёл - поток размышлений закрыт. Дальше модель
 			// размышляет уже по ходу инструментов (в agent-режиме), и
 			// Ctrl+O снова покажет накопленное.
 			a.closeThinkStream()
@@ -1778,7 +1784,7 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 	ag.OnExtend = a.onExtend
 	// Прогон живёт на агенте: без этого вызова mission.json остался бы
 	// просто файлом, а цикл вёл бы себя как обычный ход. attachMission
-	// вместо прямого StartMission — чтобы подхват после обрыва
+	// вместо прямого StartMission - чтобы подхват после обрыва
 	// отметился в журнале и в истории ровно один раз за сеанс.
 	a.attachMission(ag)
 	a.mu.Lock()
@@ -1797,11 +1803,11 @@ func (a *app) maxIters() int {
 	return agent.DefaultMaxIters
 }
 
-// maxItersAbs — абсолютный потолок итераций с продлениями.
+// maxItersAbs - абсолютный потолок итераций с продлениями.
 //
-// Нижняя граница — базовый лимит, а не 1: конфиг с max_iters=200 и
+// Нижняя граница - базовый лимит, а не 1: конфиг с max_iters=200 и
 // max_iters_abs=50 не должен тихо урезать работающие 200 итераций. Верхняя
-// граница — дефолт пакета, потому что при max_iters=40 потолок по умолчанию
+// граница - дефолт пакета, потому что при max_iters=40 потолок по умолчанию
 // обязан оставаться 200: иначе при base == abs продление невозможно и весь
 // механизм мёртв от рождения, хотя формально он включён.
 func (a *app) maxItersAbs() int {
@@ -1813,12 +1819,12 @@ func (a *app) maxItersAbs() int {
 	return core.Clamp(abs, base, 500)
 }
 
-// turnExtendMax — сколько раз за ход можно продлить (0 = дефолт пакета).
+// turnExtendMax - сколько раз за ход можно продлить (0 = дефолт пакета).
 func (a *app) turnExtendMax() int {
 	return core.Clamp(a.repo.Cfg.TurnExtendMax, 0, 20)
 }
 
-// turnExtendStep — размер одного продления в итерациях (0 = дефолт пакета).
+// turnExtendStep - размер одного продления в итерациях (0 = дефолт пакета).
 func (a *app) turnExtendStep() int {
 	return core.Clamp(a.repo.Cfg.TurnExtendStep, 0, 100)
 }
@@ -1827,18 +1833,18 @@ func (a *app) autoCompactLimit() int {
 	if a.repo.Cfg.AutoCompact > 0 {
 		return a.repo.Cfg.AutoCompact
 	}
-	// По умолчанию — 70% мягкого лимита контекста модели. Пара — под
+	// По умолчанию - 70% мягкого лимита контекста модели. Пара - под
 	// provMu: функцию зовут и из хода (self_status, бюджет агента), и
 	// из команд очереди ввода (/status, /usage).
 	prov, mdl := a.providerModel()
 	return prov.CtxSoftLimitFor(mdl)
 }
 
-// onProgress — живой прогресс пакетных операций (multi_*, spawn_agents).
+// onProgress - живой прогресс пакетных операций (multi_*, spawn_agents).
 //
 // События приходят из горутий инструментов, поэтому здесь только перевод
 // типа и передача в UI: тот под своим мьютексом сам разберётся с порядком и
-// с гашением строки ожидания. Накапливать события в app здесь нельзя —
+// с гашением строки ожидания. Накапливать события в app здесь нельзя -
 // список состояния сессии тоже пишется из разных горутин.
 func (a *app) onProgress(ev tools.ProgressEvent) {
 	if a.ui == nil {
@@ -1855,11 +1861,11 @@ func (a *app) onProgress(ev tools.ProgressEvent) {
 	})
 }
 
-// onToolStart — показать карточку инструмента.
+// onToolStart - показать карточку инструмента.
 func (a *app) onToolStart(tc core.ToolCall, tool *tools.Tool) {
-	// Счётчик — под sessMu: OnToolStart приходит из параллельных горутин
+	// Счётчик - под sessMu: OnToolStart приходит из параллельных горутин
 	// инструментов (execTools при Parallel, пачка spawn_agent), и без
-	// блокировки s.Tools++ гоняли бы друг с другом — потерянные
+	// блокировки s.Tools++ гоняли бы друг с другом - потерянные
 	// инкременты в /status и гонка, которую ловит -race. Тот же
 	// паттерн, что у RecordRequest в onUsage и RecordError в AddError.
 	sessMu.Lock()
@@ -1884,7 +1890,7 @@ func (a *app) onToolStart(tc core.ToolCall, tool *tools.Tool) {
 	})
 }
 
-// serveToolStatus — статус и выжимка результата инструмента для машинных
+// serveToolStatus - статус и выжимка результата инструмента для машинных
 // клиентов (SSE /v1/events) и карточки TUI. Одна точка правды: то, что
 // пользователь видит в карточке инструмента, то и уходит в оболочку.
 func serveToolStatus(res tools.Result, err error) (string, string) {
@@ -1900,12 +1906,12 @@ func serveToolStatus(res tools.Result, err error) (string, string) {
 	return "ok", res.Summary
 }
 
-// onToolDone — показать результат инструмента.
+// onToolDone - показать результат инструмента.
 func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {
 	status, detail := serveToolStatus(res, err)
 	if status == "fail" {
 		// sessMu: колбэк из паралельной горутины инструмента
-		// (см. onToolStart) — без замка это гонка на Tools/ToolsFailed.
+		// (см. onToolStart) - без замка это гонка на Tools/ToolsFailed.
 		sessMu.Lock()
 		a.sess.Stats.RecordTool(true)
 		sessMu.Unlock()
@@ -1918,7 +1924,7 @@ func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, e
 	}
 	lines := 0
 	// Число строк показываем, только когда их больше одной: у одиночной
-	// строки «1 стр.» — шум, ничего не добавляющий. У картинки строк нет
+	// строки "1 стр." - шум, ничего не добавляющий. У картинки строк нет
 	// вовсе.
 	if res.Text != "" && len(res.Images) == 0 {
 		if n := len(core.SplitLines(res.Text)); n > 1 {
@@ -1938,7 +1944,7 @@ func (a *app) onToolDone(tc core.ToolCall, tool *tools.Tool, res tools.Result, e
 
 func (a *app) onUsage(u core.Usage, d time.Duration) {
 	// Метрики считаются всегда: на них построены /status и /usage.
-	// Токены сессии уже учёл Session.AddUsage (agent.callModel); здесь —
+	// Токены сессии уже учёл Session.AddUsage (agent.callModel); здесь -
 	// только статистика, но тоже под sessMu: субагенты параллельно
 	// отчитываются, и RecordRequest крутит общие счётчики сессии.
 	sessMu.Lock()
@@ -1946,8 +1952,8 @@ func (a *app) onUsage(u core.Usage, d time.Duration) {
 	sessMu.Unlock()
 
 	// Скорость ВЫВОДА по этому запросу: сколько токенов модель написала
-	// за секунду. Входные токены сюда не входят: они — это повторённый
-	// контекст, и делить их на время значит показывать «2194 tok/s»,
+	// за секунду. Входные токены сюда не входят: они - это повторённый
+	// контекст, и делить их на время значит показывать "2194 tok/s",
 	// которых никто не писал.
 	rate := 0.0
 	if d > 0 {
@@ -1970,7 +1976,7 @@ func (a *app) onUsage(u core.Usage, d time.Duration) {
 	}
 }
 
-// shortArgs — короткая подпись аргументов инструмента для карточки.
+// shortArgs - короткая подпись аргументов инструмента для карточки.
 func shortArgs(tc core.ToolCall) string {
 	m := tools.ParseArgs(tc.Args)
 	for _, k := range []string{"command", "path", "pattern", "query", "url", "title", "type", "thought", "input"} {
@@ -1990,11 +1996,11 @@ func shortArgs(tc core.ToolCall) string {
 	return ""
 }
 
-// repl — цикл ввода.
+// repl - цикл ввода.
 //
-// Блок «кот + строка состояния» печатается не на каждой итерации, а
+// Блок "кот + строка состояния" печатается не на каждой итерации, а
 // только там, где выше появился новый вывод: после баннера, команды или
-// хода. Пустой Enter лишь перерисовывает приглашение — иначе скроллбэк
+// хода. Пустой Enter лишь перерисовывает приглашение - иначе скроллбэк
 // забивается одинаковыми котами.
 func (a *app) repl() {
 	header := true
@@ -2010,28 +2016,28 @@ func (a *app) repl() {
 			case a.reasonPastShown():
 				// Блок размышлений уже напечатан: обычная усадка нарисовала бы
 				// второго кота и вторую строку состояния подряд. Повторно
-				// Ctrl+O оставляет в том же режиме — пока не напечатано новое.
+				// Ctrl+O оставляет в том же режиме - пока не напечатано новое.
 				a.ui.Prompt(a.agentMode())
 				a.clearReasonPast()
 				a.ui.MascotIdleStart()
 			case header:
 				a.ui.Println("")
 				// Кот усаживается НАД строкой состояния и живёт на простое:
-				// моргает, скучает, засыпает. На любой ввод — замирает.
+				// моргает, скучает, засыпает. На любой ввод - замирает.
 				a.ui.MascotPerch()
-				// Нижняя панель окна: слева состояние, справа расход —
+				// Нижняя панель окна: слева состояние, справа расход -
 				// контекст с процентом от лимита модели, токены, скорость,
 				// время запроса и деньги.
 				a.ui.MetricsBar(a.statusItems(), a.metrics())
 				header = false
-				// Якорь анимации — только после усадки: курсор стоит на
+				// Якорь анимации - только после усадки: курсор стоит на
 				// строке приглашения, и перерисовка знает, где кот.
 				a.ui.Prompt(a.agentMode())
 				a.ui.MascotIdleStart()
 			default:
 				// Перепечатка приглашения после Enter: курсор уехал на
-				// строку ниже, старая привязка устарела — кот замирает
-				// до следующей усадки. Иначе «слепой» прыжок курсора
+				// строку ниже, старая привязка устарела - кот замирает
+				// до следующей усадки. Иначе "слепой" прыжок курсора
 				// вверх попадал по строке состояния.
 				a.ui.Prompt(a.agentMode())
 			}
@@ -2046,7 +2052,7 @@ func (a *app) repl() {
 					a.ui.Info("до связи!")
 				}
 			}
-			// Дочерние процессы и журнал — до saveSession: последняя
+			// Дочерние процессы и журнал - до saveSession: последняя
 			// запись журнала должна дойти до диска.
 			a.shutdown()
 			a.saveSession()
@@ -2064,11 +2070,11 @@ func (a *app) repl() {
 		line = strings.TrimSpace(line)
 		// Любой ввод пользователя сбрасывает таймер автономных итераций.
 		a.cronTouch()
-		// Любой ввод — кот замолкает немедленно, ещё до разбора строки.
+		// Любой ввод - кот замолкает немедленно, ещё до разбора строки.
 		// После Enter терминал уже перевёл курсор на новую строку, и
 		// слепая перерисовка успела бы попасть по чужим строкам, пока
 		// команда/ход не вызвали MascotIdleStop сами. Раньше команды не
-		// останавливали фоновую анимацию до первой печати — окно гонки.
+		// останавливали фоновую анимацию до первой печати - окно гонки.
 		a.ui.MascotIdleStop()
 		if line == "" {
 			// Пустой ввод: приглашение уже перерисовано в начале цикла,
@@ -2080,11 +2086,11 @@ func (a *app) repl() {
 				a.saveSession()
 				return
 			}
-			header = true // команда печатала вывод — кота сажаем заново
+			header = true // команда печатала вывод - кота сажаем заново
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
-			// Заметка в память проекта (GCLI.md) — приём из Claude Code.
+			// Заметка в память проекта (GCLI.md) - приём из Claude Code.
 			a.appendMemoryNote(line)
 			header = true
 			continue
@@ -2095,17 +2101,17 @@ func (a *app) repl() {
 		}
 		if !a.quiet {
 			// Итог хода глазами кота: мурчание/подмиг при успехе,
-			// фырканье при ошибке, «опять?!» — на второй подряд.
+			// фырканье при ошибке, "опять?!" - на второй подряд.
 			a.mascotResult(err == nil)
 		}
-		header = true // ход печатал вывод — кота сажаем заново
+		header = true // ход печатал вывод - кота сажаем заново
 		a.mu.Lock()
 		a.lastTurnFailed = err != nil
 		a.mu.Unlock()
 	}
 }
 
-// metrics — снимок расхода сессии для панелей интерфейса.
+// metrics - снимок расхода сессии для панелей интерфейса.
 //
 // Собирается здесь, потому что только приложение знает про провайдера,
 // лимит контекста модели и состояние сессии. Интерфейс получает готовые
@@ -2118,13 +2124,13 @@ func (a *app) metrics() ui.Metrics {
 	provID := ""
 	if prov != nil {
 		m.Provider = prov.Label
-		// Окно контекста — свойство модели, а не провайдера: glm-4.6
+		// Окно контекста - свойство модели, а не провайдера: glm-4.6
 		// и gpt-4.1 живут у одного провайдера с разными лимитами.
 		m.ContextMax = prov.CtxLimitFor(mdl)
 		provID = prov.ID
 	}
 	// План под cfgMu и ДО sessMu: правило порядка запрещает вкладывать
-	// cfgMu в sessMu — сначала чужой лок снимается, потом берётся этот.
+	// cfgMu в sessMu - сначала чужой лок снимается, потом берётся этот.
 	plan := a.cfgPlanMode()
 	sessMu.Lock()
 	if a.sess != nil {
@@ -2152,11 +2158,11 @@ func (a *app) metrics() ui.Metrics {
 	return m
 }
 
-// agentActiveTime — сколько времени агент был занят реальной работой:
+// agentActiveTime - сколько времени агент был занят реальной работой:
 // завершённые ходы плюс текущий незакрытый. Ожидание пользователя,
 // чтение ответа и простой в счёт не идут: раньше таймер тикал по
-// настенным часам, и «сессия 2ч» означала «я открыл терминал два часа
-// назад», а не «агент работал два часа».
+// настенным часам, и "сессия 2ч" означала "я открыл терминал два часа
+// назад", а не "агент работал два часа".
 func (a *app) agentActiveTime() time.Duration {
 	a.activeMu.Lock()
 	defer a.activeMu.Unlock()
@@ -2167,7 +2173,7 @@ func (a *app) agentActiveTime() time.Duration {
 	return d
 }
 
-// agentActiveBegin — отметить начало хода.
+// agentActiveBegin - отметить начало хода.
 func (a *app) agentActiveBegin() {
 	a.activeMu.Lock()
 	if a.activeSince.IsZero() {
@@ -2176,7 +2182,7 @@ func (a *app) agentActiveBegin() {
 	a.activeMu.Unlock()
 }
 
-// agentActiveEnd — закрыть ход и добавить его длительность к счётчику.
+// agentActiveEnd - закрыть ход и добавить его длительность к счётчику.
 func (a *app) agentActiveEnd() {
 	a.activeMu.Lock()
 	if !a.activeSince.IsZero() {
@@ -2186,8 +2192,8 @@ func (a *app) agentActiveEnd() {
 	a.activeMu.Unlock()
 }
 
-// statusItems — элементы нижней строки состояния (стиль Claude Code).
-// Порядок повторяет референс: модель · состояние · контекст · режимы.
+// statusItems - элементы нижней строки состояния (стиль Claude Code).
+// Порядок повторяет референс: модель | состояние | контекст | режимы.
 func (a *app) statusItems() []ui.StatusItem {
 	// Пара под provMu: /model может прийти из очереди ввода, пока REPL
 	// собирает строку состояния после хода.
@@ -2196,8 +2202,8 @@ func (a *app) statusItems() []ui.StatusItem {
 		{Text: mdl, Kind: ui.StatusMuted},
 		{Text: "idle", Kind: ui.StatusAccent},
 	}
-	// Поля сессии — снимком под sessMu: счётчики и AgentMode пишет ход
-	// из cron-горутины, не прикрытой busy-очередью REPL, а Perms —
+	// Поля сессии - снимком под sessMu: счётчики и AgentMode пишет ход
+	// из cron-горутины, не прикрытой busy-очередью REPL, а Perms -
 	// confirm в ходе против /yolo и /autopilot.
 	sessMu.Lock()
 	reqs, agentOn, auto, autoAll, bashAll := 0, false, false, false, false
@@ -2210,7 +2216,7 @@ func (a *app) statusItems() []ui.StatusItem {
 	}
 	sessMu.Unlock()
 	// Сколько запросов стоила сессия: цифра рядом с моделью отвечает на
-	// вопрос «сколько это заняло» раньше, чем человек спросит.
+	// вопрос "сколько это заняло" раньше, чем человек спросит.
 	if reqs > 0 {
 		items = append(items, ui.StatusItem{Text: fmt.Sprintf("%d запр.", reqs), Kind: ui.StatusMuted})
 	}
@@ -2237,32 +2243,32 @@ func (a *app) statusItems() []ui.StatusItem {
 		items = append(items, ui.StatusItem{Text: "yolo", Kind: ui.StatusWarn})
 	}
 	if prov == nil || !prov.HasKey() {
-		items = append(items, ui.StatusItem{Text: "нет ключа — /setup", Kind: ui.StatusErr})
+		items = append(items, ui.StatusItem{Text: "нет ключа - /setup", Kind: ui.StatusErr})
 	}
 	return items
 }
 
-// osMascotEnv — значение GCLI_MASCOT для решения о маскоте.
+// osMascotEnv - значение GCLI_MASCOT для решения о маскоте.
 func osMascotEnv() string { return os.Getenv("GCLI_MASCOT") }
 
-// unicodeOK — решение о псевдографике, принятое до первого вывода.
+// unicodeOK - решение о псевдографике, принятое до первого вывода.
 //
 // Отдельная переменная, а не поле app, потому что ответ нужен до того,
 // как интерфейс создан: -v и -help печатаются раньше. Значение по
-// умолчанию — «умеет», чтобы вызов в тестах не зависел от окружения.
+// умолчанию - "умеет", чтобы вызов в тестах не зависел от окружения.
 var unicodeOK = true
 
-// unicodeSupported — умеет ли терминал показывать псевдографику.
+// unicodeSupported - умеет ли терминал показывать псевдографику.
 func unicodeSupported() bool {
 	if os.Getenv("GCLI_ASCII") != "" {
 		return false
 	}
 	// На Windows решает кодовая страница консоли, а не локаль.
 	// Переменных LANG/LC_ALL там обычно нет вообще, так что старая
-	// проверка локали давала «да» всегда — а консоль по умолчанию
-	// CP866. «│» в ней читается как «тФВ», и весь интерфейс рассыпался
+	// проверка локали давала "да" всегда - а консоль по умолчанию
+	// CP866. "│" в ней читается как "тФВ", и весь интерфейс рассыпался
 	// в кракозябры. ConsoleUTF8 сначала переводит консоль в UTF-8 и
-	// только потом отвечает; если перевести не вышло, отвечает «нет».
+	// только потом отвечает; если перевести не вышло, отвечает "нет".
 	if runtime.GOOS == "windows" {
 		return ui.ConsoleUTF8(isTerminal())
 	}

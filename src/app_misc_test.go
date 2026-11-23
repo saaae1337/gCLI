@@ -169,7 +169,7 @@ func TestCmdPlanToggles(t *testing.T) {
 	}
 	a.cmdPlan("вкл")
 	if !a.repo.Cfg.PlanMode {
-		t.Error("«вкл» не должен выключать режим")
+		t.Error("\"вкл\" не должен выключать режим")
 	}
 }
 
@@ -244,7 +244,7 @@ func TestCmdSkillsListShowToggle(t *testing.T) {
 	buf.Reset()
 	a.cmdSkills("")
 	if !strings.Contains(out(buf), "выкл") {
-		t.Errorf("в списке должно быть видно «выкл»: %q", out(buf))
+		t.Errorf("в списке должно быть видно \"выкл\": %q", out(buf))
 	}
 
 	a.cmdSkills("on deploy-helper")
@@ -375,7 +375,7 @@ func TestTrustCodeAcceptedConnects(t *testing.T) {
 		t.Errorf("подтверждение должно подтверждаться словом: %q", got)
 	}
 	if n := a.tools.ExtCount(); n == 0 {
-		t.Error("после подтверждения инструменты расширения обязаны подключиться — иначе оно ничего не дало")
+		t.Error("после подтверждения инструменты расширения обязаны подключиться - иначе оно ничего не дало")
 	}
 	// Повторный запрос теперь пуст: код уже доверен.
 	buf.Reset()
@@ -522,7 +522,7 @@ func TestPrintStatsMarksUnknownPrice(t *testing.T) {
 		t.Errorf("модель без цены обязана быть помечена: %q", got)
 	}
 	if !strings.Contains(got, "?") {
-		t.Errorf("в таблице по моделям неизвестная цена помечается знаком «?»: %q", got)
+		t.Errorf("в таблице по моделям неизвестная цена помечается знаком \"?\": %q", got)
 	}
 }
 
@@ -633,7 +633,7 @@ func TestRecordSubagentCapsJournal(t *testing.T) {
 	reps := a.subagentReports()
 	reps[0].Name = "подмена"
 	if a.subagentReports()[0].Name == "подмена" {
-		t.Error("subagentReports отдаёт живой срез — запись сессии можно испортить снаружи")
+		t.Error("subagentReports отдаёт живой срез - запись сессии можно испортить снаружи")
 	}
 }
 
@@ -660,7 +660,7 @@ func TestRouteModelForRespectsConfig(t *testing.T) {
 		t.Errorf("дешёвая роль должна ехать на дешёвой модели, получили %q (%s)", m, why)
 	}
 	if why == "" {
-		t.Error("понижение модели обязано объясняться — иначе это выглядит как ошибка")
+		t.Error("понижение модели обязано объясняться - иначе это выглядит как ошибка")
 	}
 }
 
@@ -703,7 +703,7 @@ func TestRegistryForSubagentRestricts(t *testing.T) {
 		}
 	}
 	if !ro.Has("read_file") {
-		t.Error("read_file обязан остаться — иначе субагент-исследователь ничего не сделает")
+		t.Error("read_file обязан остаться - иначе субагент-исследователь ничего не сделает")
 	}
 }
 
@@ -789,7 +789,7 @@ func TestStatusItemsReflectModes(t *testing.T) {
 	if !has(items, "glm-4.6") || !has(items, "agent") {
 		t.Errorf("в строке должны быть модель и режим: %+v", items)
 	}
-	if has(items, "нет ключа — /setup") {
+	if has(items, "нет ключа - /setup") {
 		t.Error("у локального провайдера без ключа подсказка про ключ неуместна")
 	}
 
@@ -805,7 +805,7 @@ func TestStatusItemsReflectModes(t *testing.T) {
 	}
 	a.sess.Perms.AutopilotAll = true
 	if !has(a.statusItems(), "autopilot: all") {
-		t.Error("режим all обязан быть виден отдельной меткой — он одобряет всё")
+		t.Error("режим all обязан быть виден отдельной меткой - он одобряет всё")
 	}
 	a.sess.Perms.Autopilot, a.sess.Perms.AutopilotAll = false, false
 	a.sess.Perms.BashAll = true
@@ -816,7 +816,7 @@ func TestStatusItemsReflectModes(t *testing.T) {
 	// Провайдер с ключом не должен требовать /setup.
 	a.prov.NoKey = false
 	a.prov.Key = ""
-	if !has(a.statusItems(), "нет ключа — /setup") {
+	if !has(a.statusItems(), "нет ключа - /setup") {
 		t.Error("провайдер без ключа должен подсказывать /setup")
 	}
 }
@@ -832,7 +832,7 @@ func TestNotesTrimmedAndVisible(t *testing.T) {
 		a.onNote("заметка", strings.Repeat("x", 400)+"\nвторая строка")
 	}
 	if len(a.notes) != 30 {
-		t.Errorf("заметок %d, ждали 30 — список обязан быть ограничен", len(a.notes))
+		t.Errorf("заметок %d, ждали 30 - список обязан быть ограничен", len(a.notes))
 	}
 	for _, n := range a.notes {
 		if strings.Contains(n, "\n") {
@@ -884,11 +884,11 @@ func TestListProvidersMarksCurrent(t *testing.T) {
 	a.prov.Key = "sk-ant-" + strings.Repeat("z", 40)
 	a.listProviders()
 	got := out(buf)
-	if !strings.Contains(got, "→ 1. zai") {
+	if !strings.Contains(got, "> 1. zai") {
 		t.Errorf("активный провайдер должен быть помечен: %q", got)
 	}
 	if strings.Contains(got, strings.Repeat("z", 20)) {
-		t.Error("ключ напечатан целиком — это утечка секрета в вывод")
+		t.Error("ключ напечатан целиком - это утечка секрета в вывод")
 	}
 	if !strings.Contains(got, "/provider add") {
 		t.Error("список должен подсказывать, как добавить свой endpoint")
@@ -899,7 +899,7 @@ func TestListProvidersMarksCurrent(t *testing.T) {
 // прошлая ошибка показывается, а не прячется.
 func TestCmdSnapshotsEmptyAndError(t *testing.T) {
 	if !core.SnapshotsAvailable() {
-		t.Skip("git недоступен — снимки не проверяются")
+		t.Skip("git недоступен - снимки не проверяются")
 	}
 	a, buf := cmdApp(t)
 	a.cmdSnapshots()

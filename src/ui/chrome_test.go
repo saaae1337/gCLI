@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// chromeUI — интерфейс фиксированной ширины для проверки вёрстки.
+// chromeUI - интерфейс фиксированной ширины для проверки вёрстки.
 func chromeUI(t *testing.T, width int) (*UI, *strings.Builder) {
 	t.Helper()
 	buf := &strings.Builder{}
 	return New(Options{Theme: "ember", Unicode: true, Color: false, Width: width, Out: buf}), buf
 }
 
-// TestMetricsBarShowsOutputRateAndRequestTime — в панели видно скорость
+// TestMetricsBarShowsOutputRateAndRequestTime - в панели видно скорость
 // ВЫВОДА и время запроса, а не скорость всего запроса и не время сессии.
 func TestMetricsBarShowsOutputRateAndRequestTime(t *testing.T) {
 	u, buf := chromeUI(t, 90)
@@ -38,7 +38,7 @@ func TestMetricsBarShowsOutputRateAndRequestTime(t *testing.T) {
 	}
 }
 
-// TestMetricsBarDoesNotFillWidth — строка не должна кончаться ровно на
+// TestMetricsBarDoesNotFillWidth - строка не должна кончаться ровно на
 // краю терминала: там терминал оставляет курсор в состоянии «перенос
 // отложен», и следующая запись уезжает в неожиданную колонку.
 func TestMetricsBarDoesNotFillWidth(t *testing.T) {
@@ -55,7 +55,7 @@ func TestMetricsBarDoesNotFillWidth(t *testing.T) {
 	}
 }
 
-// TestTitleBarHasLightsAndRule — панель окна: «лампочки», название и
+// TestTitleBarHasLightsAndRule - панель окна: «лампочки», название и
 // линия под панелью.
 func TestTitleBarHasLightsAndRule(t *testing.T) {
 	u, buf := chromeUI(t, 80)
@@ -65,7 +65,7 @@ func TestTitleBarHasLightsAndRule(t *testing.T) {
 		Right:    "ctx 12.4k/128k (10%)",
 	})
 	out := buf.String()
-	if !strings.Contains(out, "●") {
+	if !strings.Contains(out, "o o o") {
 		t.Errorf("в панели нет лампочек:\n%s", out)
 	}
 	if !strings.Contains(out, "gcli v0.6.2.30") {
@@ -78,12 +78,12 @@ func TestTitleBarHasLightsAndRule(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("панель без линии:\n%s", out)
 	}
-	if !strings.Contains(lines[1], "─") {
+	if !strings.Contains(lines[1], "-") {
 		t.Errorf("под панелью нет линии:\n%s", out)
 	}
 }
 
-// TestTitleBarFitsWidth — панель не должна вылезать за ширину терминала.
+// TestTitleBarFitsWidth - панель не должна вылезать за ширину терминала.
 func TestTitleBarFitsWidth(t *testing.T) {
 	u, buf := chromeUI(t, 50)
 	u.TitleBar(TitleBarOpts{
@@ -98,7 +98,7 @@ func TestTitleBarFitsWidth(t *testing.T) {
 	}
 }
 
-// TestMetricsBarShowsRateAndPercent — в нижней панели видно скорость
+// TestMetricsBarShowsRateAndPercent - в нижней панели видно скорость
 // токенов и процент занятого контекста.
 func TestMetricsBarShowsRateAndPercent(t *testing.T) {
 	u, buf := chromeUI(t, 80)
@@ -107,14 +107,14 @@ func TestMetricsBarShowsRateAndPercent(t *testing.T) {
 		Prompt: 1200, Completion: 340, Rate: 142, Last: 4200 * time.Millisecond,
 	})
 	out := buf.String()
-	for _, want := range []string{"142 tok/s", "ctx 9%", "4.2с", "↑1.2k"} {
+	for _, want := range []string{"142 tok/s", "ctx 9%", "4.2с", "in 1.2k"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("в панели метрик нет %q:\n%s", want, out)
 		}
 	}
 }
 
-// TestMetricsBarDropsLeastImportant — в узкий терминал панель не должна
+// TestMetricsBarDropsLeastImportant - в узкий терминал панель не должна
 // вылезать: лишние метрики отпадают, главные остаются.
 func TestMetricsBarDropsLeastImportant(t *testing.T) {
 	u, buf := chromeUI(t, 40)
@@ -130,7 +130,7 @@ func TestMetricsBarDropsLeastImportant(t *testing.T) {
 	}
 }
 
-// TestPanelBordersAlign — рамка панели должна сходиться по краям.
+// TestPanelBordersAlign - рамка панели должна сходиться по краям.
 func TestPanelBordersAlign(t *testing.T) {
 	u, buf := chromeUI(t, 60)
 	u.Panel("первая строка\nвторая строка", PanelOpts{Title: "Контекст"})
@@ -149,13 +149,13 @@ func TestPanelBordersAlign(t *testing.T) {
 	}
 }
 
-// TestPanelASCIIFallback — без юникода рамка становится ASCII.
+// TestPanelASCIIFallback - без юникода рамка становится ASCII.
 func TestPanelASCIIFallback(t *testing.T) {
 	buf := &strings.Builder{}
 	u := New(Options{Theme: "ember", Unicode: false, Color: false, Width: 40, Out: buf})
 	u.Panel("текст", PanelOpts{Title: "Панель"})
 	out := buf.String()
-	if strings.Contains(out, "╭") || strings.Contains(out, "│") {
+	if !isASCIIString(out) {
 		t.Errorf("в ASCII-режиме осталась юникодная рамка:\n%s", out)
 	}
 	if !strings.Contains(out, "+") {
@@ -163,7 +163,7 @@ func TestPanelASCIIFallback(t *testing.T) {
 	}
 }
 
-// TestMetricsContextPct — процент занятого контекста считается по лимиту
+// TestMetricsContextPct - процент занятого контекста считается по лимиту
 // модели; без лимита процент неизвестен.
 func TestMetricsContextPct(t *testing.T) {
 	m := Metrics{Context: 12400, ContextMax: 128000}
@@ -179,7 +179,7 @@ func TestMetricsContextPct(t *testing.T) {
 	}
 }
 
-// TestMetricsRateText — скорость округляется и не показывается без
+// TestMetricsRateText - скорость округляется и не показывается без
 // запросов.
 func TestMetricsRateText(t *testing.T) {
 	if got := (Metrics{}).RateText(); got != "" {
@@ -193,7 +193,7 @@ func TestMetricsRateText(t *testing.T) {
 	}
 }
 
-// TestUsageLineShowsRate — строка расхода под ответом показывает скорость
+// TestUsageLineShowsRate - строка расхода под ответом показывает скорость
 // и время запроса.
 func TestUsageLineShowsRate(t *testing.T) {
 	u, buf := chromeUI(t, 80)
@@ -209,7 +209,7 @@ func TestUsageLineShowsRate(t *testing.T) {
 	}
 }
 
-// TestKVPanelKeepsRows — панель со списком параметров сохраняет все строки.
+// TestKVPanelKeepsRows - панель со списком параметров сохраняет все строки.
 func TestKVPanelKeepsRows(t *testing.T) {
 	u, buf := chromeUI(t, 60)
 	u.KVPanel("Контекст", [][2]string{

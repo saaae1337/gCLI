@@ -16,7 +16,11 @@ import (
 // App владеет экраном, вводом и лентой. Снаружи к нему обращаются из
 // горутины агента (текст, инструменты, метрики) и из main (события
 // жизненного цикла). Все методы потокобезопасны: состояние под мьютексом,
-// кадр рисуется сразу после изменения.
+// кадр собирает один цикл Run.
+//
+// Оформление — чистый ASCII: рамки «+ - |», спиннер «| / - \», статусы
+// «ok x !». Ни один символ за пределами U+007F интерфейс сам не рисует:
+// тот же вид в cmd.exe на Windows 10/11, в linux-консоли и на macOS.
 
 // Command — команда для подсказки в поле ввода.
 type Command struct {
@@ -153,14 +157,14 @@ type App struct {
 
 	// dirty — кадр устарел, но ещё не перерисован. Все асинхронные
 	// события (текст из горутин агента, метрики, инструменты) только
-	// ставят флаг: кадр собирает один цикл Run. Раньше каждый метод
-	// рисовал сам, и параллельные отрисовки из разных горутин
-	// перемешивались в один терминал — это и было «мигание».
+	// ставят флаг: кадр собирает один цикл Run. Каждый метод рисовал
+	// сам — параллельные отрисовки из разных горутин перемешивались
+	// в один терминал, и это было «мигание».
 	dirty bool
 	// activity — чем занят агент прямо сейчас («bash ls -la»);
 	// показывается в рамке поля ввода вместо безликого «работаю».
 	activity string
-	// doneAt — когда закончился последний ход: кот празднёт пару секунд.
+	// doneAt — когда закончился последний ход.
 	doneAt time.Time
 	// files — кэш списка файлов для @-дополнения, filesAt — когда собран;
 	// filesBusy — сборка списка идёт в фоне (обход каталога под мьютексом
@@ -231,17 +235,10 @@ func New(o Options) *App {
 	if !th.Bg.On {
 		th = Dark()
 	}
-	corners := Rounded
-	if !o.Unicode {
-		// ASCII-режим: без полублоков и псевдографики. Рамки храним в
-		// приложении, а не в глобальной переменной: два интерфейса в
-		// одном процессе не должны перекрашивать друг друга.
-		corners = Corners{'+', '+', '+', '+', '-', '|'}
-	}
 	return &App{
 		opt:     o,
 		th:      th,
-		corners: corners,
+		corners: Square, // ASCII: «+ - |» на любой платформе
 		comp:    NewComposer(),
 		rend:    NewRenderer(o.Out, o.Color, o.Colors),
 		started: false,
@@ -391,9 +388,6 @@ func (a *App) onTick() {
 	}
 	if a.busy || a.modal != nil || a.paletteOpen() || a.filePaletteOpen() {
 		redraw = true
-	} else if a.tick%8 == 0 {
-		// Маскот моргает и на простое: редкие кадры почти ничего не пишут.
-		redraw = true
 	}
 	if redraw {
 		a.drawLocked()
@@ -487,7 +481,7 @@ func (a *App) keyLocked(ev Event) {
 					return
 				}
 				if !ok || txt == "" {
-					a.toastLocked("буфер обмена недоступен — вставь ctrl+shift+v")
+					a.toastLocked("буфер обмена недоступен - вставь ctrl+shift+v")
 				} else {
 					a.comp.Insert(txt)
 					if n := strings.Count(txt, "\n") + 1; n > 1 {
@@ -501,10 +495,7 @@ func (a *App) keyLocked(ev Event) {
 			a.toggleThinkLocked()
 			return
 		case ev.Ctrl && ev.R == 'y':
-			// Скопировать последний ответ в буфер обмена (OSC52):
-			// терминалы с поддержкой забирают его сами, а привычный
-			// Ctrl+Shift+C работает только там, где выделение не
-			// перехвачено мышью.
+			// Скопировать последний ответ в буфер обмена (OSC52).
 			a.comp.SetText("/copy")
 			a.submitLocked()
 			return
@@ -653,7 +644,7 @@ func (a *App) keyLocked(ev Event) {
 			a.comp.Clear()
 			return
 		}
-		a.toastLocked("ctrl+c — выход, /help — команды")
+		a.toastLocked("ctrl+c - выход, /help - команды")
 	}
 }
 
@@ -674,7 +665,7 @@ func (a *App) ctrlCLocked() {
 		return
 	}
 	a.lastCtrlC = time.Now()
-	a.toastLocked("ещё раз ctrl+c — выход")
+	a.toastLocked("ещё раз ctrl+c - выход")
 }
 
 // interruptLocked — прервать текущий ход.
@@ -682,9 +673,9 @@ func (a *App) interruptLocked() {
 	queued := len(a.queue) > 0
 	a.queue = nil
 	if queued {
-		a.toastLocked("останавливаю… очередь сброшена")
+		a.toastLocked("останавливаю... очередь сброшена")
 	} else {
-		a.toastLocked("останавливаю…")
+		a.toastLocked("останавливаю...")
 	}
 	if a.handle.Interrupt != nil {
 		go a.handle.Interrupt()
@@ -913,7 +904,7 @@ func (a *App) composerClickLocked(x, y int) {
 		start = cy - maxLines + 1
 	}
 	line := start + (y - boxTop - 1)
-	col := x - a.composerX() - 4
+	col := x - a.composerX() - 2
 	if col < 0 {
 		col = 0
 	}
@@ -1055,8 +1046,7 @@ func (a *App) Busy(on bool) {
 //
 // Все методы ниже вызываются из чужих горутин (агент, инструменты,
 // cron). Они только обновляют состояние и ставят dirty: рисует один
-// цикл Run. До 0.9.0 каждый метод рисовал сам — параллельные кадры
-// из разных горутин и создавали мерцание.
+// цикл Run.
 
 // markDirty — кадр устарел; отрисовка произойдёт в ближайшем тике.
 func (a *App) markDirty() { a.dirty = true }
@@ -1172,7 +1162,7 @@ func toolActivity(t ToolInfo) string {
 		for cut > 0 && arg[cut]&0xC0 == 0x80 {
 			cut--
 		}
-		arg = arg[:cut] + "…"
+		arg = arg[:cut] + "..."
 	}
 	return t.Name + " " + arg
 }
@@ -1204,7 +1194,7 @@ func (a *App) Raw(s string) {
 	a.rend.Raw(s)
 }
 
-// SetMascot — показать или спрятать Искру на заставке.
+// SetMascot — показать или спрятать кота на заставке.
 func (a *App) SetMascot(on bool) {
 	a.mu.Lock()
 	a.opt.HideMascot = !on
@@ -1520,19 +1510,17 @@ func (a *App) bodyHeight() int {
 }
 
 // composerHeight — высота рамки поля ввода с содержимым.
+//
+// Минимум — одна строка содержимого: пустое поле не занимает пять
+// строк экрана, из которых четыре пустые. Растёт с текстом до шести
+// строк; на низком окне — одна.
 func (a *App) composerHeight() int {
 	lines := len(a.comp.Lines(a.composerInner()))
 	if lines > 6 {
 		lines = 6
 	}
-	// Витринный минимум: три строки содержимого, рамка в пять строк —
-	// как на демо-GIF. На низком окне поле сжимается до одной строки.
-	min := 3
-	if a.h < 18 {
-		min = 1
-	}
-	if lines < min {
-		lines = min
+	if lines < 1 {
+		lines = 1
 	}
 	return lines + 2
 }
@@ -1542,8 +1530,6 @@ func (a *App) composerHeight() int {
 // Одна формула на отрисовку и на курсор: если считать их порознь, на
 // низком терминале курсор уезжает на строку выше поля.
 func (a *App) composerTop() int {
-	// Витрина: между рамкой и строкой подсказок живёт пустая строка,
-	// поэтому отступ снизу — три строки, а не две.
 	top := a.h - 3 - a.composerHeight()
 	if top < 5 {
 		top = 5
@@ -1552,28 +1538,11 @@ func (a *App) composerTop() int {
 }
 
 // composerX — левая граница поля ввода.
-//
-// На широком терминале слева от поля живёт колонка мини-Искры (8 клеток):
-// кот всегда на экране и меняет позу вместе с состоянием агента. На узком
-// колонка исчезает — важнее место для текста.
-func (a *App) composerX() int {
-	if a.railWidth() > 0 {
-		return a.railWidth() + 1
-	}
-	return 1
-}
-
-// railWidth — ширина колонки маскота: 0 — колонки нет.
-func (a *App) railWidth() int {
-	if a.opt.HideMascot || a.w < 66 {
-		return 0
-	}
-	return 8
-}
+func (a *App) composerX() int { return 0 }
 
 // composerInner — ширина текста внутри поля ввода.
 func (a *App) composerInner() int {
-	w := a.w - a.composerX() - 6 // рамка (2) + поля (2) + приглашение (2)
+	w := a.w - a.composerX() - 4 // рамка (2) + поля (2)
 	if w < 8 {
 		w = 8
 	}
@@ -1635,10 +1604,8 @@ func (a *App) completePaletteLocked() {
 // ---------- Палитра файлов (@дополнение) ----------
 //
 // Прикрепить файл к запросу — «@» и кусок имени: список файлов проекта
-// подсказывает пути, Tab/Enter подставляет. На отправке mention разворачивается
-// в содержимое файла (tools.ApplyMentions) — раньше это работало, но об
-// этом никто не знал: подсказки не было, а список файлов нельзя было
-// подсмотреть, не выходя из поля ввода.
+// подсказывает пути, Tab/Enter подставляет. На отправке mention
+// разворачивается в содержимое файла (tools.ApplyMentions).
 
 // atToken — токен после «@» перед курсором: «прочитай @sr» → «sr».
 func (a *App) atToken() (string, bool) {
@@ -1649,8 +1616,7 @@ func (a *App) atToken() (string, bool) {
 	}
 	// Text() отдаёт байты, Cursor() считает руны: срез t[:cur] на
 	// кириллице резал строку посреди руны, и @-токен после русского
-	// текста не находился — подсказка файлов молча пропадала.
-	// Работаем в рунах.
+	// текста не находился. Работаем в рунах.
 	r := []rune(t)
 	if cur > len(r) {
 		return "", false
@@ -1689,9 +1655,7 @@ func collectFiles(root string) []string {
 			}
 			// Глубина — по пути, а не счётчиком: счётчик рос на входе в
 			// каталог и никогда не убывал, так что «глубиной» было число
-			// уже обойдённых каталогов. Корень съедал единицу, и в проекте
-			// с шестью каталогами хвост верхнеуровневых (в самом gCLI —
-			// tui/, ui/ и wcwidth/) молча выпадал из @-подсказки файлов.
+			// уже обойдённых каталогов.
 			rel, rerr := filepath.Rel(root, path)
 			if rerr != nil {
 				return filepath.SkipDir
@@ -1720,12 +1684,9 @@ var collectFilesFn = collectFiles
 
 // refreshFilesLocked — запустить фоновую сборку списка файлов проекта.
 //
-// Раньше WalkDir шёл синхронно под мьютексом: тик, отрисовка и горутины
-// агента (StreamText, метрики, статусы инструментов) ждали обхода всего
-// репозитория, и на больших деревьях интерфейс замирал на секунды —
-// пока в поле ввода оставался @-токен, обход повторялся каждые 10 секунд.
-// Теперь список собирает горутина, а палитра до её завершения показывает
-// прошлый (несвежий) список; по готовности его подхватит ближайший тик.
+// WalkDir шёл синхронно под мьютексом: тик, отрисовка и горутины агента
+// ждали обхода всего репозитория. Теперь список собирает горутина, а
+// палитра до её завершения показывает прошлый (несвежий) список.
 func (a *App) refreshFilesLocked() {
 	if a.filesBusy {
 		return // сборка уже идёт — отдаём прошлый список
@@ -1867,7 +1828,7 @@ func (a *App) buildLocked() *Screen {
 	t := a.th
 	s := NewScreen(a.w, a.h, t.Bg)
 	a.drawHeader(s)
-	bodyTop := 2
+	bodyTop := 1
 	bodyH := a.bodyHeight()
 	a.drawBody(s, bodyTop, bodyH)
 	a.drawFooter(s, bodyTop+bodyH)
@@ -1882,14 +1843,14 @@ func (a *App) buildLocked() *Screen {
 	return s
 }
 
-// drawHeader — шапка: бренд, версия, теглайн и расход контекста —
-// один в один с витриной README.
+// drawHeader — шапка в одну строку: бренд, модель, каталог и расход
+// контекста. Отдельная строка-разделитель под ней не нужна: панель
+// выделяется фоном, а лента начинается сразу с первой строки — на
+// низком окне лишняя полоса съедала место диалога.
 func (a *App) drawHeader(s *Screen) {
 	t := a.th
 	s.FillLine(0, Style{BG: t.Panel})
 	x := 1
-	s.Text(x, 0, "✦", Style{FG: t.Gold, BG: t.Panel})
-	x += 2
 	for _, seg := range wordmark(t, "gcli") {
 		s.Text(x, 0, seg.Text, seg.S)
 		x += StringWidth(seg.Text)
@@ -1899,30 +1860,83 @@ func (a *App) drawHeader(s *Screen) {
 		ver = "dev"
 	}
 	x++
-	s.Text(x, 0, "v"+ver, Style{FG: t.Dim, BG: t.Panel})
-	x += StringWidth("v"+ver) + 1
-	s.Text(x, 0, "·", Style{FG: t.Border, BG: t.Panel})
-	x += 2
-	s.Text(x, 0, "ИИ-агент в терминале", Style{FG: t.Muted, BG: t.Panel})
-
-	// Правая часть: расход контекста, как на витрине. Модель и провайдер
-	// живут на заставке и в /status — шапка остаётся тонкой.
-	pct := "—"
-	if a.met.ContextMax > 0 {
-		p := a.met.Context * 100 / a.met.ContextMax
-		if p > 999 {
-			p = 999
-		}
-		pct = fmt.Sprintf("%d%%", p)
+	verText := "v" + ver
+	s.Text(x, 0, verText, Style{FG: t.Dim, BG: t.Panel})
+	x += StringWidth(verText) + 1
+	// Модель и провайдер — главные факты сессии: сразу видно, кто отвечает.
+	mid := a.opt.Model
+	if mid == "" {
+		mid = "модель не выбрана"
+	} else if a.opt.Provider != "" {
+		mid = a.opt.Provider + " / " + mid
 	}
-	right := "ctx " + pct
-	rx := a.w - StringWidth(right) - 2
-	if rx > x+6 {
+	midS := Style{FG: t.Accent2, BG: t.Panel}
+	s.Text(x, 0, Truncate(mid, maxInt(8, a.w/3-x)), midS)
+	x += StringWidth(Truncate(mid, maxInt(8, a.w/3-x))) + 1
+	// Каталог — только если помещается: на узком экране важнее шапка.
+	if cwd := a.opt.WorkDir; cwd != "" {
+		room := a.w - 16 - x - 8
+		if room >= 10 {
+			s.Text(x, 0, Truncate(cwd, room), Style{FG: t.Dim, BG: t.Panel})
+		}
+	}
+	// Правая часть: расход контекста мини-баром.
+	right := a.ctxBar()
+	rx := a.w - StringWidth(right) - 1
+	if rx > x+4 {
 		s.Text(rx, 0, right, Style{FG: t.Muted, BG: t.Panel})
 	}
-	// Тонкая линия под шапкой.
-	s.FillLine(1, Style{BG: t.Bg})
-	s.HLine(0, 1, a.w, '─', Style{FG: t.BorderDim, BG: t.Bg})
+}
+
+// ctxBar — расход контекста для шапки: «ctx [####......] 24%».
+func (a *App) ctxBar() string {
+	pct := 0
+	if a.met.ContextMax > 0 {
+		pct = a.met.Context * 100 / a.met.ContextMax
+		if pct > 999 {
+			pct = 999
+		}
+	}
+	barW := 8
+	fill := 0
+	if a.met.ContextMax > 0 {
+		fill = (2*barW*a.met.Context + a.met.ContextMax) / (2 * a.met.ContextMax)
+		if fill > barW {
+			fill = barW
+		}
+	}
+	if a.met.ContextMax == 0 {
+		return "ctx [-]"
+	}
+	return fmt.Sprintf("ctx [%s%s] %d%%", strings.Repeat("#", fill), strings.Repeat(".", barW-fill), pct)
+}
+
+// maxInt — большее из двух чисел.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// wordmark — имя продукта: буквы одним стилем, «cli» — акцентным.
+func wordmark(t Theme, word string) []Seg {
+	if len(word) >= 2 {
+		return []Seg{
+			{Text: word[:1], S: Style{FG: t.Gold, BG: t.Panel, Bold: true}},
+			{Text: word[1:], S: Style{FG: t.Accent, BG: t.Panel, Bold: true}},
+		}
+	}
+	return []Seg{{Text: word, S: Style{FG: t.Gold, BG: t.Panel, Bold: true}}}
+}
+
+// wordmarkOn — имя продукта на заданном фоне.
+func wordmarkOn(t Theme, word string, bg Color) []Seg {
+	segs := wordmark(t, word)
+	for i := range segs {
+		segs[i].S.BG = bg
+	}
+	return segs
 }
 
 // drawBody — лента или приветствие.
@@ -1950,33 +1964,12 @@ func (a *App) drawBody(s *Screen, top, h int) {
 		}
 		a.drawLine(s, 1, top+i, lines[idx], w)
 	}
-	// Индикатор прокрутки.
+	// Счётчик прокрутки: сколько строк выше окна.
 	if a.scroll > 0 {
-		label := fmt.Sprintf(" ↑ %d ", a.scroll)
+		label := fmt.Sprintf(" %c %d ", glyphScroll, a.scroll)
 		x := a.w - StringWidth(label) - 2
 		if x > 2 {
 			s.Text(x, top+h-1, label, Style{FG: t.Gold, BG: t.Panel2, Bold: true})
-		}
-	}
-	// Тонкая полоса прокрутки справа.
-	if len(lines) > h {
-		trackX := a.w - 1
-		thumb := h * h / len(lines)
-		if thumb < 1 {
-			thumb = 1
-		}
-		pos := 0
-		if len(lines) > h {
-			pos = (len(lines) - h - a.scroll) * (h - thumb) / (len(lines) - h)
-		}
-		if pos < 0 {
-			pos = 0
-		}
-		s.VLine(trackX, top, h, '│', Style{FG: t.BorderDim, BG: t.Bg})
-		for i := 0; i < thumb; i++ {
-			if y := top + pos + i; y < top+h {
-				s.Set(trackX, y, '┃', Style{FG: t.Border, BG: t.Bg})
-			}
 		}
 	}
 }
@@ -1997,46 +1990,39 @@ func (a *App) refreshCacheLocked(w int) {
 	// После смены ширины лента могла стать короче: прокрутка не должна
 	// выходить за «длина кэша минус высота ленты». Клэмп к длине кэша
 	// оставлял scroll > максимума: off упирался в ноль (низ ленты), а
-	// счётчик «↑ N» и бегунок рисовались по завышенному scroll — три
-	// противоречащих друг другу индикатора в одном кадре.
-	if m := len(a.cache) - a.bodyHeight(); m > 0 {
-		if a.scroll > m {
-			a.scroll = m
-		}
-	} else {
-		a.scroll = 0 // всё видно целиком — прокрутки нет
+	// счётчик и бегунок рисовались по завышенному scroll.
+	max := 0
+	if len(a.cache) > a.bodyHeight() {
+		max = len(a.cache) - a.bodyHeight()
+	}
+	if a.scroll > max {
+		a.scroll = max
 	}
 }
 
-// drawLine — нарисовать строку ленты в кадр.
+// drawLine — вывести строку ленты в экран с обрезкой по ширине.
 func (a *App) drawLine(s *Screen, x, y int, l Line, w int) {
-	if y < 0 || y >= s.H {
-		return
-	}
-	col := x
+	cur := x
 	for _, seg := range l {
-		st := seg.S
-		if !st.BG.On {
-			st.BG = a.th.Bg
-		}
-		col = s.Text(col, y, seg.Text, st)
-		if col-x >= w {
+		if cur >= x+w {
 			break
 		}
+		cur = s.Text(cur, y, seg.Text, seg.S)
 	}
 }
 
-// drawWelcome — заставка: маскот, имя, подсказки.
+// drawWelcome — заставка: кот, бренд, каталог, модель и подсказки.
 func (a *App) drawWelcome(s *Screen, top, h int) {
 	lines := a.welcomeLines()
 	if len(lines) == 0 {
 		return
 	}
-	y := top + (h-len(lines))/2
+	// Вертикальный центр с лёгким сдвигом вверх.
+	y := top + (h-len(lines))/2 - 1
 	if y < top {
 		y = top
 	}
-	// Вся колонка центрируется целиком: центрировать каждую строку
+	// Горизонтальный центр по самой широкой строке: центрировать строки
 	// отдельно нельзя — строки разной длины разъезжаются лесенкой.
 	maxW := 0
 	for _, l := range lines {
@@ -2059,41 +2045,26 @@ func (a *App) drawWelcome(s *Screen, top, h int) {
 // welcomeLines — содержимое заставки.
 func (a *App) welcomeLines() []Line {
 	t := a.th
-	wide := !a.opt.HideMascot && a.w >= 86 && a.h >= 20
-	state := a.mascotState()
-	var left []Line
-	if wide {
-		art := NewScreen(24, 11, t.Bg)
-		drawMascot(art, 0, 0, state, t.Bg)
-		for y := 0; y < 11; y++ {
-			var l Line
-			for x := 0; x < 24; x++ {
-				c := art.Cells[y*24+x]
-				if c.Cont {
-					continue
-				}
-				ch := c.R
-				if ch == 0 {
-					ch = ' '
-				}
-				l = append(l, Seg{Text: string(ch), S: c.S})
-			}
-			left = append(left, l)
+	var out []Line
+	// Кот — три строки ASCII, только если включён и есть место.
+	if !a.opt.HideMascot && a.w >= 40 && a.h >= 16 {
+		cat := mascotLines(a.mascotState())
+		for _, cl := range cat {
+			out = append(out, Line{{Text: cl, S: Style{FG: t.Gold, BG: t.Bg}}})
 		}
+		out = append(out, Line{})
 	}
-	// Правая колонка.
-	var right []Line
-	brand := Line{{Text: "✦ ", S: Style{FG: t.Gold, BG: t.Bg}}}
+	brand := Line{}
 	brand = append(brand, wordmarkOn(t, "gcli", t.Bg)...)
 	brand = append(brand, Seg{Text: "  " + version(a.opt.Version), S: Style{FG: t.Dim, BG: t.Bg}})
-	right = append(right, brand)
-	right = append(right, Line{{Text: "агент в терминале · маскот Искра", S: Style{FG: t.Muted, BG: t.Bg}}})
-	right = append(right, Line{})
+	out = append(out, brand)
+	out = append(out, Line{{Text: "агент в терминале", S: Style{FG: t.Muted, BG: t.Bg}}})
+	out = append(out, Line{})
 	cwd := a.opt.WorkDir
 	if cwd == "" {
 		cwd = "."
 	}
-	right = append(right, Line{
+	out = append(out, Line{
 		{Text: "каталог  ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: Truncate(cwd, 52), S: Style{FG: t.Text, BG: t.Bg}},
 	})
@@ -2102,88 +2073,42 @@ func (a *App) welcomeLines() []Line {
 		model = "не выбрана"
 	}
 	if a.opt.Provider != "" {
-		model = a.opt.Provider + " · " + model
+		model = a.opt.Provider + " / " + model
 	}
-	right = append(right, Line{
+	out = append(out, Line{
 		{Text: "модель   ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: Truncate(model, 52), S: Style{FG: t.Accent2, BG: t.Bg}},
 	})
-	right = append(right, Line{})
-	right = append(right, Line{{Text: "с чего начать", S: Style{FG: t.Muted, BG: t.Bg, Bold: true}}})
+	out = append(out, Line{})
+	out = append(out, Line{{Text: "с чего начать", S: Style{FG: t.Muted, BG: t.Bg, Bold: true}}})
 	tips := []string{
 		"почини тесты в ./src",
 		"найди, где считается итог заказа",
 		"сделай скриншот localhost:3000 и проверь вёрстку",
 	}
 	for _, tip := range tips {
-		right = append(right, Line{
-			{Text: "  › ", S: Style{FG: t.Accent, BG: t.Bg}},
+		out = append(out, Line{
+			{Text: "  " + string(glyphCursor) + " ", S: Style{FG: t.Accent, BG: t.Bg}},
 			{Text: Truncate(tip, 58), S: Style{FG: t.Text, BG: t.Bg}},
 		})
 	}
-	right = append(right, Line{})
-	right = append(right, Line{
+	out = append(out, Line{})
+	out = append(out, Line{
 		{Text: "/help", S: Style{FG: t.Gold, BG: t.Bg}},
-		{Text: " — команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: " команды   ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: "ctrl+enter", S: Style{FG: t.Gold, BG: t.Bg}},
-		{Text: " — отправить   ", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: " отправить   ", S: Style{FG: t.Dim, BG: t.Bg}},
 		{Text: "ctrl+o", S: Style{FG: t.Gold, BG: t.Bg}},
-		{Text: " — размышления", S: Style{FG: t.Dim, BG: t.Bg}},
+		{Text: " размышления", S: Style{FG: t.Dim, BG: t.Bg}},
 	})
-
-	if !wide {
-		// Узкий экран: маскот сверху, текст под ним. На низком окне
-		// маскот уступает место подсказкам: обрезанная заставка хуже
-		// полной, но без маскота.
-		if !a.opt.HideMascot && a.h >= 30 {
-			art := NewScreen(24, 11, t.Bg)
-			drawMascot(art, 0, 0, state, t.Bg)
-			for y := 0; y < 11; y++ {
-				var l Line
-				for x := 0; x < 24; x++ {
-					c := art.Cells[y*24+x]
-					if c.Cont {
-						continue
-					}
-					ch := c.R
-					if ch == 0 {
-						ch = ' '
-					}
-					l = append(l, Seg{Text: string(ch), S: c.S})
-				}
-				left = append(left, l)
-			}
-			left = append(left, Line{})
-		}
-		return append(left, right...)
-	}
-	// Склеиваем колонки.
-	var out []Line
-	n := len(left)
-	if len(right) > n {
-		n = len(right)
-	}
-	for i := 0; i < n; i++ {
-		var l Line
-		if i < len(left) {
-			l = append(l, left[i]...)
-		} else {
-			l = append(l, Seg{Text: strings.Repeat(" ", 24), S: Style{BG: t.Bg}})
-		}
-		l = append(l, Seg{Text: "   ", S: Style{BG: t.Bg}})
-		if i < len(right) {
-			l = append(l, right[i]...)
-		}
-		out = append(out, l.trimEnd())
-	}
 	return out
 }
 
-// mascotState — настроение Искры на заставке.
+// mascotState — настроение кота на заставке.
 //
-// Кадр заставки перерисовывается раз в ~0.9 с, поэтому окно мигания шире
-// одного кадра: иначе кот «моргал» бы так быстро, что этого не заметить.
-// Настроение повторяет работу: работает, думает, празднует завершение.
+// Кадр заставки перерисовывается по требованию: окно мигания шире
+// одного кадра, иначе кот «моргал» бы слишком быстро. Настроение
+// повторяет работу: работает, думает, празднует завершение.
 func (a *App) mascotState() MascotState {
 	if a.busy {
 		if a.activity == "думаю" {
@@ -2200,26 +2125,36 @@ func (a *App) mascotState() MascotState {
 	return MascotIdle
 }
 
-// miniMascotState — поза мини-котa у поля ввода. Как у заставки, но
-// blink реже: тут каждое движение перерисовывает кадр целиком.
-func (a *App) miniMascotState() MascotState {
-	st := a.mascotState()
-	if st == MascotBlink && a.tick%60 < 12 {
-		return st
-	}
-	if st == MascotBlink {
-		return MascotIdle
-	}
-	return st
-}
+// MascotState — состояние кота на заставке.
+type MascotState int
 
-// wordmarkOn — имя продукта на заданном фоне.
-func wordmarkOn(t Theme, word string, bg Color) []Seg {
-	segs := wordmark(t, word)
-	for i := range segs {
-		segs[i].S.BG = bg
+const (
+	MascotIdle MascotState = iota
+	MascotBlink
+	MascotWork
+	MascotThink
+	MascotDone
+)
+
+// mascotLines — кот из чистого ASCII: уши, глаза, морда. Глаза зависят
+// от состояния: обычные, моргает, работает, думает, доволен.
+func mascotLines(st MascotState) []string {
+	eyes := "o_o"
+	switch st {
+	case MascotBlink:
+		eyes = "-_-"
+	case MascotWork:
+		eyes = ">_<"
+	case MascotThink:
+		eyes = "o_0"
+	case MascotDone:
+		eyes = "^_^"
 	}
-	return segs
+	return []string{
+		"  /\\_/\\",
+		"  ( " + eyes + " )",
+		"  (  \"  )_/",
+	}
 }
 
 // version — версия с префиксом.
@@ -2233,59 +2168,60 @@ func version(v string) string {
 	return "v" + v
 }
 
-// drawPalette — подсказка команд над полем ввода.
-//
-// Рисуется поверх нижних строк ленты: это dropdown, а не часть диалога.
-func (a *App) drawPalette(s *Screen) {
-	items := a.paletteItems()
+// drawDropdown — общий dropdown для команд и файлов: рамка, список,
+// выбранная строка подсвечена. title — надпись на рамке.
+// Окно прижато к левому краю поля ввода: dropdown — часть колонки
+// ввода, а не плавающее окно посреди ленты.
+func (a *App) drawDropdown(s *Screen, items []string, descs []string, title string, maxItems int) {
 	if len(items) == 0 {
 		return
 	}
 	t := a.th
-	boxW := 56
-	if boxW > a.w-4 {
-		boxW = a.w - 4
+	boxW := 60
+	if boxW > a.w-2 {
+		boxW = a.w - 2
 	}
 	if boxW < 16 {
 		return
 	}
 	// Список не должен уезжать за нижний край и закрывать поле ввода:
-	// показываем окно вокруг выбранной команды, а не все подряд.
-	maxItems := a.composerTop() - 4
-	if maxItems > 10 {
-		maxItems = 10
+	// показываем окно вокруг выбранной строки, а не все подряд.
+	max := a.composerTop() - 4
+	if max > maxItems {
+		max = maxItems
 	}
-	if maxItems < 3 {
+	if max < 3 {
 		return
 	}
 	start := 0
-	if a.palSel >= maxItems {
-		start = a.palSel - maxItems + 1
+	if a.palSel >= max {
+		start = a.palSel - max + 1
 	}
-	if start > len(items)-maxItems {
-		start = len(items) - maxItems
+	if start > len(items)-max {
+		start = len(items) - max
 	}
 	if start < 0 {
 		start = 0
 	}
-	end := start + maxItems
+	end := start + max
 	if end > len(items) {
 		end = len(items)
 	}
 	shown := items[start:end]
 	boxH := len(shown) + 2
 	y := a.composerTop() - boxH
-	if y < 2 {
-		y = 2
+	if y < 1 {
+		y = 1
 	}
-	x := 3
+	x := 1
 	s.Fill(x, y, boxW, boxH, Style{BG: t.Panel})
 	s.Box(x, y, boxW, boxH, a.corners, Style{FG: t.Border, BG: t.Panel})
-	if len(items) > maxItems {
-		title := fmt.Sprintf(" команды %d–%d из %d ", start+1, end, len(items))
-		s.Text(x+2, y, title, Style{FG: t.Dim, BG: t.Panel})
+	tt := title
+	if len(items) > max {
+		tt = fmt.Sprintf("%s %d-%d из %d ", strings.TrimSuffix(title, " "), start+1, end, len(items))
 	}
-	for i, c := range shown {
+	s.Text(x+2, y, " "+tt, Style{FG: t.Dim, BG: t.Panel})
+	for i := range shown {
 		sel := start+i == a.palSel
 		st := Style{FG: t.Text, BG: t.Panel}
 		if sel {
@@ -2294,85 +2230,47 @@ func (a *App) drawPalette(s *Screen) {
 		}
 		mark := "  "
 		if sel {
-			mark = "› "
+			mark = string(glyphCursor) + " "
 		}
-		s.Text(x+2, y+1+i, mark+c.Name, st)
-		descX := x + 2 + StringWidth(mark+c.Name) + 2
-		room := x + boxW - descX - 1
-		if room > 4 {
-			ds := Style{FG: t.Muted, BG: t.Panel}
-			if sel {
-				ds.BG = t.Panel2
+		s.Text(x+2, y+1+i, mark, Style{FG: t.Accent2, BG: st.BG})
+		name := shown[i]
+		s.Text(x+2+StringWidth(mark), y+1+i, Truncate(name, boxW-StringWidth(mark)-6), st)
+		if len(descs) > i && descs[i] != "" {
+			room := boxW - StringWidth(mark) - StringWidth(name) - 8
+			if room > 4 {
+				ds := Style{FG: t.Muted, BG: st.BG}
+				descX := x + 2 + StringWidth(mark) + StringWidth(name) + 2
+				s.Text(descX, y+1+i, Truncate(descs[i], room), ds)
 			}
-			s.Text(descX, y+1+i, Truncate(c.Desc, room), ds)
 		}
 	}
 }
 
+// drawPalette — подсказка команд над полем ввода.
+//
+// Рисуется поверх нижних строк ленты: это dropdown, а не часть диалога.
+func (a *App) drawPalette(s *Screen) {
+	items := a.paletteItems()
+	if len(items) == 0 {
+		return
+	}
+	names := make([]string, len(items))
+	descs := make([]string, len(items))
+	for i, c := range items {
+		names[i] = c.Name
+		descs[i] = c.Desc
+	}
+	a.drawDropdown(s, names, descs, " команды: tab подставить ", 10)
+}
+
 // drawFilePalette — подсказка файлов для @-дополнения. Тот же dropdown,
-// что у команд: друг только список и заголовок.
+// что у команд: другой только список и заголовок.
 func (a *App) drawFilePalette(s *Screen) {
 	items := a.fileItems()
 	if len(items) == 0 {
 		return
 	}
-	t := a.th
-	boxW := 56
-	if boxW > a.w-4 {
-		boxW = a.w - 4
-	}
-	if boxW < 16 {
-		return
-	}
-	maxItems := a.composerTop() - 4
-	if maxItems > 8 {
-		maxItems = 8
-	}
-	if maxItems < 3 {
-		return
-	}
-	start := 0
-	if a.palSel >= maxItems {
-		start = a.palSel - maxItems + 1
-	}
-	if start > len(items)-maxItems {
-		start = len(items) - maxItems
-	}
-	if start < 0 {
-		start = 0
-	}
-	end := start + maxItems
-	if end > len(items) {
-		end = len(items)
-	}
-	shown := items[start:end]
-	boxH := len(shown) + 2
-	y := a.composerTop() - boxH
-	if y < 2 {
-		y = 2
-	}
-	x := 3
-	s.Fill(x, y, boxW, boxH, Style{BG: t.Panel})
-	s.Box(x, y, boxW, boxH, a.corners, Style{FG: t.Border, BG: t.Panel})
-	title := " файлы: tab — подставить "
-	if len(items) > maxItems {
-		title = fmt.Sprintf(" файлы %d–%d из %d ", start+1, end, len(items))
-	}
-	s.Text(x+2, y, title, Style{FG: t.Dim, BG: t.Panel})
-	for i, f := range shown {
-		sel := start+i == a.palSel
-		st := Style{FG: t.Text, BG: t.Panel}
-		if sel {
-			s.Fill(x+1, y+1+i, boxW-2, 1, Style{BG: t.Panel2})
-			st = Style{FG: t.Gold, BG: t.Panel2, Bold: true}
-		}
-		mark := "◧ "
-		if sel {
-			mark = "› ◧ "
-		}
-		s.Text(x+2, y+1+i, mark, Style{FG: t.Accent2, BG: st.BG})
-		s.Text(x+2+StringWidth(mark), y+1+i, Truncate(f, boxW-StringWidth(mark)-4), st)
-	}
+	a.drawDropdown(s, items, nil, " файлы: tab подставить ", 8)
 }
 
 // drawFooter — поле ввода, подсказки и статус.
@@ -2383,7 +2281,7 @@ func (a *App) drawFooter(s *Screen, top int) {
 	}
 	boxTop := a.composerTop()
 	a.drawComposer(s, boxTop, a.composerHeight())
-	// Пустая строка между рамкой и подсказками — как на витрине.
+	// Пустая строка между рамкой и подсказками.
 	if blank := boxTop + a.composerHeight(); blank < a.h-2 {
 		s.FillLine(blank, Style{BG: t.Bg})
 	}
@@ -2400,12 +2298,13 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 	}
 	st := Style{FG: border, BG: t.Panel}
 	boxX := a.composerX()
-	boxW := a.w - boxX - 2
+	boxW := a.w - boxX - 1
 	// Рамка.
 	s.Fill(boxX, top, boxW, h, Style{BG: t.Panel})
 	s.Box(boxX, top, boxW, h, a.corners, st)
-	// Метка в верхней рамке: что делает агент прямо сейчас. Без активности —
-	// привычное «работаю»/очередь; с активностью — конкретика: «read src/main.go».
+	// Метка в верхней рамке: что делает агент прямо сейчас. Без
+	// активности — привычное «работаю»; с активностью — конкретика:
+	// «bash ls -la».
 	label := ""
 	if a.busy {
 		act := spinner(a.tick/2) + " работаю"
@@ -2420,7 +2319,7 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		label = fmt.Sprintf(" в очереди: %d ", len(a.queue))
 	}
 	if label != "" {
-		lx := a.w - 4 - StringWidth(label)
+		lx := a.w - 3 - StringWidth(label)
 		if lx > boxX+3 {
 			s.Text(lx, top, label, Style{FG: t.Accent2, BG: t.Panel, Bold: true})
 		}
@@ -2438,10 +2337,10 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 		start = cy - maxLines + 1
 	}
 	if a.comp.Empty() {
-		// Витрина: пустое поле — приглашение по центру рамки.
+		// Пустое поле: приглашение по центру рамки.
 		py := top + 1 + (maxLines-1)/2
-		s.Text(boxX+2, py, "❯ ", Style{FG: t.Accent, BG: t.Panel, Bold: true})
-		s.Text(boxX+4, py, "спроси что-нибудь… @файл — приложить", Style{FG: t.Dim, BG: t.Panel})
+		s.Text(boxX+2, py, string(glyphPrompt)+" ", Style{FG: t.Accent, BG: t.Panel, Bold: true})
+		s.Text(boxX+4, py, "спроси что-нибудь... @файл - приложить", Style{FG: t.Dim, BG: t.Panel})
 	} else {
 		for i := 0; i < maxLines; i++ {
 			idx := start + i
@@ -2452,22 +2351,12 @@ func (a *App) drawComposer(s *Screen, top, h int) {
 			prompt := "  "
 			pst := Style{FG: t.Dim, BG: t.Panel}
 			if idx == 0 {
-				prompt = "❯ "
+				prompt = string(glyphPrompt) + " "
 				pst = Style{FG: t.Accent, BG: t.Panel, Bold: true}
 			}
 			s.Text(boxX+2, y, prompt, pst)
 			s.Text(boxX+4, y, lines[idx], Style{FG: t.Text, BG: t.Panel})
 		}
-	}
-	// Мини-Искра в левой колонке: ASCII-кот из витрины, поза по состоянию.
-	if a.railWidth() > 0 {
-		ph := a.tick / 2
-		content := a.composerHeight() - 2
-		y := top + 1
-		if content > 3 {
-			y += (content - 3) / 2
-		}
-		drawMiniCat(s, 1, y, a.miniMascotState(), ph, t)
 	}
 }
 
@@ -2478,18 +2367,18 @@ func (a *App) drawHints(s *Screen, y int) {
 	}
 	t := a.th
 	s.FillLine(y, Style{BG: t.Bg})
-	left := " /help — команды · ctrl+enter — отправить · Tab — автодополнение"
+	left := " /help команды | ctrl+enter отправить | tab автодополнение"
 	if a.paletteOpen() {
-		left = " ↑↓ выбор · tab вставить · esc закрыть"
+		left = " up/down выбор | tab вставить | esc закрыть"
 	}
 	if a.filePaletteOpen() {
-		left = " ↑↓ файл · tab/enter подставить · esc закрыть"
+		left = " up/down файл | tab/enter подставить | esc закрыть"
 	}
 	if a.busy {
-		left = " ctrl+enter в очередь · esc остановить · pgup/pgdn прокрутка"
+		left = " ctrl+enter в очередь | esc остановить | pgup/pgdn прокрутка"
 	}
 	if a.scroll > 0 {
-		left = " pgup/pgdn прокрутка · ctrl+end — вниз"
+		left = " pgup/pgdn прокрутка | ctrl+end - вниз"
 	}
 	s.Text(1, y, Truncate(left, a.w-2), Style{FG: t.Dim, BG: t.Bg})
 	if a.toast == "" {
@@ -2516,9 +2405,7 @@ func (a *App) drawStatus(s *Screen, y int) {
 	t := a.th
 	s.FillLine(y, Style{BG: t.Panel})
 	x := 1
-	s.Text(x, y, "✦", Style{FG: t.Gold, BG: t.Panel})
-	x += 2
-	// Контекст: полоса и процент.
+	// Контекст: полоса из решёток и точек, процент.
 	pct := 0
 	if a.met.ContextMax > 0 {
 		pct = a.met.Context * 100 / a.met.ContextMax
@@ -2529,8 +2416,8 @@ func (a *App) drawStatus(s *Screen, y int) {
 	barW := 10
 	fill := 0
 	if a.met.ContextMax > 0 {
-		// Округление до ближайшего, а не к нулю: витринная полоса при
-		// малых процентах не должна выглядеть пустой.
+		// Округление до ближайшего, а не к нулю: полоса при малых
+		// процентах не должна выглядеть пустой.
 		fill = (2*barW*a.met.Context + a.met.ContextMax) / (2 * a.met.ContextMax)
 		if fill > barW {
 			fill = barW
@@ -2542,27 +2429,29 @@ func (a *App) drawStatus(s *Screen, y int) {
 	} else if pct >= 65 {
 		barCol = t.Warn
 	}
+	s.Text(x, y, "[", Style{FG: t.Border, BG: t.Panel})
+	x++
 	for i := 0; i < barW; i++ {
-		ch := '░'
+		ch := '.'
 		col := t.Border
 		if i < fill {
-			ch = '█'
+			ch = '#'
 			col = barCol
 		}
 		s.Set(x+i, y, ch, Style{FG: col, BG: t.Panel})
 	}
-	x += barW + 1
+	x += barW
+	s.Text(x, y, "]", Style{FG: t.Border, BG: t.Panel})
+	x++
 	ctx := fmt.Sprintf("%d%%", pct)
 	if a.met.ContextMax == 0 {
-		ctx = "—"
+		ctx = "-"
 	}
 	s.Text(x, y, ctx, Style{FG: t.Muted, BG: t.Panel})
 	x += StringWidth(ctx) + 2
-	s.Text(x, y, "·", Style{FG: t.Border, BG: t.Panel})
-	x += 2
 	// Метки режимов справа. Их ширина нужна до текста: на узком экране
 	// текст не должен залезать под них и обрезаться в многоточие.
-	badges := make([]statusBadge, 0, 3)
+	badges := make([]statusBadge, 0, 4)
 	if a.met.Autopilot {
 		badges = append(badges, statusBadge{"автопилот", t.Warn})
 	}
@@ -2584,7 +2473,7 @@ func (a *App) drawStatus(s *Screen, y int) {
 	// многоточием посреди числа.
 	parts := make([]string, 0, 6)
 	if a.met.Prompt > 0 || a.met.Completion > 0 {
-		parts = append(parts, fmt.Sprintf("↑%s ↓%s", kfmt(a.met.Prompt), kfmt(a.met.Completion)))
+		parts = append(parts, fmt.Sprintf("in %s out %s", kfmt(a.met.Prompt), kfmt(a.met.Completion)))
 	}
 	if a.met.Rate > 0 {
 		parts = append(parts, rateText(a.met.Rate))
@@ -2605,10 +2494,10 @@ func (a *App) drawStatus(s *Screen, y int) {
 	if avail < 8 {
 		avail = 8
 	}
-	joined := strings.Join(parts, "  ·  ")
+	joined := strings.Join(parts, " | ")
 	for len(parts) > 0 && StringWidth(joined) > avail {
 		parts = parts[:len(parts)-1]
-		joined = strings.Join(parts, "  ·  ")
+		joined = strings.Join(parts, " | ")
 	}
 	s.Text(x, y, Truncate(joined, avail), Style{FG: t.Muted, BG: t.Panel})
 	// Правая часть: режимы.
@@ -2663,7 +2552,7 @@ func (a *App) modalLayout() modalGeom {
 	if m.detail != "" {
 		segs := wrapSegs(Line{{Text: m.detail, S: Style{FG: t.Text, BG: t.Panel2}}}, inner)
 		if len(segs) > 4 {
-			segs = append(segs[:4], Line{{Text: "…", S: Style{FG: t.Dim, BG: t.Panel2}}})
+			segs = append(segs[:4], Line{{Text: glyphMore, S: Style{FG: t.Dim, BG: t.Panel2}}})
 		}
 		body = append(body, segs...)
 	}
@@ -2672,7 +2561,7 @@ func (a *App) modalLayout() modalGeom {
 			body = append(body, Line{})
 		}
 		body = append(body, Line{
-			{Text: "◧ ", S: Style{FG: t.Gold, BG: t.Panel2}},
+			{Text: "  ", S: Style{FG: t.Gold, BG: t.Panel2}},
 			{Text: Truncate(m.path, inner-2), S: Style{FG: t.Accent2, BG: t.Panel2}},
 		})
 	}
@@ -2682,7 +2571,7 @@ func (a *App) modalLayout() modalGeom {
 		}
 		segs := wrapSegs(Line{{Text: m.note, S: Style{FG: t.Muted, BG: t.Panel2, Italic: true}}}, inner)
 		if len(segs) > 3 {
-			segs = append(segs[:3], Line{{Text: "…", S: Style{FG: t.Dim, BG: t.Panel2}}})
+			segs = append(segs[:3], Line{{Text: glyphMore, S: Style{FG: t.Dim, BG: t.Panel2}}})
 		}
 		body = append(body, segs...)
 	}
@@ -2716,7 +2605,7 @@ func (a *App) modalLayout() modalGeom {
 	}
 	if m.danger {
 		body = append(body, Line{})
-		body = append(body, Line{{Text: "⚠ команда может изменить или удалить данные", S: Style{FG: t.Err, BG: t.Panel2, Bold: true}}})
+		body = append(body, Line{{Text: "[!] команда может изменить или удалить данные", S: Style{FG: t.Err, BG: t.Panel2, Bold: true}}})
 	}
 	// Кнопки: клавиша в скобках, выбранная — инверсией. Длинный список
 	// переносится по строкам: иначе дальние варианты уходили бы за рамку.
@@ -2755,20 +2644,20 @@ func (a *App) modalLayout() modalGeom {
 		shown := m.input.Text()
 		if m.secret {
 			// Ключи и токены не должны оставаться на экране даже на миг:
-			// показываем по точке на символ, содержимое знает только поле.
-			shown = strings.Repeat("•", len([]rune(shown)))
+			// показываем по звёздочке на символ, содержимое знает только поле.
+			shown = strings.Repeat(string(glyphSecret), len([]rune(shown)))
 		}
 		body = append(body, Line{
-			{Text: "❯ ", S: Style{FG: t.Accent, BG: t.Panel2, Bold: true}},
+			{Text: string(glyphPrompt) + " ", S: Style{FG: t.Accent, BG: t.Panel2, Bold: true}},
 			{Text: shown, S: Style{FG: t.Text, BG: t.Panel2}},
 		})
-		hint := "enter ответить · esc отмена"
+		hint := "enter ответить - esc отмена"
 		if len(m.opts) > 0 {
-			hint = "enter ответить · tab вариант · esc отмена"
+			hint = "enter ответить | tab вариант | esc отмена"
 		}
 		body = append(body, Line{{Text: hint, S: Style{FG: t.Dim, BG: t.Panel2}}})
 	} else {
-		body = append(body, Line{{Text: "←→ выбор · enter подтвердить · esc отмена", S: Style{FG: t.Dim, BG: t.Panel2}}})
+		body = append(body, Line{{Text: "стрелки выбор | enter подтвердить | esc отмена", S: Style{FG: t.Dim, BG: t.Panel2}}})
 	}
 	boxH := len(body) + 2
 	if max := a.h - 2; boxH > max {
@@ -2801,12 +2690,11 @@ func (a *App) drawModal(s *Screen) {
 	t := a.th
 	g := a.modalLayout()
 	m := a.modal
-	// Светлая полоса во всю ширину стирает обрывки строк, которые иначе
-	// липли бы к рамке окна; на высоком экране она не шире самого окна.
+	// Тёмная полоса во всю ширину стирает обрывки строк, которые иначе
+	// липли бы к рамке окна.
 	s.Dim(0.5)
 	s.Fill(0, g.y-1, a.w, g.h+2, Style{BG: Darken(t.Bg, 0.5)})
-	// Тень и фон.
-	s.Fill(g.x+1, g.y+1, g.w, g.h, Style{BG: Darken(t.Bg, 0.7)})
+	// Фон окна.
 	s.Fill(g.x, g.y, g.w, g.h, Style{BG: t.Panel2})
 	bcol := t.Gold
 	if m.danger {
@@ -2896,12 +2784,12 @@ func rateText(r float64) string {
 // humanDur — длительность для панели.
 func humanDur(d time.Duration) string {
 	if d < time.Second {
-		return fmt.Sprintf("%dмс", d.Milliseconds())
+		return fmt.Sprintf("%dms", d.Milliseconds())
 	}
 	if d < time.Minute {
-		return fmt.Sprintf("%.1fс", d.Seconds())
+		return fmt.Sprintf("%.1fs", d.Seconds())
 	}
 	m := int(d.Minutes())
 	s := int(d.Seconds()) % 60
-	return fmt.Sprintf("%dм%02dс", m, s)
+	return fmt.Sprintf("%dm%02ds", m, s)
 }

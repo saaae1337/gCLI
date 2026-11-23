@@ -660,7 +660,7 @@ func TestAppAskSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "маска", func() bool {
-		return strings.Contains(out.String(), "•")
+		return strings.Contains(out.String(), "*")
 	})
 	if strings.Contains(out.String(), "s3cr3t") {
 		t.Fatal("секрет попал в кадр")

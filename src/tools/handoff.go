@@ -72,12 +72,12 @@ func (h Handoff) Text() string {
 	if len(h.Pending) > 0 {
 		b.WriteString("\n## Что осталось сделать\n")
 		for i, t := range h.Pending {
-			mark := "☐"
+			mark := "[ ]"
 			switch t.Status {
 			case core.TodoInProgress:
-				mark = "▸"
+				mark = ">"
 			case core.TodoCompleted:
-				mark = ui.Glyph("✔", "+")
+				mark = ui.Glyph("ok", "+")
 			}
 			fmt.Fprintf(&b, "%s %d. %s\n", mark, i+1, t.Content)
 		}
@@ -175,7 +175,7 @@ func (r *Registry) snapshot(next, blocked string, done []string) Handoff {
 		if base.Failed > 0 {
 			h.Verified = fmt.Sprintf("последний прогон: упало %d (команда %s)", base.Failed, base.Command)
 			for _, f := range base.Failures {
-				h.Verified += "\n  - " + core.Truncate(core.OneLine(f.Where+" — "+f.What), 200)
+				h.Verified += "\n  - " + core.Truncate(core.OneLine(f.Where+" - "+f.What), 200)
 			}
 		} else {
 			h.Verified = fmt.Sprintf("последний прогон: зелёный (команда %s)", base.Command)
@@ -211,7 +211,7 @@ func (r *Registry) hHandoffRead(_ context.Context, _ map[string]any) (Result, er
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Result{
-			Text:    "Снимка состояния по этому проекту нет. Значит, предыдущий ход не дошёл до handoff — начни с обследования (project_info), а не с правок вслепую.",
+			Text:    "Снимка состояния по этому проекту нет. Значит, предыдущий ход не дошёл до handoff - начни с обследования (project_info), а не с правок вслепую.",
 			Summary: "снимка нет",
 		}, nil
 	}

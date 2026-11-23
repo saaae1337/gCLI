@@ -50,7 +50,7 @@ func TestMDToHTMLCodeBlocksAndTables(t *testing.T) {
 
 func TestMDToHTMLListItems(t *testing.T) {
 	out := mdToHTML("- первый пункт\n- второй пункт\n")
-	if strings.Count(out, "• ") != 2 {
+	if strings.Count(out, "- ") != 2 {
 		t.Fatalf("пункты списка:\n%s", out)
 	}
 }

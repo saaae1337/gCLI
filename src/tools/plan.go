@@ -14,7 +14,7 @@ import (
 func (r *Registry) hTodoWrite(_ context.Context, m map[string]any) (Result, error) {
 	todos := ParseTodos(m)
 	if todos == nil {
-		return Result{}, fmt.Errorf("укажи todos — массив объектов {content, status}")
+		return Result{}, fmt.Errorf("укажи todos - массив объектов {content, status}")
 	}
 	if r.env.Session != nil {
 		r.env.Session.SetTodos(todos)
@@ -24,12 +24,12 @@ func (r *Registry) hTodoWrite(_ context.Context, m map[string]any) (Result, erro
 	}
 	var b strings.Builder
 	for i, t := range todos {
-		mark := "☐"
+		mark := "[ ]"
 		switch t.Status {
 		case core.TodoInProgress:
-			mark = "▸"
+			mark = ">"
 		case core.TodoCompleted:
-			mark = ui.Glyph("✔", "+")
+			mark = ui.Glyph("ok", "+")
 		}
 		fmt.Fprintf(&b, "%s %d. %s\n", mark, i+1, t.Content)
 	}
@@ -86,7 +86,7 @@ func (r *Registry) hNote(_ context.Context, m map[string]any) (Result, error) {
 		r.env.OnNote(title, body)
 	}
 	return Result{
-		Text:    fmt.Sprintf("Заметка «%s» сохранена в памяти задачи (%d симв.).", title, len([]rune(body))),
+		Text:    fmt.Sprintf("Заметка \"%s\" сохранена в памяти задачи (%d симв.).", title, len([]rune(body))),
 		Summary: "заметка: " + title,
 	}, nil
 }

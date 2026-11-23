@@ -132,7 +132,7 @@ func (h *LSPHub) conn(workDir, path string) (*lspConn, error) {
 	if !ok {
 		ext := strings.ToLower(filepath.Ext(path))
 		if h.cfgCmds[ext] != "" || lspPresets[ext] != "" {
-			return nil, fmt.Errorf("сервер %q не найден в PATH — установи его или переопредели ключом lsp в config.json",
+			return nil, fmt.Errorf("сервер %q не найден в PATH - установи его или переопредели ключом lsp в config.json",
 				core.FirstNonEmpty(h.cfgCmds[ext], lspPresets[ext]))
 		}
 		return nil, fmt.Errorf("для %s нет language server (пресеты: %s)",
@@ -735,7 +735,7 @@ func formatDiagnostics(path, text string, items []lspDiag) string {
 	fmt.Fprintf(&b, "LSP-диагностика после правки (%s): %d замечаний", filepath.Base(path), len(items))
 	for i, d := range items {
 		if i >= 20 {
-			fmt.Fprintf(&b, "\n  … и ещё %d — вызови lsp_diagnostics для полного списка", len(items)-i)
+			fmt.Fprintf(&b, "\n  ... и ещё %d - вызови lsp_diagnostics для полного списка", len(items)-i)
 			break
 		}
 		sev := lspSeverity[d.Severity]
@@ -746,7 +746,7 @@ func formatDiagnostics(path, text string, items []lspDiag) string {
 		if d.Source != "" {
 			src = " (" + d.Source + ")"
 		}
-		fmt.Fprintf(&b, "\n  [%s] %d:%d — %s%s",
+		fmt.Fprintf(&b, "\n  [%s] %d:%d - %s%s",
 			sev, d.Range.Start.Line+1, runeColOf(lineOf(text, d.Range.Start.Line), d.Range.Start.Character), d.Message, src)
 	}
 	return b.String()
@@ -850,7 +850,7 @@ func (c *lspConn) definition(path string, line, character int) (string, error) {
 		parts := make([]string, 0, len(many))
 		for i, l := range many {
 			if i >= 10 {
-				parts = append(parts, fmt.Sprintf("… и ещё %d", len(many)-i))
+				parts = append(parts, fmt.Sprintf("... и ещё %d", len(many)-i))
 				break
 			}
 			parts = append(parts, one(l))
