@@ -67,7 +67,7 @@ func (a *Agent) CollectReport(ctx context.Context) string {
 		return ""
 	}
 	const demand = "[Система] Инструменты недоступны. Сдай ИТОГОВЫЙ ОТЧЁТ по исходной задаче: " +
-		"что сделано, что не получилось и почему. Отчёт самодостаточный — заказчик не видит твоего контекста."
+		"что сделано, что не получилось и почему. Отчёт самодостаточный - заказчик не видит твоего контекста."
 
 	prevSys, prevReg, prevMode := a.System, a.d.Registry, a.AgentMode
 	a.System = prevSys + finalizePrompt
@@ -201,7 +201,7 @@ func RunSubagent(ctx context.Context, d SubagentDeps, spec subagents.Spec) subag
 	ag.d.OnToolStart = func(tc core.ToolCall, tool *tools.Tool) {
 		toolCalls.Add(1)
 		if d.OnEvent != nil {
-			d.OnEvent("tool", fmt.Sprintf("%s → %s", spec.Name, tc.Name))
+			d.OnEvent("tool", fmt.Sprintf("%s -> %s", spec.Name, tc.Name))
 		}
 	}
 	ag.d.OnToolDone = func(tc core.ToolCall, tool *tools.Tool, res tools.Result, err error, elapsed time.Duration) {

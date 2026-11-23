@@ -85,7 +85,7 @@ func (r *Registry) LoadMCPConfig() (MCPConfig, []string) {
 		}
 		for name, srv := range cfg.Servers {
 			if strings.TrimSpace(srv.Command) == "" {
-				warns = append(warns, fmt.Sprintf("mcp.json (%s): сервер «%s» без command — пропущен", d[1], name))
+				warns = append(warns, fmt.Sprintf("mcp.json (%s): сервер \"%s\" без command - пропущен", d[1], name))
 				continue
 			}
 			merged.Servers[name] = srv
@@ -272,7 +272,7 @@ func mcpStart(ctx context.Context, name string, srv MCPServer, version string) (
 		"clientInfo":      map[string]string{"name": "gcli", "version": version},
 	}); err != nil {
 		c.stop()
-		return nil, fmt.Errorf("MCP «%s»: рукопожатие не удалось: %v", name, err)
+		return nil, fmt.Errorf("MCP \"%s\": рукопожатие не удалось: %v", name, err)
 	}
 	c.notify("notifications/initialized", nil)
 	return c, nil
@@ -512,7 +512,7 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 		// стартует ДО первого вопроса пользователя. Подробности — /mcp trust.
 		if !r.mcpTrusted(name) {
 			warns = append(warns, fmt.Sprintf(
-				"MCP «%s»: сервер из проекта, требует подтверждения (/mcp trust %s)", name, name))
+				"MCP \"%s\": сервер из проекта, требует подтверждения (/mcp trust %s)", name, name))
 			continue
 		}
 		r.muMCP.Lock()
@@ -547,14 +547,14 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 		raw, err := conn.call(listCtx, "tools/list", map[string]any{})
 		cancel()
 		if err != nil {
-			warns = append(warns, fmt.Sprintf("MCP «%s»: список инструментов не получен: %v", name, err))
+			warns = append(warns, fmt.Sprintf("MCP \"%s\": список инструментов не получен: %v", name, err))
 			continue
 		}
 		var list struct {
 			Tools []mcpToolDef `json:"tools"`
 		}
 		if err := json.Unmarshal(raw, &list); err != nil {
-			warns = append(warns, fmt.Sprintf("MCP «%s»: кривой ответ tools/list: %v", name, err))
+			warns = append(warns, fmt.Sprintf("MCP \"%s\": кривой ответ tools/list: %v", name, err))
 			continue
 		}
 		for _, t := range list.Tools {
@@ -575,7 +575,7 @@ func (r *Registry) RegisterMCPVersion(version string) (int, []string) {
 			}
 		}
 		if len(list.Tools) == 0 {
-			warns = append(warns, fmt.Sprintf("MCP «%s»: сервер не объявил ни одного инструмента", name))
+			warns = append(warns, fmt.Sprintf("MCP \"%s\": сервер не объявил ни одного инструмента", name))
 		}
 	}
 	return count, warns
@@ -613,7 +613,7 @@ func (r *Registry) mcpHandler(server, fullName, callName string, timeout time.Du
 		conn := r.mcpConns[server]
 		r.muMCP.Unlock()
 		if conn == nil || !conn.alive() {
-			return Result{}, fmt.Errorf("MCP-сервер «%s» не подключён — /mcp reload", server)
+			return Result{}, fmt.Errorf("MCP-сервер \"%s\" не подключён - /mcp reload", server)
 		}
 		// Потолок захвачен при регистрации (см. registerMCPToolIfAbsent):
 		// читать mcp.json на каждый вызов — лишний I/O в горячем пути.
@@ -629,7 +629,7 @@ func (r *Registry) mcpHandler(server, fullName, callName string, timeout time.Du
 			"arguments": args,
 		})
 		if err != nil {
-			return Result{}, fmt.Errorf("MCP «%s»: %v", server, err)
+			return Result{}, fmt.Errorf("MCP \"%s\": %v", server, err)
 		}
 		return mcpParseCallResult(raw, server, r.workDir)
 	}
@@ -648,7 +648,7 @@ func mcpParseCallResult(raw json.RawMessage, server string, workDir ...string) (
 		Err     string `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return Result{}, fmt.Errorf("MCP «%s»: не удалось разобрать ответ: %v", server, err)
+		return Result{}, fmt.Errorf("MCP \"%s\": не удалось разобрать ответ: %v", server, err)
 	}
 	var b strings.Builder
 	var imgs []core.Image
@@ -732,9 +732,9 @@ func (r *Registry) MCPStatus() (servers []string, tools int) {
 		c := r.mcpConns[name]
 		r.muMCP.Unlock()
 		if c != nil && c.alive() {
-			live = " · подключён"
+			live = " | подключён"
 		}
-		servers = append(servers, fmt.Sprintf("%s (%s%s) — %s %s", name, state, live, srv.Command, strings.Join(srv.Args, " ")))
+		servers = append(servers, fmt.Sprintf("%s (%s%s) - %s %s", name, state, live, srv.Command, strings.Join(srv.Args, " ")))
 	}
 	sort.Strings(servers)
 	return servers, tools

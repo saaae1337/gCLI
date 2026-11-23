@@ -252,9 +252,9 @@ func TestReadAnsUnavailableAlwaysAsksAgain(t *testing.T) {
 // newStdin, который закрывает lines в defer при чтении os.Stdin).
 func TestReadAnsEofMeansNo(t *testing.T) {
 	a, _ := cmdApp(t)
-	lines := make(chan string)
-	close(lines)
-	a.stdin = &stdinReader{lines: lines, keys: make(chan byte, 1)}
+	events := make(chan termEvent)
+	close(events)
+	a.stdin = &stdinReader{events: events}
 	if got := a.readAns(true, true); got != confirmNo {
 		t.Errorf("закрытый ввод должен означать отказ, получено %d", got)
 	}
@@ -318,7 +318,7 @@ func TestAutoApproveDangerBoundary(t *testing.T) {
 		t.Error("удаление в домашнем каталоге должно спрашивать")
 	}
 	if !a.autoApprove(execReq("rm -rf build")) {
-		t.Error("rm -rf build — обычная чистка сборки, автопилот должен одобрить")
+		t.Error("rm -rf build - обычная чистка сборки, автопилот должен одобрить")
 	}
 	if !a.autoApprove(execReq("go test ./...")) {
 		t.Error("go test в автопилоте одобряется")
@@ -332,15 +332,15 @@ func TestAutoApproveDangerBoundary(t *testing.T) {
 	// включая разрушительные» было бы неправдой.
 	a.sess.Perms.AutopilotAll = true
 	if !a.autoApprove(execReq("rm -rf /")) {
-		t.Error("в режиме all rm -rf / должен одобряться — иначе all ничего не добавляет")
+		t.Error("в режиме all rm -rf / должен одобряться - иначе all ничего не добавляет")
 	}
 }
 
 // testStdinMultiline — stdinReader с несколькими готовыми строками.
 func testStdinMultiline(lines ...string) *stdinReader {
-	s := &stdinReader{lines: make(chan string, len(lines)), keys: make(chan byte, 1)}
+	s := &stdinReader{events: make(chan termEvent, len(lines)+8)}
 	for _, l := range lines {
-		s.lines <- l
+		s.events <- termEvent{kind: evLine, line: l}
 	}
 	return s
 }
@@ -524,7 +524,7 @@ func TestRecordCheckpointConcurrentNoRace(t *testing.T) {
 	// После wg.Wait() happens-before гарантирован: чтение слайса без замка
 	// здесь безопасно и показывает, что append ничего не потерял.
 	if got := len(a.sess.Checkpoints); got != workers*each {
-		t.Errorf("чекпоинтов %d, ждали %d — append терял записи", got, workers*each)
+		t.Errorf("чекпоинтов %d, ждали %d - append терял записи", got, workers*each)
 	}
 }
 

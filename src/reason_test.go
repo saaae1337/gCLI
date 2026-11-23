@@ -3,7 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"gcli/ui"
 )
@@ -71,10 +70,10 @@ func TestToggleReasonShowsBuffer(t *testing.T) {
 	if !strings.Contains(out, "накопленная мысль") {
 		t.Errorf("Ctrl+O должен показать накопленные размышления:\n%q", out)
 	}
-	if !strings.Contains(out, "размышления") {
+	if !strings.Contains(out, "thinking") {
 		t.Errorf("нет маркера потока:\n%q", out)
 	}
-	if n := strings.Count(out, "размышления"); n != 1 {
+	if n := strings.Count(out, "thinking"); n != 1 {
 		t.Errorf("маркер потока напечатан %d раз, ожидался один:\n%q", n, out)
 	}
 
@@ -142,14 +141,14 @@ func TestThirdCtrlONoDuplicateMarker(t *testing.T) {
 
 	a.toggleReason() // снова открыть — новых кусков нет
 	got := buf.String()
-	if n := strings.Count(got, "размышления"); n != 0 {
+	if n := strings.Count(got, "thinking"); n != 0 {
 		t.Errorf("пустое переоткрытие не должно печатать заголовок (%d шт):\n%q", n, got)
 	}
 
 	// Первый же новый кусок открывает заголовок сам — один раз.
-	a.onReason(" добавка")
+	a.onReason(" добавка\n")
 	got = buf.String()
-	if n := strings.Count(got, "размышления"); n != 1 {
+	if n := strings.Count(got, "thinking"); n != 1 {
 		t.Errorf("заголовок потока напечатан %d раз, ждали один:\n%q", n, got)
 	}
 	if !strings.Contains(got, "добавка") {
@@ -164,7 +163,7 @@ func TestReasonLiveAfterToggle(t *testing.T) {
 	a.toggleReason()
 	buf.Reset()
 
-	a.onReason("второе")
+	a.onReason("второе\n")
 	if !strings.Contains(buf.String(), "второе") {
 		t.Errorf("после Ctrl+O куски должны печататься сразу:\n%q", buf.String())
 	}
@@ -205,7 +204,7 @@ func TestToggleBeforeFirstChunk(t *testing.T) {
 	}
 
 	buf.Reset()
-	a.onReason("первая мысль")
+	a.onReason("первая мысль\n")
 	if !strings.Contains(buf.String(), "первая мысль") {
 		t.Errorf("после раннего Ctrl+O мысли должны идти сразу:\n%q", buf.String())
 	}
@@ -307,7 +306,7 @@ func TestCtrlOBetweenTurnsShowsLastReason(t *testing.T) {
 		t.Errorf("Ctrl+O между ходами должен показать мысли последнего хода:\n%q", out)
 	}
 	if strings.Contains(out, "размышлений пока нет") {
-		t.Errorf("при непустом reasonLast отвечать «пока нет» нельзя:\n%q", out)
+		t.Errorf("при непустом reasonLast отвечать \"пока нет\" нельзя:\n%q", out)
 	}
 	if !a.reasonPastShown() {
 		t.Error("после показа мыслей REPL должен перерисовать приглашение (reasonPast)")
@@ -351,10 +350,10 @@ func TestCtrlOBranchesOnRunning(t *testing.T) {
 		t.Errorf("во время хода Ctrl+O должен показать мысли текущего хода:\n%q", out)
 	}
 	if strings.Contains(out, "размышлений пока нет") {
-		t.Errorf("во время хода отвечать «пока нет» нельзя:\n%q", out)
+		t.Errorf("во время хода отвечать \"пока нет\" нельзя:\n%q", out)
 	}
 	if a.reasonPastShown() {
-		t.Error("во время хода блок мыслей не «прошлый»: перерисовка не нужна")
+		t.Error("во время хода блок мыслей не \"прошлый\": перерисовка не нужна")
 	}
 
 	a.mu.Lock()
@@ -362,12 +361,11 @@ func TestCtrlOBranchesOnRunning(t *testing.T) {
 	a.mu.Unlock()
 }
 
-// Один watcher на весь сеанс: нажатие обрабатывается и ход гасит его
-// безопасно — повторный stopWatcher не паникует.
-func TestWatcherHandlesCtrlOAndStops(t *testing.T) {
+// Ctrl+O во время хода: нажатие включает показ размышлений и переживает
+// повторный вызов (раньше за этим следил watcher - теперь клавишу читает
+// композер и зовёт ctrlO напрямую).
+func TestCtrlOHandlesDuringTurn(t *testing.T) {
 	a, _ := reasonApp(t)
-	keys := make(chan byte, 4)
-	a.stdin = &stdinReader{keys: keys}
 
 	a.onReason("накоплено")
 	// running = true, чтобы ctrlO пошёл по ветке хода: именно она включает
@@ -375,50 +373,15 @@ func TestWatcherHandlesCtrlOAndStops(t *testing.T) {
 	a.mu.Lock()
 	a.running = true
 	a.mu.Unlock()
-	w := a.startWatcher(a.ctrlO)
 
-	keys <- ctrlO
-	// Нажатие должно быть обработано: ждём включения показа.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		a.reasonMu.Lock()
-		live := a.reasonLive
-		a.reasonMu.Unlock()
-		if live {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	a.ctrlO()
 	a.reasonMu.Lock()
 	live := a.reasonLive
 	a.reasonMu.Unlock()
 	if !live {
-		t.Fatal("watchKeys не отреагировал на Ctrl+O")
+		t.Fatal("ctrlO не отреагировал на нажатие во время хода")
 	}
-
-	w.stopWatcher()
-	w.stopWatcher() // идемпотентно: defer в main зовёт второй раз
-}
-
-// Канал клавиш закрыт — watcher тихо выходит, не наследуя панику.
-func TestWatcherStopsOnClosedKeys(t *testing.T) {
-	a, _ := reasonApp(t)
-	keys := make(chan byte)
-	a.stdin = &stdinReader{keys: keys}
-
-	w := a.startWatcher(a.ctrlO)
-	close(keys)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.stopWatcher()
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher не завершился после закрытия канала клавиш")
-	}
+	a.ctrlO() // повторное нажатие не паникует и сворачивает поток
 }
 
 // Флаг reasonPast живёт между нажатием и перерисовкой приглашения, а

@@ -107,11 +107,18 @@ const maxBashOutput = 16000
 // конвертации байт в руны (кириллица — 2 байта на символ).
 const bashCaptureLimit = 64 * 1024
 
+// bashInputLimit — потолок данных для stdin одной команды.
+const bashInputLimit = 64 * 1024
+
 // hBash — выполнить shell-команду.
 func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) {
 	cmd := ArgStr(m, "command")
 	if strings.TrimSpace(cmd) == "" {
 		return Result{}, fmt.Errorf("укажи command")
+	}
+	input := ArgStr(m, "input")
+	if len(input) > bashInputLimit {
+		return Result{}, fmt.Errorf("input слишком большой: %s, потолок %s - запиши данные в файл и прочитай командой", core.HumanSize(len(input)), core.HumanSize(bashInputLimit))
 	}
 	timeout := core.Clamp(ArgInt(m, "timeout_sec", 60), 5, 600)
 	workdir := r.workDir
@@ -157,10 +164,17 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 	captured := core.NewCapture(bashCaptureLimit)
 	cmdEx.Stdout = captured
 	cmdEx.Stderr = captured
+	// stdin: команда может есть данные (python -, sendmail, фильтр).
+	// Без этого модель была бы вынуждена городить heredoc прямо в команде
+	// и экранировать его содержимое.
+	if input != "" {
+		cmdEx.Stdin = strings.NewReader(input)
+	}
 	err := cmdEx.Run()
 	out := captured.String()
 	out = core.TruncateUTF8(out, maxBashOutput/2, maxBashOutput/2)
 
+	exitCode := 0
 	if err != nil {
 		// Таймаут проверяем ДО ExitError: CommandContext убивает процесс,
 		// и ошибка приходит как обычный ненулевой код выхода. Иначе
@@ -169,13 +183,15 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 		switch {
 		case cctx.Err() == context.DeadlineExceeded:
 			return Result{
-				Text:    fmt.Sprintf("Таймаут %ds. Частичный вывод:\n%s", timeout, out),
-				Summary: fmt.Sprintf("таймаут %ds", timeout),
+				Text:     fmt.Sprintf("Таймаут %ds. Частичный вывод:\n%s", timeout, out),
+				Summary:  fmt.Sprintf("таймаут %ds", timeout),
+				ExitCode: -1,
 			}, nil
 		case errors.As(err, &ee):
+			exitCode = ee.ExitCode()
 			out += fmt.Sprintf("\n[код выхода: %d]", ee.ExitCode())
 		case ctx.Err() != nil:
-			return Result{Error: "команда прервана"}, nil
+			return Result{Error: "команда прервана", ExitCode: -1}, nil
 		case errors.Is(err, exec.ErrWaitDelay):
 			// Оболочка завершилась штатно, но фоновый потомок держит вывод
 			// открытым — Wait вернулся по WaitDelay. Сама команда отработала:
@@ -197,11 +213,12 @@ func (r *Registry) hBash(ctx context.Context, m map[string]any) (Result, error) 
 		summary = "вывод"
 	}
 	if len([]rune(summary)) > 60 {
-		summary = string([]rune(summary)[:60]) + "…"
+		summary = string([]rune(summary)[:60]) + "..."
 	}
 	return Result{
-		Text:    out,
-		Summary: summary,
+		Text:     out,
+		Summary:  summary,
+		ExitCode: exitCode,
 	}, nil
 }
 

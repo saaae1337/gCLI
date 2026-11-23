@@ -2,7 +2,7 @@ package ui
 
 // Регрессии, найденные фаззингом подсчёта ширины.
 //
-// Каждый случай — реальный вход, на котором вёрстка и то, что увидит
+// Каждый случай - реальный вход, на котором вёрстка и то, что увидит
 // терминал, сходились по-разному. Фаззинг их нашёл, но объяснить, что
 // именно сломалось, может только человек: поэтому здесь каждый вход
 // подписан словами, а не лежит файлом в testdata.
@@ -17,7 +17,7 @@ import (
 // продолжения, а дальше конец строки.
 //
 // Мерялось 2 ячейки (два байта по одной), а печатался один знак
-// замены — одна ячейка. Колонка съезжала ровно там, где текст битый.
+// замены - одна ячейка. Колонка съезжала ровно там, где текст битый.
 func TestWidthMatchesRepairedTextOnTruncatedSequence(t *testing.T) {
 	broken := "\xe6\x97"
 	repaired := strings.ToValidUTF8(broken, string(utf8.RuneError))
@@ -31,7 +31,7 @@ func TestWidthMatchesRepairedTextOnTruncatedSequence(t *testing.T) {
 	}
 }
 
-// Одинокий байт-продолжение 0x96 — следы windows-1251.
+// Одинокий байт-продолжение 0x96 - следы windows-1251.
 func TestWidthMatchesRepairedTextOnLoneContinuationByte(t *testing.T) {
 	broken := "\x96"
 	repaired := strings.ToValidUTF8(broken, string(utf8.RuneError))
@@ -41,7 +41,7 @@ func TestWidthMatchesRepairedTextOnLoneContinuationByte(t *testing.T) {
 }
 
 // Escape подряд с битым байтом: 0xED ждёт два продолжения, но вместо
-// них получает ESC, а тот — ещё один 0xD7.
+// них получает ESC, а тот - ещё один 0xD7.
 //
 // skipANSI считал байты и, увидев после ESC старший байт U+FFFD,
 // съедал только первую половину знака замены. Дальше отсчёт ехал, и
@@ -59,14 +59,14 @@ func TestWidthStableWithEscapeNextToBrokenBytes(t *testing.T) {
 }
 
 // После ESC не-ASCII не бывает частью escape: все последовательности
-// состоят из ASCII-байтов. ESC перед многобайтовым знаком — это ESC
+// состоят из ASCII-байтов. ESC перед многобайтовым знаком - это ESC
 // плюс обычный символ, и буква обязана остаться на месте.
 //
 // Раньше skipANSI съедал ESC вместе с первым байтом буквы, и она
 // теряла половину: счёт ехал, буква на экране становилась другой.
 func TestEscapeBeforeMultibyteRuneKeepsRune(t *testing.T) {
 	s := "\x1b" + "ы"
-	// Escape места не занимает, буква — одна ячейка: итого одна.
+	// Escape места не занимает, буква - одна ячейка: итого одна.
 	if got := cellWidth(s); got != 1 {
 		t.Errorf("«ESC» плюс кириллица: ширина %d вместо 1", got)
 	}
@@ -75,8 +75,8 @@ func TestEscapeBeforeMultibyteRuneKeepsRune(t *testing.T) {
 	}
 }
 
-// Раньше isEmoji считал эмодзи весь блок U+1F000–U+1F2FF и весь блок
-// стрелок U+2B00–U+2BFF. В них много узких символов, и каждая такая
+// Раньше isEmoji считал эмодзи весь блок U+1F000-U+1F2FF и весь блок
+// стрелок U+2B00-U+2BFF. В них много узких символов, и каждая такая
 // строка получала лишнюю колонку. Широкими остаются только реальные
 // эмодзи, в том числе старые символы вроде ⬛ и 🀄.
 func TestCellWidthMixedBlocks(t *testing.T) {
@@ -101,7 +101,7 @@ func TestCellWidthMixedBlocks(t *testing.T) {
 	}
 }
 
-// CSI заканчивается не только буквой: у «ESC[3~» (Delete) финал — тильда.
+// CSI заканчивается не только буквой: у «ESC[3~» (Delete) финал - тильда.
 // Прежний разбор ждал букву и съедал текст после последовательности.
 func TestCSITildeDoesNotEatText(t *testing.T) {
 	s := "\033[3~abc"
@@ -143,7 +143,7 @@ func TestTruncateCellsDropsIncompleteEscape(t *testing.T) {
 }
 
 // Оборванная CSI перед обычным текстом не должна уносить этот текст:
-// разборщик считает ESC[ съеденным, а следующий байт — уже содержимым.
+// разборщик считает ESC[ съеденным, а следующий байт - уже содержимым.
 func TestTruncateCellsKeepsTextAfterBrokenCSI(t *testing.T) {
 	got := truncateCells("x\033[\uFFFDabc", 100)
 	if !strings.Contains(got, "abc") {
@@ -155,7 +155,7 @@ func TestTruncateCellsKeepsTextAfterBrokenCSI(t *testing.T) {
 }
 
 // StripANSI обязан понимать все виды CSI и OSC, а не только SGR с «m»:
-// «ESC[2K» очищает строку и заканчивается буквой K, OSC — BEL или ESC \.
+// «ESC[2K» очищает строку и заканчивается буквой K, OSC - BEL или ESC \.
 func TestStripANSINonSGR(t *testing.T) {
 	cases := []struct {
 		in   string

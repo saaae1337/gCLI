@@ -13,7 +13,7 @@ import (
 // Именно из-за невидимости модель не может собрать old_string для edit_file.
 func TestEscapeLineMarksInvisible(t *testing.T) {
 	got := EscapeLine("a\tb\r\u00a0c")
-	for _, want := range []string{"→", "␍", "⍽"} {
+	for _, want := range []string{">", "<CR>", "*"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("в выводе нет маркера %q: %q", want, got)
 		}
@@ -88,10 +88,10 @@ func TestInspectShowsLineNumbersAndMarks(t *testing.T) {
 	r := newTestReg(t, dir)
 	res := mustRun(t, r, "inspect", map[string]any{"path": "f.go"})
 
-	if !strings.Contains(res.Text, "→") {
+	if !strings.Contains(res.Text, ">") {
 		t.Errorf("таб не показан:\n%s", res.Text)
 	}
-	if !strings.Contains(res.Text, "    1 │") {
+	if !strings.Contains(res.Text, "    1 |") {
 		t.Errorf("нет нумерации строк:\n%s", res.Text)
 	}
 	if !strings.Contains(res.Text, "ДИАГНОСТИКИ") {
@@ -165,10 +165,10 @@ func TestReadFileEscapeMatchesInspect(t *testing.T) {
 	viaRead := mustRun(t, r, "read_file", map[string]any{"path": "f.go", "escape": true})
 	viaInspect := mustRun(t, r, "inspect", map[string]any{"path": "f.go"})
 
-	if !strings.Contains(viaRead.Text, "→") {
+	if !strings.Contains(viaRead.Text, ">") {
 		t.Errorf("read_file {escape:true} не показал табы:\n%s", viaRead.Text)
 	}
-	if !strings.Contains(viaInspect.Text, "→") {
+	if !strings.Contains(viaInspect.Text, ">") {
 		t.Errorf("inspect не показал табы:\n%s", viaInspect.Text)
 	}
 	if !strings.Contains(viaRead.Text, "Точное содержимое") {
@@ -204,7 +204,7 @@ func TestReadFileWithoutEscapeIsPlain(t *testing.T) {
 
 	r := newTestReg(t, dir)
 	res := mustRun(t, r, "read_file", map[string]any{"path": "f.txt"})
-	if strings.Contains(res.Text, "→") {
+	if strings.Contains(res.Text, ">") {
 		t.Errorf("обычное чтение подменило таб на маркер:\n%s", res.Text)
 	}
 }

@@ -21,13 +21,9 @@ func ansApp(t *testing.T, answers ...string) *app {
 		Theme: "ember", Unicode: true, Color: false, Grade: ui.Color16,
 		Animations: false, Width: 80, Out: buf,
 	})
-	s := &stdinReader{
-		lines: make(chan string, len(answers)+1),
-		keys:  make(chan byte, 8),
-		out:   buf,
-	}
+	s := &stdinReader{events: make(chan termEvent, len(answers)+8)}
 	for _, ans := range answers {
-		s.lines <- ans
+		s.events <- termEvent{kind: evLine, line: ans}
 	}
 	a.stdin = s
 	return a
@@ -39,13 +35,13 @@ func ansApp(t *testing.T, answers ...string) *app {
 func TestReadAnsUpperAChoosesAll(t *testing.T) {
 	a := ansApp(t, "A")
 	if got := a.readAns(true, true); got != confirmAll {
-		t.Errorf("A с доступным «все» = %d, хотели %d (confirmAll)", got, confirmAll)
+		t.Errorf("A с доступным \"все\" = %d, хотели %d (confirmAll)", got, confirmAll)
 	}
 	// «A» без доступного «все» — не «всегда», а переспрос, после которого
 	// «y» нормально завершает диалог.
 	a2 := ansApp(t, "A", "y")
 	if got := a2.readAns(false, false); got != confirmYes {
-		t.Errorf("после отказа «A» ответ «y» = %d, хотели %d (confirmYes)", got, confirmYes)
+		t.Errorf("после отказа \"A\" ответ \"y\" = %d, хотели %d (confirmYes)", got, confirmYes)
 	}
 	// Строчная «a» — по-прежнему «всегда».
 	a3 := ansApp(t, "a")

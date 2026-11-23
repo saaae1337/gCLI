@@ -70,7 +70,7 @@ func Summarize(full string) string {
 	tail := summaryMaxLines - head
 	out := make([]string, 0, summaryMaxLines+1)
 	out = append(out, content[:head]...)
-	out = append(out, fmt.Sprintf("… [%d строк пропущено] …", len(content)-head-tail))
+	out = append(out, fmt.Sprintf("... [%d строк пропущено] ...", len(content)-head-tail))
 	out = append(out, content[len(content)-tail:]...)
 	return clampChars(strings.Join(out, "\n"))
 }
@@ -84,7 +84,7 @@ func clampChars(s string) string {
 	head := summaryMaxChars / 2
 	tail := summaryMaxChars - head
 	return string(r[:head]) +
-		fmt.Sprintf("\n…[сводка обрезана: пропущено %d символов]…\n", len(r)-head-tail) +
+		fmt.Sprintf("\n...[сводка обрезана: пропущено %d символов]...\n", len(r)-head-tail) +
 		string(r[len(r)-tail:])
 }
 

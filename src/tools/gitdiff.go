@@ -28,7 +28,7 @@ const gitDiffMaxBytes = 60000
 func gitDiffStat(r *Registry) (string, error) {
 	root := gitRepoRoot(r.workDir)
 	if root == "" {
-		return "", fmt.Errorf("каталог не под git — дифф не показать")
+		return "", fmt.Errorf("каталог не под git - дифф не показать")
 	}
 	out, err := gitOut(root, "diff", "--stat", "HEAD")
 	if err != nil {
@@ -48,7 +48,7 @@ func gitDiffStat(r *Registry) (string, error) {
 func (r *Registry) hGitDiff(_ context.Context, m map[string]any) (Result, error) {
 	root := gitRepoRoot(r.workDir)
 	if root == "" {
-		return Result{}, fmt.Errorf("каталог не под git — сравнивать не с чем. " +
+		return Result{}, fmt.Errorf("каталог не под git - сравнивать не с чем. " +
 			"Другие способы увидеть правку: changes (журнал write_file/edit_file), " +
 			"changes с detail (дифф последних правок), revert_last с dry_run (что откатится)")
 	}
@@ -68,7 +68,7 @@ func (r *Registry) hGitDiff(_ context.Context, m map[string]any) (Result, error)
 	// заставил бы git писать файл (или читать чужое) вместо сравнения.
 	// Имя ревизии не может начинаться с дефиса.
 	if strings.HasPrefix(ref, "-") {
-		return Result{}, fmt.Errorf("ref не может начинаться с «-»: %s", ref)
+		return Result{}, fmt.Errorf("ref не может начинаться с \"-\": %s", ref)
 	}
 	args := []string{"diff", "--no-color"}
 	switch {
@@ -109,7 +109,7 @@ func (r *Registry) hGitDiff(_ context.Context, m map[string]any) (Result, error)
 	}
 	tail := ""
 	if cut {
-		tail = fmt.Sprintf("\n\n[diff обрезан на %s — сузь выборку через path или ref]",
+		tail = fmt.Sprintf("\n\n[diff обрезан на %s - сузь выборку через path или ref]",
 			core.HumanSize(gitDiffMaxBytes))
 	}
 	return Result{

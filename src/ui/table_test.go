@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestTableAlignsColoredCells — цветные ячейки не сдвигают колонки таблицы:
+// TestTableAlignsColoredCells - цветные ячейки не сдвигают колонки таблицы:
 // padRight считает видимую ширину без ANSI-кодов.
 func TestTableAlignsColoredCells(t *testing.T) {
 	u, buf := uiAt(Color256, 100)
@@ -20,11 +20,11 @@ func TestTableAlignsColoredCells(t *testing.T) {
 
 	got := buf.String()
 	// Строки данных: видимая позиция второй колонки должна совпадать в обеих
-	// строках (заголовок "статус · задача" задаёт базу).
+	// строках (заголовок "статус | задача" задаёт базу).
 	var positions []int
 	for _, line := range strings.Split(got, "\n") {
 		if strings.Contains(StripANSI(line), "первая") || strings.Contains(StripANSI(line), "вторая") {
-			head := strings.SplitN(StripANSI(line), "·", 2)[0]
+			head := strings.SplitN(StripANSI(line), "|", 2)[0]
 			positions = append(positions, visibleWidth(head))
 		}
 	}

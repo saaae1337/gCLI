@@ -143,12 +143,12 @@ func (c *Client) streamWithKeys(ctx context.Context, p *Provider, req *http.Requ
 			// когда ждать: молчаливая ошибка «лимит запросов» оставляет
 			// человека в догадках.
 			if until, paused := p.Pool.PausedUntil(); paused {
-				return fmt.Errorf("%w — все ключи на паузе до %s", err, until.Format("15:04:05"))
+				return fmt.Errorf("%w - все ключи на паузе до %s", err, until.Format("15:04:05"))
 			}
 			return err
 		}
 		if attempt+1 >= maxKeyAttempts {
-			return fmt.Errorf("%w — ключей перебрано: %d", err, attempt+1)
+			return fmt.Errorf("%w - ключей перебрано: %d", err, attempt+1)
 		}
 		req = withKey(req, p, p.CurrentKey())
 		if p.OnRotate != nil {
@@ -194,7 +194,7 @@ func (c *Client) fetchWithKeys(ctx context.Context, p *Provider, build func(key 
 			return resp.StatusCode, body, e
 		}
 		if attempt+1 >= maxKeyAttempts {
-			return resp.StatusCode, body, fmt.Errorf("%w — ключей перебрано: %d", e, attempt+1)
+			return resp.StatusCode, body, fmt.Errorf("%w - ключей перебрано: %d", e, attempt+1)
 		}
 		if p.OnRotate != nil {
 			p.OnRotate(from, to, ke.reason)
@@ -298,25 +298,25 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 			// Ключ отвергнут: с ним больше нельзя, следующий может быть
 			// годен. Сессия продолжается, если ключ в пуле есть.
 			return &keyError{
-				err:    fmt.Errorf("%w — ключ отклонён: тот ли это ключ для этого провайдера? нет ли кавычек/«Bearer»? диагностика: /doctor key", e),
+				err:    fmt.Errorf("%w - ключ отклонён: тот ли это ключ для этого провайдера? нет ли кавычек/\"Bearer\"? диагностика: /doctor key", e),
 				bad:    true,
 				reason: "ключ отклонён",
 			}
 		case resp.StatusCode == 402:
 			// Денег нет: ключ бесполезен до пополнения. Пауза длинная.
 			return &keyError{
-				err:    fmt.Errorf("%w — на балансе провайдера нет средств — пополни аккаунт (тест: /doctor key)", e),
+				err:    fmt.Errorf("%w - на балансе провайдера нет средств - пополни аккаунт (тест: /doctor key)", e),
 				pause:  KeyPauseNoMoney,
 				reason: "нет средств на балансе",
 			}
 		case resp.StatusCode == 404:
-			return fmt.Errorf("%w — неверный base URL или имя модели — проверь: /provider list · /models", e)
+			return fmt.Errorf("%w - неверный base URL или имя модели - проверь: /provider list | /models", e)
 		case resp.StatusCode == 429:
 			// Лимит запросов: ключ уходит на минуту, запрос продолжается
 			// со следующего. Ошибка остаётся повторяемой: если других
 			// ключей нет, повтор с тем же ключом ещё может пройти.
 			return &keyError{
-				err:    &retryErr{fmt.Errorf("%w — лимит запросов исчерпан (тест: /doctor key)", e)},
+				err:    &retryErr{fmt.Errorf("%w - лимит запросов исчерпан (тест: /doctor key)", e)},
 				pause:  KeyPauseLimit,
 				reason: "лимит запросов",
 			}
@@ -426,7 +426,7 @@ func (c *Client) doSSE(ctx context.Context, req *http.Request, onData streamFunc
 		// часть ответа уже доставлена, и повтор продублировал бы её.
 		if sctx.Err() != nil && ctx.Err() == nil {
 			if !gotAny {
-				return &retryErr{fmt.Errorf("поток молчал %v до первого события — соединение оборвано", sseStallTimeout)}
+				return &retryErr{fmt.Errorf("поток молчал %v до первого события - соединение оборвано", sseStallTimeout)}
 			}
 			return fmt.Errorf("поток молчал %v и оборвался посреди ответа", sseStallTimeout)
 		}

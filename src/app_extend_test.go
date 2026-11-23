@@ -103,7 +103,7 @@ func TestMaxItersAbsDefault(t *testing.T) {
 		t.Errorf("потолок по умолчанию %d ниже базы %d", got, a.maxIters())
 	}
 	if got <= a.maxIters() {
-		t.Errorf("потолок по умолчанию %d не оставляет запаса для продления при базе %d — механизм мёртв",
+		t.Errorf("потолок по умолчанию %d не оставляет запаса для продления при базе %d - механизм мёртв",
 			got, a.maxIters())
 	}
 	if got > agent.DefaultExtendAbs {

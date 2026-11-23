@@ -16,7 +16,7 @@ import (
 )
 
 // Version — версия приложения (обновляется при сборке через -ldflags).
-var Version = "0.9.0.1"
+var Version = "0.10.2"
 
 // ---------- Типы диалога ----------
 
@@ -199,6 +199,13 @@ type ProviderCfg struct {
 	// прокси выключается, потому что незнакомое поле в теле запроса
 	// может стоить ошибки.
 	PromptCache string `json:"prompt_cache,omitempty"`
+	// ContextLimit — окно контекста своего endpoint-а в токенах.
+	//
+	// Без него порог авто-сжатия и подрезки считался от дефолтных 128k:
+	// endpoint с окном в миллион сжимался бы в пять раз раньше нужного,
+	// а endpoint с окном в 32k переполнялся бы до первого сжатия.
+	// Задаётся при /provider add через ctx=N.
+	ContextLimit int `json:"context_limit,omitempty"`
 }
 
 // Config — настройки ~/.gcli/config.json.
@@ -215,10 +222,6 @@ type Config struct {
 	Compact    bool  `json:"compact,omitempty"`    // компактные блоки без пустых строк
 	ShowTime   bool  `json:"show_time,omitempty"`  // показывать время в шапках
 	Animations *bool `json:"animations,omitempty"` // анимации появления и спиннер (nil = авто)
-	// Mascot — маскот «Искра» (кот gcli): встречает в баннере, сидит
-	// у строки ввода, живёт в спиннере и провожает при выходе
-	// (nil = включён; GCLI_MASCOT=0 выключает принудительно).
-	Mascot *bool `json:"mascot,omitempty"`
 	// PlanMode — режим планирования: агент сначала предлагает план и не
 	// меняет файлы, пока пользователь не одобрит (/plan).
 	PlanMode bool `json:"plan_mode,omitempty"`
@@ -558,35 +561,135 @@ func HumanDuration(d time.Duration) string {
 	}
 }
 
+// Классы символов для оценки токенов (ApproxTokens).
+const (
+	clSpace = iota // пробелы, табы, переводы строк
+	clCyr          // кириллица
+	clCJK          // CJK-иероглифы и хангыль
+	clLatin        // латиница
+	clDigit        // цифры
+	clPunct        // пунктуация, скобки, прочие символы
+)
+
 // ApproxTokens — приблизительное число токенов в тексте.
 //
-// Учитывает, что кириллица и CJK токенизируются примерно в 1 token/rune,
-// а латиница — примерно 1 token на 4 символа.
+// Оценка идёт по классам символов, потому что BPE-токенизаторы современных
+// моделей режут их по-разному:
+//
+//   - латиница в прозе — примерно 1 токен на 4 символа;
+//   - латиница в коде (snake_case, camelCase, пути) — примерно 1 на 3:
+//     подчёркивания и границы регистра рвут слово на части;
+//   - кириллица — примерно 1 токен на 1.5 символа;
+//   - CJK — примерно 1 токен на 0.9 символа;
+//   - цифры — 1 токен на 3 цифры (числа режутся по 2–3 знака);
+//   - пунктуация и скобки — 1 токен на 2.5 знака (JSON и разметка дороже,
+//     чем кажется по объёму в символах);
+//   - пробелы почти бесплатны, но отступ в начале строки — 1 токен на 4
+//     знака: в коде их много, и раньше они считались как «почти ничего».
+//
+// Оценка намеренно держится чуть выше реальности: лучше сжать историю на
+// пару процентов раньше, чем однажды вылететь за окно контекста.
 func ApproxTokens(s string) int {
 	if s == "" {
 		return 0
 	}
-	var cyr, cjk, other, spaces int
-	for _, r := range s {
+	class := func(r rune) int {
 		switch {
 		case r == ' ' || r == '\n' || r == '\t' || r == '\r':
-			spaces++
-		case r >= 0x0410 && r <= 0x044F, r >= 0x0400 && r <= 0x04FF: // кириллица
-			cyr++
+			return clSpace
+		case r >= 0x0400 && r <= 0x04FF, r >= 0x0500 && r <= 0x052F: // кириллица
+			return clCyr
 		case r >= 0x3000 && r <= 0x9FFF, r >= 0xAC00 && r <= 0xD7AF,
 			r >= 0xF900 && r <= 0xFAFF: // CJK
-			cjk++
+			return clCJK
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= 0xC0 && r <= 0x24F: // латиница+диакритика
+			return clLatin
+		case r >= '0' && r <= '9':
+			return clDigit
 		default:
-			other++
+			return clPunct
 		}
 	}
-	// 1 токен ≈ 4 символа латиницы, 1 токен ≈ 1.4 символа кириллицы,
-	// 1 токен ≈ 0.7 символа CJK, пробелы почти бесплатны.
-	tok := float64(other)/4 + float64(cyr)/1.4 + float64(cjk)/0.7 + float64(spaces)/8
-	if tok < 1 && len(s) > 0 {
+	tok := 0.0
+	cur, n := -1, 0
+	// Признаки «кода» внутри латинского прогона: подчёркивания и границы
+	// регистра внутри слова (camelCase) делят слово на несколько токенов.
+	latinCode := false
+	prevLower := false
+	// Отступ в начале строки (после перевода строки или в самом начале
+	// текста) считается дороже межсловных пробелов — в коде его много.
+	runAtLineStart := false
+	lineStart := true
+	for _, r := range s {
+		c := class(r)
+		if c != cur {
+			if n > 0 {
+				tok += runTokens(cur, n, latinCode, runAtLineStart)
+			}
+			cur, n, latinCode, prevLower = c, 1, false, false
+			runAtLineStart = lineStart
+			if c == clLatin {
+				prevLower = r >= 'a' && r <= 'z'
+			}
+			if c != clSpace {
+				lineStart = false
+			}
+			continue
+		}
+		n++
+		if c == clLatin {
+			if r == '_' || (prevLower && r >= 'A' && r <= 'Z') {
+				latinCode = true
+			}
+			prevLower = r >= 'a' && r <= 'z'
+		}
+		if c == clSpace && r == '\n' {
+			// Перевод строки внутри whitespace-прогона: всё, что шло до
+			// него, — межсловные пробелы; всё, что после, — отступ новой
+			// строки. Прогон делится на два.
+			if n > 1 {
+				tok += runTokens(cur, n-1, latinCode, runAtLineStart)
+			}
+			n = 1
+			runAtLineStart = true
+		}
+	}
+	if n > 0 {
+		tok += runTokens(cur, n, latinCode, runAtLineStart)
+	}
+	if tok < 1 {
 		return 1
 	}
 	return int(tok) + 1
+}
+
+// runTokens — токены одного непрерывного прогона символов одного класса.
+//
+// Отдельно стоит отступ: четыре пробела в начале строки (уровень
+// вложенности в коде) — это обычно отдельный токен, а не «почти
+// бесплатный» хвост слова. Поэтому отступ считается по 1 токену на 4
+// знака, межсловный whitespace — по 1 на 8.
+func runTokens(class, n int, latinCode, atLineStart bool) float64 {
+	switch class {
+	case clCyr:
+		return float64(n) / 1.5
+	case clCJK:
+		return float64(n) / 0.9
+	case clLatin:
+		if latinCode {
+			return float64(n) / 3.2
+		}
+		return float64(n) / 4.0
+	case clDigit:
+		return float64(n) / 3.0
+	case clPunct:
+		return float64(n) / 2.5
+	default: // clSpace
+		if atLineStart {
+			return float64(n) / 4
+		}
+		return float64(n) / 8
+	}
 }
 
 // TruncateUTF8 — безопасно обрезать по рунам, оставив head и tail.
@@ -596,7 +699,7 @@ func TruncateUTF8(s string, head, tail int) string {
 	if len(r) <= head+tail {
 		return s
 	}
-	return string(r[:head]) + "\n…[обрезано, символов: " +
+	return string(r[:head]) + "\n...[обрезано, символов: " +
 		strconvItoa(len(r)-head-tail) + "]\n" + string(r[len(r)-tail:])
 }
 

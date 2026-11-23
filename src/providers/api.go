@@ -29,14 +29,14 @@ func Stream(ctx context.Context, c *Client, p *Provider, creq core.ChatRequest, 
 		return fmt.Errorf("провайдер не задан")
 	}
 	if creq.Model == "" {
-		return fmt.Errorf("не выбрана модель — задай: /model <имя> или пройди /setup")
+		return fmt.Errorf("не выбрана модель - задай: /model <имя> или пройди /setup")
 	}
 	if !p.HasKey() {
 		return fmt.Errorf("нет API-ключа для %s. Настрой: /setup (мастер) или /provider key %s <ключ>; либо env: %s",
 			p.Label, p.ID, strings.Join(p.KeyEnvs, ", "))
 	}
 	if p.BaseURL == "" {
-		return fmt.Errorf("у провайдера %s не задан base URL — /provider add %s <url>", p.ID, p.ID)
+		return fmt.Errorf("у провайдера %s не задан base URL - /provider add %s <url>", p.ID, p.ID)
 	}
 	if p.Kind == ProtoAnthropic {
 		return StreamAnthropic(ctx, c, p, creq, think, out)
@@ -148,10 +148,10 @@ func TestKey(c *Client, p *Provider) (bool, string) {
 		return false, "провайдер не задан"
 	}
 	if p.NoKey {
-		return true, "локальный провайдер — ключ не требуется"
+		return true, "локальный провайдер - ключ не требуется"
 	}
 	if p.KeyCount() == 0 {
-		return false, "ключ не задан — задай: /provider key " + p.ID + " <ключ> или /setup"
+		return false, "ключ не задан - задай: /provider key " + p.ID + " <ключ> или /setup"
 	}
 	keys := p.Pool.Keys()
 	if len(keys) == 0 {
@@ -208,25 +208,25 @@ func keyProblemText(p *Provider, err error, count int) string {
 	}
 	switch status {
 	case "401":
-		return "401 — сервер отклонил ключ: чужой для этого провайдера или с опечаткой. " +
+		return "401 - сервер отклонил ключ: чужой для этого провайдера или с опечаткой. " +
 			"Вставь заново: /provider key " + p.ID + " <ключ>"
 	case "403":
-		return "403 — доступ запрещён: у ключа нет прав на этот endpoint либо регион заблокирован"
+		return "403 - доступ запрещён: у ключа нет прав на этот endpoint либо регион заблокирован"
 	case "402":
-		return "402 — на балансе провайдера нет средств — пополни аккаунт (ключ при этом правильный)"
+		return "402 - на балансе провайдера нет средств - пополни аккаунт (ключ при этом правильный)"
 	case "404":
 		base := strings.TrimRight(p.BaseURL, "/")
 		if p.Kind == ProtoAnthropic {
 			base = anthropicBase(p.BaseURL)
 		}
-		return "404 — base URL неверный: " + base + "/models не найден — исправь: /provider add " + p.ID + " <url>"
+		return "404 - base URL неверный: " + base + "/models не найден - исправь: /provider add " + p.ID + " <url>"
 	case "429":
-		return "429 — лимит запросов: ключ живой, но квота исчерпана — подожди и повтори"
+		return "429 - лимит запросов: ключ живой, но квота исчерпана - подожди и повтори"
 	}
 	low := strings.ToLower(msg)
 	for _, s := range []string{"deadline", "timeout", "connection refused", "no such host", "dial tcp", "network is unreachable"} {
 		if strings.Contains(low, s) {
-			return "сеть недоступна или DNS не резолвит " + p.BaseURL + " — " + coreTruncate(msg, 80)
+			return "сеть недоступна или DNS не резолвит " + p.BaseURL + " - " + coreTruncate(msg, 80)
 		}
 	}
 	if count > 1 {

@@ -358,7 +358,7 @@ func rememberHints(p projInfo, modFile string) []string {
 	// Корень проекта — самая частая и самая полезная запись: без неё агент в
 	// новой сессии снова ищет go.mod по всему репозиторию.
 	if rel := core.RelToWD(p.WorkDir, p.Root); rel != "" && rel != "." {
-		out = append(out, fmt.Sprintf("проект %s: корень — %s, а рабочий каталог — %s",
+		out = append(out, fmt.Sprintf("проект %s: корень - %s, а рабочий каталог - %s",
 			filepath.Base(p.Root), p.Root, p.WorkDir))
 	}
 	if modFile != "" {
@@ -414,7 +414,7 @@ func (p projInfo) Text() string {
 	if rel := core.RelToWD(p.WorkDir, p.Root); rel != "" && rel != "." {
 		fmt.Fprintf(&b, "Корень проекта: %s (рабочий каталог: %s)\n", p.Root, p.WorkDir)
 	} else {
-		fmt.Fprintf(&b, "Корень проекта: %s — он же рабочий каталог.\n", p.Root)
+		fmt.Fprintf(&b, "Корень проекта: %s - он же рабочий каталог.\n", p.Root)
 	}
 	if p.GitRoot != "" && p.GitRoot != p.Root {
 		fmt.Fprintf(&b, "Репозиторий git: %s\n", p.GitRoot)
@@ -423,7 +423,7 @@ func (p projInfo) Text() string {
 		b.WriteString("Репозиторий git: здесь же.\n")
 	}
 	if p.WorkDir != p.Root {
-		b.WriteString("⚠ Рабочий каталог НЕ является корнем проекта: команды вида «go build ./...»\n" +
+		b.WriteString("! Рабочий каталог НЕ является корнем проекта: команды вида \"go build ./...\"\n" +
 			"из него не сработают. Запускай с workdir, равным корню, либо указывай пакет явно.\n")
 	}
 
@@ -445,7 +445,7 @@ func (p projInfo) Text() string {
 	for _, n := range p.Note {
 		fmt.Fprintf(&b, "\n%s\n", n)
 	}
-	b.WriteString("\nНе гадай команду сборки — бери отсюда, либо спроси через verify {suggest:true}.")
+	b.WriteString("\nНе гадай команду сборки - бери отсюда, либо спроси через verify {suggest:true}.")
 
 	// Предложение записать в память: факты уже собраны, но без явного
 	// «сохрани» они исчезнут вместе с сессией, и проект придётся обследовать

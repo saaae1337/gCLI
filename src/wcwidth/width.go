@@ -726,13 +726,15 @@ func firstCluster(s string) string {
 // FirstCluster — первый графический кластер строки целиком.
 func FirstCluster(s string) string { return firstCluster(s) }
 
-// ellipsis — многоточие с учётом ширины: одна колонка.
-const ellipsis = "…"
+// ellipsis — многоточие: три точки, чистый ASCII. Юникодный «…» занимал
+// одну колонку, но не рисуется в классической консоли Windows — вместо
+// него во всех обрезанных подписях стоит «...».
+const ellipsis = "..."
 
-// Ellipsis — многоточие шириной в одну колонку.
+// Ellipsis — многоточие.
 const Ellipsis = ellipsis
 
-// TruncateEllipsis — обрезать до n колонок, поставив в конце «…».
+// TruncateEllipsis — обрезать до n колонок, поставив в конце «...».
 func TruncateEllipsis(s string, n int) string {
 	if n <= 0 {
 		return ""
@@ -740,7 +742,9 @@ func TruncateEllipsis(s string, n int) string {
 	if StringWidth(s) <= n {
 		return s
 	}
-	// Многоточие должно поместиться: режем до n-1.
-	cut := Truncate(s, n-1)
-	return cut + ellipsis
+	if n <= len(ellipsis) {
+		// Место под маркер нет: просто режем.
+		return Truncate(s, n)
+	}
+	return Truncate(s, n-len(ellipsis)) + ellipsis
 }

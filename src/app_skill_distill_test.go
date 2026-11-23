@@ -36,7 +36,7 @@ func TestTopTools(t *testing.T) {
 		t.Fatalf("порядок: %v", got)
 	}
 	if len(topTools(nil, 5)) != 0 {
-		t.Fatal("пустая карта — пустой список")
+		t.Fatal("пустая карта - пустой список")
 	}
 }
 

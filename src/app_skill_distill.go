@@ -77,7 +77,7 @@ func buildMissionSkill(d missionReportData, now time.Time) (string, string) {
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "name: %s\n", name)
 	objective := core.Truncate(core.OneLine(d.Mission.Objective), 70)
-	fmt.Fprintf(&b, "description: Опыт автономного прогона «%s» — как проверять и выполнять похожую работу в этом проекте\n", objective)
+	fmt.Fprintf(&b, "description: Опыт автономного прогона \"%s\" - как проверять и выполнять похожую работу в этом проекте\n", objective)
 	fmt.Fprintf(&b, "when: %s\n", core.Truncate(core.OneLine(d.Mission.Objective), 80))
 	b.WriteString("---\n\n")
 	fmt.Fprintf(&b, "# Опыт миссии: %s\n\n", objective)

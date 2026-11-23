@@ -129,7 +129,7 @@ func RankSkills(skills []Skill, query string) []SkillScore {
 // MatchSkill — подобрать навык под запрос.
 func (r *Registry) MatchSkill(query string) (Skill, error) {
 	if strings.TrimSpace(query) == "" {
-		return Skill{}, fmt.Errorf("пустой query — опиши, что ты делаешь, или укажи name навыка")
+		return Skill{}, fmt.Errorf("пустой query - опиши, что ты делаешь, или укажи name навыка")
 	}
 	enabled := make([]Skill, 0, 16)
 	for _, s := range r.LoadSkills() {
@@ -138,7 +138,7 @@ func (r *Registry) MatchSkill(query string) (Skill, error) {
 		}
 	}
 	if len(enabled) == 0 {
-		return Skill{}, fmt.Errorf("навыки не настроены — добавь markdown в .gcli/skills или ~/.gcli/skills")
+		return Skill{}, fmt.Errorf("навыки не настроены - добавь markdown в .gcli/skills или ~/.gcli/skills")
 	}
 	ranked := RankSkills(enabled, query)
 	if ranked[0].Score < skillMatchMinScore {
@@ -147,7 +147,7 @@ func (r *Registry) MatchSkill(query string) (Skill, error) {
 		if len(names) > 0 {
 			hint = " доступные: " + strings.Join(names, ", ")
 		}
-		return Skill{}, fmt.Errorf("по запросу %q навык не подобрался%s — укажи name точно или переформулируй", coreOneLine(query), hint)
+		return Skill{}, fmt.Errorf("по запросу %q навык не подобрался%s - укажи name точно или переформулируй", coreOneLine(query), hint)
 	}
 	return ranked[0].Skill, nil
 }

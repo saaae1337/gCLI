@@ -173,7 +173,7 @@ func TestMissionFreshRunDoesNotWriteResume(t *testing.T) {
 	ag := agent.New(agent.Deps{Model: "test"}, a.workDir)
 	a.attachMission(ag)
 	if n := countKind(journalKinds(t, a.workDir), core.JournalResume); n != 0 {
-		t.Fatalf("новый прогон записал «продолжен» %d раз: журнал соврёт о подхвате", n)
+		t.Fatalf("новый прогон записал \"продолжен\" %d раз: журнал соврёт о подхвате", n)
 	}
 	// Так выглядит падение после первого хода: файл закрыт без close/stop.
 	_ = a.missionJournal.Close()
@@ -285,7 +285,7 @@ func TestMissionResumeAfterCrash(t *testing.T) {
 	// Бюджет прогона обязан считать от восстановленного: иначе подхват
 	// стоил бы человеку полного бюджета заново.
 	if lim := fresh.mission.MaxIters; lim <= 40 {
-		t.Errorf("потолок %d не позволяет проверить: 40 итераций — путь к нему, а не сам потолок", lim)
+		t.Errorf("потолок %d не позволяет проверить: 40 итераций - путь к нему, а не сам потолок", lim)
 	}
 
 	// --- Приглашение уходит в историю ровно один раз за сеанс.
@@ -295,7 +295,7 @@ func TestMissionResumeAfterCrash(t *testing.T) {
 		t.Fatal("подхват должен отметиться один раз за сеанс")
 	}
 	if n := countKind(journalKinds(t, work), core.JournalResume); n != 1 {
-		t.Errorf("в журнале «продолжено» %d раз, ждали одно", n)
+		t.Errorf("в журнале \"продолжено\" %d раз, ждали одно", n)
 	}
 	// Строка приглашения уходит в историю один раз: держать её дальше
 	// незачем, иначе второй ход сеанса начался бы с «продолжаем с
@@ -309,14 +309,14 @@ func TestMissionResumeAfterCrash(t *testing.T) {
 	second := agent.New(agent.Deps{Model: "test"}, fresh.workDir)
 	fresh.attachMission(second)
 	if n := countKind(journalKinds(t, work), core.JournalResume); n != 1 {
-		t.Errorf("событий «продолжено» %d, ждали одно: подхват был один", n)
+		t.Errorf("событий \"продолжено\" %d, ждали одно: подхват был один", n)
 	}
 	// И третий: счётчик приглашения живёт в трекере, а не в агенте,
 	// поэтому новый агент не начинает прогон заново с нуля.
 	third := agent.New(agent.Deps{Model: "test"}, fresh.workDir)
 	fresh.attachMission(third)
 	if n := countKind(journalKinds(t, work), core.JournalResume); n != 1 {
-		t.Errorf("после трёх ходов «продолжено» %d раз, ждали одно", n)
+		t.Errorf("после трёх ходов \"продолжено\" %d раз, ждали одно", n)
 	}
 	if got := fresh.missionTr.Iters(); got != 40 {
 		t.Errorf("счётчик итераций сбился на новом агенте: %d", got)
@@ -356,7 +356,7 @@ func TestMissionResumeWarnsAboutTruncatedTail(t *testing.T) {
 	fresh.quiet = false
 	fresh.loadMissionResume()
 	if fresh.missionResumeState == nil {
-		t.Fatal("даже после обрезанного хвоста прогон должен продолжаться — по предыдущей записи")
+		t.Fatal("даже после обрезанного хвоста прогон должен продолжаться - по предыдущей записи")
 	}
 	// Молчать об обрезанном хвосте нельзя: человек продолжит прогон,
 	// думая, что знает, где встали, а потерян был как раз последний

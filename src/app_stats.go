@@ -140,12 +140,12 @@ func (a *app) printStats(sessions []core.SessionInfo, days int) {
 		{"деньги", core.FormatUSD(tot.cost)},
 	})
 	if tot.unknown > 0 {
-		a.ui.Println("  " + a.ui.Gray("цена неизвестна для "+strconv.Itoa(tot.unknown)+" сессий с кастомными моделями — там $0 значит «не знаем», а не «бесплатно»"))
+		a.ui.Println("  " + a.ui.Gray("цена неизвестна для "+strconv.Itoa(tot.unknown)+" сессий с кастомными моделями - там $0 значит \"не знаем\", а не \"бесплатно\""))
 	}
 	a.ui.Println("")
 
 	if len(dayRows) == 0 {
-		a.ui.Info("за период пусто — сессий не было")
+		a.ui.Info("за период пусто - сессий не было")
 		return
 	}
 	rows := make([][]string, 0, len(dayRows))
@@ -184,5 +184,5 @@ func (a *app) printStats(sessions []core.SessionInfo, days int) {
 			{Title: "токены", Width: 10, Right: true}, {Title: "деньги", Width: 10, Right: true},
 		}, mrows, ui.BlockOpts{Title: "По моделям"})
 	}
-	a.ui.Println("  " + a.ui.Gray("цены — локальная таблица gcli; для точного счёта сверяйся с провайдером"))
+	a.ui.Println("  " + a.ui.Gray("цены - локальная таблица gcli; для точного счёта сверяйся с провайдером"))
 }

@@ -126,7 +126,7 @@ func checkSSRF(raw string) error {
 	}
 	for _, ip := range ips {
 		if isPrivateIP(ip) {
-			return fmt.Errorf("хост %s резолвится во внутренний адрес (%s) — запрещён; "+
+			return fmt.Errorf("хост %s резолвится во внутренний адрес (%s) - запрещён; "+
 				"разрешить локальные адреса: %s=1", host, ip, allowLocalNetEnv)
 		}
 	}

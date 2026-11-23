@@ -8,84 +8,70 @@ import (
 	"gcli/core"
 )
 
-// ---------- Рельс вызовов инструментов ----------
+// ---------- Вызовы инструментов ----------
 //
-// Идея: каждый вызов инструмента печатается как событие с ромбом, а
-// результат — строкой ниже, с «зубцом». Глаз держит структуру дерева
-// вызовов и не путает, к какому вызову относится результат:
+// Разметка Claude Code: вызов печатается маркером «*», результат — строкой
+// ниже с отступом:
 //
-//      ◆ read_file  src/ui/ui.go
-//        ⎿ прочитано 481 строка · 3ms
+//      * read_file(src/ui/ui.go)
+//        481 строка · 3ms
 //
-// Пока инструмент работает, под карточкой висит строка кота
-// «( >.< ) working...» — живой статус вместо мёртвой тишины.
+// Пока инструмент работает, живую строку ожидания ведёт общий спиннер.
 
-// RailStart — заголовок карточки инструмента с рельсом.
+// RailStart - заголовок вызова инструмента: «* Name(args)».
 func (u *UI) RailStart(tc ToolCall) {
-	kind := tc.Kind
-	if kind == "" {
-		kind = toolKind(tc.Name)
+	// Маркер вызова - акцентом (живой элемент), имя - обычным цветом,
+	// аргументы - приглушённым.
+	name := tc.Name
+	if name == "" {
+		name = toolKind(tc.Name)
 	}
-	_, color := u.kindGlyph(kind)
-	name := u.Head(tc.Name)
-	if kind == "agent" {
-		name = u.c(color, tc.Name)
-	}
-	//  ◆ read_file  src/ui/ui.go
-	//    ⎿ 481 строка · 3ms
-	//
-	// Имя и аргументы разведены пробелами, а не скобками: так строка
-	// остаётся плоской, и длинный путь читается как отдельное поле.
-	// Имя всегда жирное — вызов это главное событие хода. Вложенные
-	// вызовы (субагенты) получают вертикаль рельса в отступе.
 	args := core.OneLine(tc.Args)
 	indent := u.railIndent()
-	used := visibleWidth(indent) + 1 + 1 + cellWidth(tc.Name) + 2
-	if maxArgs := u.Width() - used; args != "" && maxArgs > 14 {
-		args = truncate(args, maxArgs)
+	used := visibleWidth(indent) + 1 + cellWidth(name) + 2 + 1
+	if maxArgs := u.Width() - used - 2; args != "" && maxArgs > 14 {
+		args = "(" + truncate(args, maxArgs) + ")"
 	} else {
 		args = ""
 	}
 	u.SpinnerStop()
-	u.Println(indent + u.emberMark(color) + " " + name + u.Gray("  "+args))
-
-	// Кот работает: пока идёт инструмент, под карточкой переливается
-	// «( >.< ) working...». Результат (RailEnd) погасит строку сам.
-	if u.Mascot() {
-		u.ShimmerStart("working...", MascotWork)
-	}
+	u.Println(indent + u.emberMark(u.pal.Accent) + " " + name + u.Gray(args))
 }
 
-// RailEnd — строка результата под вызовом инструмента.
+// RailEnd - строка результата под вызовом: зубец и отступ, приглушённый
+// текст. Разметка Claude Code:
+//
+//	● read_file(src/ui/ui.go)
+//	  └ 481 строка · 3ms
 func (u *UI) RailEnd(tc ToolCall) {
 	text := core.OneLine(tc.Detail)
 	if text == "" {
 		text = "готово"
 	}
-	//  ◆ read_file  src/ui/ui.go
-	//    ⎿ 481 строка · 3ms
-	//
-	// «Зубец» прижат к тому же левому полю, что и маркер, и всегда приглушён:
-	// результат — фон события, а не второе событие. Иконка статуса есть только
-	// когда есть что сказать: у успешного чтения она не нужна, лишний знак
-	// перед текстом только шумит.
-	indent := u.railIndent()
+	// Результат - фон события, а не второе событие: зубец под вызовом,
+	// приглушённый цвет. Красным или янтарным остаются только ошибки и
+	// отказы, чтобы их было видно в потоке.
+	color := u.pal.Muted
+	switch tc.Status {
+	case "fail", "error":
+		color = u.pal.Err
+	case "denied":
+		color = u.pal.Warn
+	}
 	meta := []string{}
 	if tc.Lines > 0 {
 		meta = append(meta, fmt.Sprintf("%d стр.", tc.Lines))
 	}
 	if tc.Elapsed > 0 {
-		// Время окрашено по скорости: зелёный — мгновенно, жёлтый —
-		// заметно, красный — команда зависла. Читается без усилий.
-		meta = append(meta, u.c(u.ElapsedColor(tc.Elapsed), core.HumanDuration(tc.Elapsed)))
+		meta = append(meta, core.HumanDuration(tc.Elapsed))
 	}
-	// Иконку статуса показываем только для неуспеха.
-	mark := ""
-	if tc.Status == "fail" || tc.Status == "error" || tc.Status == "denied" {
-		g, c := u.emberStatusGlyph(tc.Status)
-		mark = u.c(c, g) + " "
+	indent := u.railIndent()
+	// Зубец результата: «└» в юникодном наборе, в ASCII - просто отступ.
+	tick := ""
+	if u.g.Tick != "" {
+		tick = u.c(u.pal.Muted, u.g.Tick) + " "
 	}
-	used := visibleWidth(indent) + visibleWidth(u.g.Tick) + 2 + visibleWidth(mark)
+	used := visibleWidth(indent) + visibleWidth(u.g.Tick) + 2
 	tail := ""
 	if len(meta) > 0 {
 		tail = u.c(u.pal.Muted, " · "+strings.Join(meta, " · "))
@@ -98,37 +84,34 @@ func (u *UI) RailEnd(tc ToolCall) {
 	if avail < 8 {
 		avail = 8
 	}
-	// Результат — обычным текстом: он и есть главное в этой строке,
-	// а приглушать его до серого значит прятать ответ от человека.
-	u.RevealLine(indent + u.emberTail() + " " + mark +
-		truncate(text, avail) + tail)
+	u.RevealLine(indent + tick + u.c(color, truncate(text, avail)) + tail)
 }
 
-// RailEndChain — закрыть рельс после серии вызовов (последний зубец).
+// RailEndChain - закрыть серию вызовов (последняя строка результата).
 func (u *UI) RailEndChain(note string) {
 	if note == "" {
 		note = "готово"
 	}
 	u.SpinnerStop()
-	u.Println(u.railIndent() + u.emberTail() + " " + u.Gray(core.OneLine(note)))
+	u.Println("    " + u.Gray(core.OneLine(note)))
 }
 
-// railOn — вертикаль вложенного рельса, railGap — шаг отступа.
+// railOn - вертикаль вложенного рельса, railGap - шаг отступа.
 const (
-	railOn  = "│"
+	railOn  = "|"
 	railGap = " "
 )
 
-// railIndent — отступ под текущий уровень рельса.
+// railIndent - отступ под текущий уровень рельса.
 func (u *UI) railIndent() string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.railIndentLocked()
 }
 
-// railIndentLocked — railIndent для вызова под уже взятым u.mu.
+// railIndentLocked - railIndent для вызова под уже взятым u.mu.
 func (u *UI) railIndentLocked() string {
-	// Отступ базовый — две колонки, чтобы рельс не лип к краю.
+	// Отступ базовый - две колонки, чтобы рельс не лип к краю.
 	base := railGap + railGap
 	extra := ""
 	for i := 0; i < u.railDepth; i++ {
@@ -137,14 +120,14 @@ func (u *UI) railIndentLocked() string {
 	return base + extra
 }
 
-// RailPush — войти на уровень глубже (для вложенных вызовов, например субагентов).
+// RailPush - войти на уровень глубже (для вложенных вызовов, например субагентов).
 func (u *UI) RailPush() {
 	u.mu.Lock()
 	u.railDepth++
 	u.mu.Unlock()
 }
 
-// RailPop — выйти на уровень выше.
+// RailPop - выйти на уровень выше.
 func (u *UI) RailPop() {
 	u.mu.Lock()
 	if u.railDepth > 0 {
@@ -153,32 +136,21 @@ func (u *UI) RailPop() {
 	u.mu.Unlock()
 }
 
-// ThinkNote — блок приватных размышлений агента одним куском:
-//
-//	◆ размышления
-//	  текст
-//
-// Ромб вместо «── размышления ──»: такая черта выглядит заголовком
-// блока кода, а размышления — это событие, а не раздел.
+// ThinkNote - блок приватных размышлений агента одним куском.
 func (u *UI) ThinkNote(text string) {
 	u.SpinnerStop()
 	for i, l := range wrap(core.OneLine(text), u.Width()-6) {
-		mark := u.emberTail()
 		if i == 0 {
-			mark = u.emberMark(u.pal.Muted)
+			u.Println("  " + u.emberMark(u.pal.Muted) + " " + u.Italic(u.c(u.pal.Muted, l)))
+			continue
 		}
-		u.Println("  " + mark + " " + u.Italic(u.c(u.pal.Muted, l)))
+		u.Println("    " + u.Italic(u.c(u.pal.Muted, l)))
 	}
 }
 
-// ElapsedColor — цвет для времени выполнения (быстрые — зелёные, долгие — жёлтые).
+// ElapsedColor - цвет для времени выполнения. Удалён из оформления:
+// время - приглушённый текст, а не светофор. Оставлено как заглушка для
+// совместимости и возвращает нейтральный серый.
 func (u *UI) ElapsedColor(d time.Duration) string {
-	switch {
-	case d < 500*time.Millisecond:
-		return u.pal.OK
-	case d < 3*time.Second:
-		return u.pal.Warn
-	default:
-		return u.pal.Err
-	}
+	return u.pal.Muted
 }

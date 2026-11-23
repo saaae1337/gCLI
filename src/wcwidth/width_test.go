@@ -78,7 +78,7 @@ func TestTruncateNotSplittingClusters(t *testing.T) {
 }
 
 func TestTruncateEllipsis(t *testing.T) {
-	if got := TruncateEllipsis("привет мир", 7); got != "привет…" {
+	if got := TruncateEllipsis("привет мир", 9); got != "привет..." {
 		t.Errorf("TruncateEllipsis = %q", got)
 	}
 	if got := TruncateEllipsis("коротко", 20); got != "коротко" {
@@ -95,8 +95,8 @@ func TestTruncateEllipsisWideBoundary(t *testing.T) {
 	if StringWidth(got) > 5 {
 		t.Errorf("шире лимита: %q (%d)", got, StringWidth(got))
 	}
-	if got != "日本…" {
-		t.Errorf("TruncateEllipsis = %q, хочу «日本…»", got)
+	if got != "日..." {
+		t.Errorf("TruncateEllipsis = %q, хочу «日...»", got)
 	}
 }
 

@@ -77,6 +77,14 @@ type Result struct {
 	// Images — изображения для зрения модели (screenshot, read_image).
 	// Прикладываются к контексту сразу после результата инструмента.
 	Images []core.Image
+	// ExitCode — код выхода команды для exec-инструментов (bash).
+	//
+	// Структурированный статус вместо разбора текста: раньше multi_bash
+	// определял успех команды по метке «[код выхода: N]» в её выводе, и
+	// любая правка формата вывода ломала сводку пачки. Ноль — успех,
+	// положительное число — код выхода, -1 — таймаут или прерывание.
+	// Инструменты, у которых кода нет, оставляют ноль по умолчанию.
+	ExitCode int
 }
 
 // Tool — зарегистрированный инструмент.
@@ -610,6 +618,9 @@ func isWriteTool(name string) bool {
 		"bash", "multi_bash", "job", "dry_run", "verify",
 		// исполнение кода проекта
 		"screenshot", "load_skill",
+		// компьютер: буфер обмена, открытие внешнего, уведомления,
+		// снимок рабочего стола — всё, что выходит за песочницу файлов
+		"clipboard", "open", "notify", "screen",
 		// исходящая сеть
 		"web_fetch", "web_search",
 		// состояние агента и сессии
@@ -708,7 +719,7 @@ func (r *Registry) registerExt(extName, name, desc, schema, category string, h H
 		final = "x_" + name
 	}
 	if r.byName[final] != nil {
-		warns = append(warns, fmt.Sprintf("расширение %s: имя «%s» занято — пропущен", extName, name))
+		warns = append(warns, fmt.Sprintf("расширение %s: имя \"%s\" занято - пропущен", extName, name))
 		return final, false, warns
 	}
 	t := &Tool{

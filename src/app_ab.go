@@ -38,7 +38,7 @@ func parseAbArgs(rest string) (model, prompt string, err error) {
 	}
 	word, tail, ok := strings.Cut(rest, " ")
 	if !ok || strings.TrimSpace(tail) == "" {
-		return "", "", fmt.Errorf("промпт пустой: после модели напиши вопрос — /ab %s <вопрос>", word)
+		return "", "", fmt.Errorf("промпт пустой: после модели напиши вопрос - /ab %s <вопрос>", word)
 	}
 	return word, strings.TrimSpace(tail), nil
 }
@@ -97,9 +97,9 @@ func (a *app) cmdAb(rest string) {
 	wg.Wait()
 
 	for _, r := range []abResult{ra, rb} {
-		title := "A · " + r.model
+		title := "A | " + r.model
 		if r.model == modelB {
-			title = "B · " + r.model
+			title = "B | " + r.model
 		}
 		if r.err != nil {
 			a.ui.Block("ошибка: "+r.err.Error(), ui.BlockOpts{Title: title})
@@ -108,10 +108,10 @@ func (a *app) cmdAb(rest string) {
 		a.ui.Block(r.text, ui.BlockOpts{Title: title})
 		price, _ := core.ModelPrice(a.prov.ID, r.model)
 		a.ui.KVPairs([][2]string{
-			{title, fmt.Sprintf("%s · %d/%d ткн · %s",
+			{title, fmt.Sprintf("%s | %d/%d ткн | %s",
 				r.duration.Round(time.Millisecond), r.in, r.out,
 				core.FormatUSD(price.Cost(core.Usage{PromptTokens: r.in, CompletionTokens: r.out})))},
 		})
 	}
-	a.ui.Println("  " + a.ui.Gray("оба ответа в контекст не попадают: /ab — витрина, не диалог"))
+	a.ui.Println("  " + a.ui.Gray("оба ответа в контекст не попадают: /ab - витрина, не диалог"))
 }

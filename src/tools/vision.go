@@ -52,7 +52,7 @@ var mimeByExt = map[string]string{
 const schemaScreenshot = `{"type":"object","properties":{` +
 	`"target":{"type":"string","description":"URL (https://...) или путь к HTML-файлу страницы"},` +
 	`"out":{"type":"string","description":"Куда сохранить PNG (необязательно; по умолчанию .gcli/screenshots)"},` +
-	`"width":{"type":"integer","description":"Ширина вьюпорта в CSS-пикселях (по умолчанию 1440). Для мобильной проверки — 390."},` +
+	`"width":{"type":"integer","description":"Ширина вьюпорта в CSS-пикселях (по умолчанию 1440). Для мобильной проверки - 390."},` +
 	`"height":{"type":"integer","description":"Высота вьюпорта в CSS-пикселях (по умолчанию 900)"},` +
 	`"full_page":{"type":"boolean","description":"Снимок всей страницы целиком: ширина та же, высота окна увеличивается. Используй, чтобы увидеть низ страницы, не прокручивая её по кускам."}` +
 	`},"required":["target"]}`
@@ -64,8 +64,8 @@ const schemaReadImage = `{"type":"object","properties":{` +
 // RegisterVision — инструменты зрения.
 func (r *Registry) RegisterVision() {
 	r.registerBound("screenshot", "Сделать скриншот страницы и ПОСМОТРЕТЬ на него глазами: снимок прикладывается к твоему контексту как изображение. "+
-		"Используй после вёрстки/изменения UI (target — URL или HTML-файл), чтобы проверить, как страница выглядит на самом деле. "+
-		"width — ширина вьюпорта в CSS-пикселях (390 — мобильный, 1440 — десктоп), full_page — снимок всей страницы целиком.",
+		"Используй после вёрстки/изменения UI (target - URL или HTML-файл), чтобы проверить, как страница выглядит на самом деле. "+
+		"width - ширина вьюпорта в CSS-пикселях (390 - мобильный, 1440 - десктоп), full_page - снимок всей страницы целиком.",
 		schemaScreenshot, "read", false, func(r *Registry) Handler { return r.hScreenshot })
 	r.registerBound("read_image", "Посмотреть на изображение с диска (png, jpg, webp, gif): файл прикладывается к контексту как изображение. "+
 		"Используй для макетов, скриншотов пользователя, схем.",
@@ -89,10 +89,14 @@ func browserNeedsNoSandbox() bool {
 }
 
 // findBrowser — найти headless-браузер для скриншотов.
-func findBrowser() (string, []string) {
+//
+// Раньше возвращала пару (путь, аргументы), но аргументы никем не
+// читались: второй элемент оставался пустым, а подпись обещала то,
+// чего нет.
+func findBrowser() string {
 	if p := strings.TrimSpace(os.Getenv("GCLI_BROWSER")); p != "" {
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return p
 		}
 	}
 	switch runtime.GOOS {
@@ -107,7 +111,7 @@ func findBrowser() (string, []string) {
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {
-				return c, nil
+				return c
 			}
 		}
 	case "darwin":
@@ -118,26 +122,26 @@ func findBrowser() (string, []string) {
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {
-				return c, nil
+				return c
 			}
 		}
 	default:
 		for _, name := range []string{"chromium-browser", "chromium", "google-chrome", "google-chrome-stable", "microsoft-edge"} {
 			if p, err := exec.LookPath(name); err == nil {
-				return p, nil
+				return p
 			}
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // hScreenshot — снимок страницы через headless-браузер.
 func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, error) {
 	target := strings.TrimSpace(ArgStr(m, "target"))
 	if target == "" {
-		return Result{}, fmt.Errorf("укажи target — URL или путь к HTML-файлу")
+		return Result{}, fmt.Errorf("укажи target - URL или путь к HTML-файлу")
 	}
-	browser, _ := findBrowser()
+	browser := findBrowser()
 
 	// Локальный файл → file:// URL.
 	if !strings.Contains(target, "://") {
@@ -254,7 +258,7 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	}
 	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
-			return Result{}, fmt.Errorf("браузер не успел за 60 с — страница, вероятно, слишком тяжёлая")
+			return Result{}, fmt.Errorf("браузер не успел за 60 с - страница, вероятно, слишком тяжёлая")
 		}
 		// Хвост лога — в ошибку: без него краш браузера («signal: aborted»)
 		// нечитаем, и отличить нехватку памяти от сломанного профиля
@@ -269,7 +273,7 @@ func (r *Registry) hScreenshot(ctx context.Context, m map[string]any) (Result, e
 	// результата, а картинку он смотрит глазами.
 	if errs := consoleErrors(logCap.String()); len(errs) > 0 {
 		res.Text += "\n\nОшибки в консоли страницы:\n" + strings.Join(errs, "\n")
-		res.Summary += " · ошибок в консоли: " + strconv.Itoa(len(errs))
+		res.Summary += " | ошибок в консоли: " + strconv.Itoa(len(errs))
 	}
 	return res, nil
 }
@@ -327,9 +331,9 @@ func consoleErrors(log string) []string {
 			continue
 		}
 		if len([]rune(msg)) > 200 {
-			msg = string([]rune(msg)[:200]) + "…"
+			msg = string([]rune(msg)[:200]) + "..."
 		}
-		out = append(out, "• "+msg)
+		out = append(out, "- "+msg)
 		if len(out) >= 10 {
 			break
 		}
@@ -341,7 +345,7 @@ func consoleErrors(log string) []string {
 func (r *Registry) hReadImage(_ context.Context, m map[string]any) (Result, error) {
 	p := strings.TrimSpace(ArgStr(m, "path"))
 	if p == "" {
-		return Result{}, fmt.Errorf("укажи path — путь к изображению")
+		return Result{}, fmt.Errorf("укажи path - путь к изображению")
 	}
 	abs, err := r.pathArg(p)
 	if err != nil {
@@ -375,7 +379,7 @@ func (r *Registry) attachImageFile(path, tool string) (Result, error) {
 	}
 	if st.Size() > maxImageBytes {
 		return Result{}, fmt.Errorf(
-			"изображение слишком большое (%s, потолок 4 МБ) — уменьши его и повтори",
+			"изображение слишком большое (%s, потолок 4 МБ) - уменьши его и повтори",
 			core.HumanSize(int(st.Size())))
 	}
 	data, err := os.ReadFile(path)
@@ -385,7 +389,7 @@ func (r *Registry) attachImageFile(path, tool string) (Result, error) {
 	// Файл мог вырасти между Stat и ReadFile.
 	if len(data) > maxImageBytes {
 		return Result{}, fmt.Errorf(
-			"изображение слишком большое (%s, потолок 4 МБ) — уменьши его и повтори",
+			"изображение слишком большое (%s, потолок 4 МБ) - уменьши его и повтори",
 			core.HumanSize(len(data)))
 	}
 	mime := mimeByExt[strings.ToLower(filepath.Ext(path))]

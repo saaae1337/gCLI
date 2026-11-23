@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"gcli/core"
 	"gcli/subagents"
 	"gcli/tools"
-	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -26,7 +26,7 @@ var sessMu sync.Mutex
 // cfgMu — защита a.repo.Cfg (config.json в памяти).
 //
 // Писатели — команды ввода: /think, /agents, /plan, /model, /provider,
-// /sandbox, /autopilot, /agent, /skills, /mascot, /cron, /setup. Читатели —
+// /sandbox, /autopilot, /agent, /skills, /cron, /setup. Читатели —
 // ход (в том числе cron-горутина) и горутины субагентов: newAgent копирует
 // весь конфиг в providers.ThinkState, колбэк Budget читает SubBudget на
 // каждой итерации, спавн субагентов берёт SubModel/SubRoute/SubBudget.
@@ -444,24 +444,6 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		if a.permFileWrite() {
 			return true
 		}
-		if ch, ok := a.tuiConfirm(tui.Confirm{
-			Title:       "Изменить файл?",
-			Path:        a.relPath(req.Path),
-			Note:        req.Reason,
-			Old:         req.Old,
-			New:         req.New,
-			AllowAlways: true,
-		}); ok {
-			switch ch {
-			case tui.ChoiceYes:
-				return true
-			case tui.ChoiceAlways:
-				a.grantFileWrite()
-				a.saveSession()
-				return true
-			}
-			return false
-		}
 		if !askable {
 			a.denyBackground(req)
 			return false
@@ -484,28 +466,6 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		if allowed {
 			return true
 		}
-		if ch, ok := a.tuiConfirm(tui.Confirm{
-			Title:       "Выполнить команду?",
-			Detail:      req.Detail,
-			Note:        req.Reason,
-			Danger:      danger,
-			AllowAlways: !danger,
-			AllowAll:    !danger,
-		}); ok {
-			switch ch {
-			case tui.ChoiceYes:
-				return true
-			case tui.ChoiceAlways:
-				a.grantBashExact(req.Detail)
-				a.saveSession()
-				return true
-			case tui.ChoiceAll:
-				a.grantBashAll()
-				a.saveSession()
-				return true
-			}
-			return false
-		}
 		if !askable {
 			a.denyBackground(req)
 			return false
@@ -516,7 +476,7 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 			a.ui.Println("  " + a.ui.Gray(req.Reason))
 		}
 		if danger {
-			a.ui.Println("  " + a.ui.Red("⚠ потенциально опасная команда"))
+			a.ui.Println("  " + a.ui.Red("[!] потенциально опасная команда"))
 			a.ui.Prompt2("Разрешить выполнение?", "[y]да [n]нет: ")
 			return a.readAns(false, false) == confirmYes
 		}
@@ -539,28 +499,12 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		if a.permWebFetch() {
 			return true
 		}
-		if ch, ok := a.tuiConfirm(tui.Confirm{
-			Title:       "Сетевой запрос?",
-			Detail:      core.Truncate(req.Detail, 120),
-			Note:        req.Reason,
-			AllowAlways: true,
-		}); ok {
-			switch ch {
-			case tui.ChoiceYes:
-				return true
-			case tui.ChoiceAlways:
-				a.grantWebFetch()
-				a.saveSession()
-				return true
-			}
-			return false
-		}
 		if !askable {
 			a.denyBackground(req)
 			return false
 		}
 		a.ui.Println("")
-		a.ui.Println("  " + a.ui.Blue("⇩ ") + core.Truncate(req.Detail, 80))
+		a.ui.Println("  " + a.ui.Blue("-> ") + core.Truncate(req.Detail, 80))
 		a.ui.Prompt2("Разрешить сетевой запрос?", "[y]да [n]нет [a]всегда: ")
 		switch a.readAns(true, false) {
 		case confirmYes:
@@ -592,13 +536,13 @@ func (a *app) showWritePreview(req tools.ConfirmReq) {
 	}
 	lines := core.SplitLines(req.New)
 	a.ui.Println("  " + a.ui.Gray("новый файл: "+rel+
-		fmt.Sprintf(" · %d строк", len(lines))))
+		fmt.Sprintf(" | %d строк", len(lines))))
 	// Превью — первые строки файла: их достаточно, чтобы понять, что за
 	// файл собирается появиться.
 	limit := 12
 	for i, l := range lines {
 		if i >= limit {
-			a.ui.Println("    " + a.ui.Gray(fmt.Sprintf("… ещё %d строк", len(lines)-limit)))
+			a.ui.Println("    " + a.ui.Gray(fmt.Sprintf("... ещё %d строк", len(lines)-limit)))
 			break
 		}
 		a.ui.Println("    " + a.ui.Gray(core.Truncate(core.OneLine(l), 100)))
@@ -620,9 +564,9 @@ func (a *app) announceDeny(req tools.ConfirmReq, rule core.Rule) {
 	case tools.ConfirmExec:
 		a.ui.Println("  " + a.ui.Yellow("$ ") + req.Detail)
 	case tools.ConfirmWrite:
-		a.ui.Println("  " + a.ui.Yellow("✎ ") + core.RelToWD(a.workDir, req.Path))
+		a.ui.Println("  " + a.ui.Yellow("* ") + core.RelToWD(a.workDir, req.Path))
 	case tools.ConfirmNet:
-		a.ui.Println("  " + a.ui.Blue("⇩ ") + core.Truncate(req.Detail, 80))
+		a.ui.Println("  " + a.ui.Blue("-> ") + core.Truncate(req.Detail, 80))
 	}
 	a.ui.Warn("запрещено правилом: " + rule.Label())
 	a.ui.Hint("изменить правило: " + rule.Tool + "(" + rule.Pattern + ") в gcli.json или ~/.gcli/config.json")
@@ -642,11 +586,11 @@ func (a *app) denyBackground(req tools.ConfirmReq) {
 	case tools.ConfirmExec:
 		a.ui.Println("  " + a.ui.Yellow("$ ") + req.Detail)
 	case tools.ConfirmWrite:
-		a.ui.Println("  " + a.ui.Yellow("✎ ") + core.RelToWD(a.workDir, req.Path))
+		a.ui.Println("  " + a.ui.Yellow("* ") + core.RelToWD(a.workDir, req.Path))
 	case tools.ConfirmNet:
-		a.ui.Println("  " + a.ui.Blue("⇩ ") + core.Truncate(req.Detail, 80))
+		a.ui.Println("  " + a.ui.Blue("-> ") + core.Truncate(req.Detail, 80))
 	}
-	a.ui.Warn("фоновой ход запросил подтверждение — отклонено: человека нет у терминала")
+	a.ui.Warn("фоновой ход запросил подтверждение - отклонено: человека нет у терминала")
 	a.ui.Hint("автономные прогоны без вопросов: /autopilot on (или /cron off)")
 }
 
@@ -677,7 +621,7 @@ func (a *app) announceAuto(req tools.ConfirmReq) {
 		detail = req.Kind.String()
 	}
 	if len([]rune(detail)) > 72 {
-		detail = string([]rune(detail)[:72]) + "…"
+		detail = string([]rune(detail)[:72]) + "..."
 	}
 	switch req.Kind {
 	case tools.ConfirmWrite:
@@ -685,7 +629,7 @@ func (a *app) announceAuto(req tools.ConfirmReq) {
 	case tools.ConfirmExec:
 		a.ui.Println("  " + a.ui.Gray("$ ") + detail + "  " + a.ui.AutoTag())
 	case tools.ConfirmNet:
-		a.ui.Println("  " + a.ui.Gray("⇩ ") + detail + "  " + a.ui.AutoTag())
+		a.ui.Println("  " + a.ui.Gray("-> ") + detail + "  " + a.ui.AutoTag())
 	}
 }
 
@@ -767,19 +711,15 @@ const (
 
 // readAns — прочитать ответ пользователя.
 func (a *app) readAns(allowAlways, allowAll bool) int {
-	if a.stdin == nil {
-		// Полноэкранный интерфейс не должен доходить сюда: подтверждения
-		// идут окнами (см. confirm). Отказ безопаснее паники.
-		return confirmNo
-	}
 	for {
-		if !a.stdin.Scan() {
+		text, ok := a.askLine("")
+		if !ok {
 			return confirmNo
 		}
 		// Сравнение с исходным регистром внутри: «A» (заглавная) — «все»,
 		// «a» — «всегда». ToLower целиком делал «A» недостижимой веткой,
 		// и пользователь получал более слабое «всегда» молча.
-		raw := strings.TrimSpace(a.stdin.Text())
+		raw := strings.TrimSpace(text)
 		low := strings.ToLower(raw)
 		switch low {
 		case "y", "д", "да", "yes", "1":
@@ -792,7 +732,7 @@ func (a *app) readAns(allowAlways, allowAll bool) int {
 				if allowAll {
 					return confirmAll
 				}
-				a.ui.Println(a.ui.Gray("    «все» недоступно; ответь y или n"))
+				a.ui.Println(a.ui.Gray("    \"все\" недоступно; ответь y или n"))
 				continue
 			}
 			if allowAlways {
@@ -820,25 +760,25 @@ func (a *app) askUser(question string, options []string) (string, error) {
 	if a.permAutopilot() {
 		if len(options) > 0 {
 			ans := options[0]
-			a.ui.Info("автопилот: выбран вариант «" + ans + "» — " + core.Truncate(core.OneLine(question), 70))
+			a.ui.Info("автопилот: выбран вариант \"" + ans + "\" - " + core.Truncate(core.OneLine(question), 70))
 			return ans, nil
 		}
-		a.ui.Info("автопилот: вопрос пропущен, решай задачу самостоятельно — " +
+		a.ui.Info("автопилот: вопрос пропущен, решай задачу самостоятельно - " +
 			core.Truncate(core.OneLine(question), 70))
 		return "[автопилот: реши самостоятельно]", nil
 	}
-	// Полноэкранный интерфейс спрашивает окном: старые Prompt2/Scan
-	// писали бы мимо ленты, а stdin в этом режиме нет.
-	if ans, ok := a.tuiAskUser(question, options); ok {
-		return strings.TrimSpace(ans), nil
-	} else if t := a.tuiApp(); t != nil && t.Running() {
-		return "", nil
+	// Композер спрашивает в поле ввода: вопрос печатается над регионом,
+	// ответ набирается как обычное сообщение.
+	if c := a.composerRef(); c != nil {
+		if ans, ok := c.ask(question, false, options); ok {
+			return strings.TrimSpace(ans), nil
+		}
 	}
 	// Фоновый ход не читает stdin: строка предназначена REPL-циклу, а не
 	// этому вопросу. Пустой ответ — как в тихом режиме: модель видит,
 	// что ответа не будет, и решает сама.
 	if !a.canAskTerminal() {
-		a.ui.Info("фоновой ход: ask_user без человека у терминала — ответа не будет, решай сам")
+		a.ui.Info("фоновой ход: ask_user без человека у терминала - ответа не будет, решай сам")
 		return "", nil
 	}
 	a.ui.Println("")
@@ -873,3 +813,126 @@ func (a *app) recordCheckpoint(path, label string) {
 // Проверка id сессии живёт в core.ValidSessionID: она была продублирована
 // здесь дословно, а security-функция в двух экземплярах — уязвимость с
 // отсрочкой (правишь одну — вторая молча остаётся дырявой).
+
+// ---------- Из app_fork.go (ветвление сессии) ----------
+
+// Форк сессии: ветвление диалога от любой точки.
+//
+// Зачем: «а что, если пойти другим путём с этого места» — обычный сценарий
+// работы с агентом. /resume возвращает только целую сессию; /fork копирует
+// историю до выбранного сообщения в НОВУЮ сессию, и оба пути дальше живут
+// независимо. Нынешняя сессия не трогается.
+//
+// Резать историю можно не где попало: между assistant с tool_calls и
+// ответами инструментов рвать нельзя — провайдеры отвергают такой хвост.
+// Поэтому /fork режет только в «чистых» границах (см. safeForkCut).
+
+// safeForkCut — ближайший безопасный разрез истории не дальше n сообщений.
+//
+// Граница i чистая, когда prefix messages[:i]: (а) не заканчивается открытым
+// tool_calls без ответов, (б) не заканчивается ответом инструмента без
+// вопроса (рвать между инструментом и следующим шагом модели тоже можно,
+// но ответ без контекста вызова провайдеры не примут — таких хвостов не
+// оставляем). Возврат: индекс для реза, 0 — если безопасных точек нет.
+func safeForkCut(msgs []core.Message, n int) int {
+	if n > len(msgs) {
+		n = len(msgs)
+	}
+	if n < 0 {
+		n = 0
+	}
+	// open — сколько вызовов инструментов ждут ответов в prefix.
+	open := 0
+	clean := make([]bool, len(msgs)+1)
+	clean[0] = true
+	for i, m := range msgs {
+		switch m.Role {
+		case core.RoleAssistant:
+			open += len(m.ToolCalls)
+		case core.RoleTool:
+			if open > 0 {
+				open--
+			}
+		}
+		// Резать сразу перед сообщением i+1 можно, только когда все
+		// вызовы закрыты. Хвост из tool-ответов отсеется ниже: следующим
+		// сообщением в форке был бы вопрос пользователя, а провайдеры
+		// требуют после tool-ответа шаг модели.
+		if open == 0 {
+			clean[i+1] = true
+		}
+	}
+	for i := n; i >= 0; i-- {
+		if !clean[i] {
+			continue
+		}
+		if i > 0 && msgs[i-1].Role == core.RoleTool {
+			continue
+		}
+		return i
+	}
+	return 0
+}
+
+// cmdFork — /fork [номер сообщения]: новая сессия из истории текущей.
+func (a *app) cmdFork(rest string) {
+	if a.turnActive() {
+		a.ui.Warn("ход ещё идёт - прерви (Esc) или подожди: /fork подменяет сессию под ногами хода")
+		return
+	}
+	// Копия истории под sessMu: /fork режет историю на месте, а в serve-режиме
+	// ход идёт параллельно и дописывает сообщения.
+	msgs := a.Messages()
+	n := len(msgs)
+	if s := strings.TrimSpace(rest); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil || v < 1 {
+			a.ui.Warn("укажи номер сообщения: /fork 12 (1 - первое сообщение, без числа - вся история)")
+			return
+		}
+		n = v
+	}
+	if len(msgs) == 0 {
+		a.ui.Info("сессия пуста - форковать нечего")
+		return
+	}
+	cut := safeForkCut(msgs, n)
+	if cut == 0 {
+		a.ui.Warn("в этом месте истории резать нельзя (открытые вызовы инструментов) - возьми другой номер")
+		return
+	}
+	// Жёсткий барьер: между проверкой выше и этой точкой мог начаться ход
+	// (cron, watch). Lock дождётся его конца — после этого подмена безопасна.
+	a.sessSwap.Lock()
+	defer a.sessSwap.Unlock()
+	// Снимок сессии под sessMu: ход (в т.ч. из cron-горутины) может дописывать
+	// заголовок, usage и план прямо во время /fork — без лока копия вышла бы рваной.
+	sessMu.Lock()
+	cp := *a.sess
+	sessMu.Unlock()
+	cp.ID = time.Now().Format("20060102-150405") + "-" + core.RandID(4)
+	cp.Title = "fork: " + core.Truncate(core.OneLine(cp.Title), 46)
+	cp.Created = time.Now()
+	cp.Updated = time.Now()
+	cp.Messages = append([]core.Message(nil), msgs[:cut]...)
+	cp.Todos = append([]core.Todo(nil), cp.Todos...)
+	cp.Turns = 0
+	cp.Usage = core.Usage{}
+	cp.Stats = core.Stats{}
+	cp.Checkpoints = nil
+	cp.SubagentRuns = nil
+	// Разрешения — свежие: это другой путь работы, доверия наследовать
+	// не должно быть по умолчанию.
+	cp.Perms = core.Perms{BashExact: map[string]bool{}}
+	if err := a.repo.SaveSession(&cp); err != nil {
+		a.ui.Err("форк не сохранился: " + err.Error())
+		return
+	}
+	a.sess = &cp
+	a.saveConfig()
+	// Лента показывает прежний, более длинный диалог: после форка это
+	// уже другая ветка, поэтому экран начинаем заново.
+	a.ui.ClearScreen()
+	a.ui.Ok(fmt.Sprintf("форк создан: сессия %s, перенесено сообщений - %d из %d", cp.ID, cut, len(msgs)))
+	a.ui.Info("нынешняя сессия переключена на форк; старая осталась в /sessions")
+}

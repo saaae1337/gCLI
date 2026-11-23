@@ -21,7 +21,7 @@ func TestChainStepPromptFirstAndMiddle(t *testing.T) {
 	}
 	// На первом шаге ссылки на предыдущий быть не должно.
 	if strings.Contains(first, "Предыдущий шаг") {
-		t.Fatalf("у первого шага не должно быть «предыдущего»: %q", first)
+		t.Fatalf("у первого шага не должно быть \"предыдущего\": %q", first)
 	}
 
 	c.Index = 1

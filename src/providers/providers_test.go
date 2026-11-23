@@ -31,7 +31,7 @@ func TestCleanKey(t *testing.T) {
 }
 
 func TestMaskKey(t *testing.T) {
-	if got := MaskKey("sk-1234567890abcdef"); !strings.Contains(got, "…") {
+	if got := MaskKey("sk-1234567890abcdef"); !strings.Contains(got, "...") {
 		t.Errorf("MaskKey = %q", got)
 	}
 	if got := MaskKey("short"); strings.Contains(got, "s") {

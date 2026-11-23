@@ -76,7 +76,7 @@ func ParseMemory(s string) []MemoryEntry {
 // RenderMemory — собрать содержимое файла памяти из записей.
 func RenderMemory(entries []MemoryEntry) string {
 	var b strings.Builder
-	b.WriteString("# Память Джикли — что я узнал о себе и проектах\n")
+	b.WriteString("# Память Джикли - что я узнал о себе и проектах\n")
 	b.WriteString("\nЭтот файл пишет сам агент (инструмент remember). Он подмешивается\n")
 	b.WriteString("в системный промпт в следующих сессиях. Правь вручную, если нужно.\n")
 	for _, e := range entries {
@@ -93,7 +93,7 @@ func RenderMemory(entries []MemoryEntry) string {
 func normFact(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.Join(strings.Fields(s), " ")
-	return strings.Trim(s, ".;,!—- ")
+	return strings.Trim(s, ".;,!-- ")
 }
 
 // AddMemory — записать факт в долговременную память.
@@ -138,7 +138,7 @@ func AddMemory(fact, note string) (string, error) {
 		rest := append([]MemoryEntry(nil), entries[:i]...)
 		rest = append(rest, entries[i+1:]...)
 		entries = append([]MemoryEntry{upd}, rest...)
-		what := "Факт уже был записан " + e.Date + " — обновил"
+		what := "Факт уже был записан " + e.Date + " - обновил"
 		if note != "" && note != e.Note {
 			what += " пометку"
 		}
@@ -150,7 +150,7 @@ func AddMemory(fact, note string) (string, error) {
 	if err := writeMemory(entries); err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("Записано в долговременную память (%s): «%s». Всего записей: %d.\n"+
+	msg := fmt.Sprintf("Записано в долговременную память (%s): \"%s\". Всего записей: %d.\n"+
 		"Оно будет в контексте и в следующих сессиях.", path, fact, len(entries))
 	return msg, nil
 }

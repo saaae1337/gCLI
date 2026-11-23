@@ -76,10 +76,10 @@ func TestMCPSrvPromptKillsWholeTree(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Log("mcpSrvPrompt вернулся без ошибки — скрипт успел бы доработать? проверяем потомка всё равно")
+			t.Log("mcpSrvPrompt вернулся без ошибки - скрипт успел бы доработать? проверяем потомка всё равно")
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("mcpSrvPrompt не вернулся за 20с — висит на живом потомке")
+		t.Fatal("mcpSrvPrompt не вернулся за 20с - висит на живом потомке")
 	}
 
 	// Потомок должен быть мёртв: таймаут убивает всё дерево.
@@ -96,6 +96,6 @@ func TestMCPSrvPromptKillsWholeTree(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !gone {
-		t.Fatalf("фоновый потомок (pid %d) пережил таймаут — сирота: убит только прямой ребёнок", pid)
+		t.Fatalf("фоновый потомок (pid %d) пережил таймаут - сирота: убит только прямой ребёнок", pid)
 	}
 }

@@ -21,7 +21,7 @@ import (
 
 func TestCmdMissionStartStopSave(t *testing.T) {
 	a, buf := cmdApp(t)
-	a.cmdMission("start long-time 2h «починить тесты»")
+	a.cmdMission("start long-time 2h \"починить тесты\"")
 	if got := out(buf); !strings.Contains(got, "прогон запущен") {
 		t.Fatalf("старт прогона:\n%s", got)
 	}
@@ -60,7 +60,7 @@ func TestCmdMissionStartStopSave(t *testing.T) {
 
 func TestCmdMissionRejectsRunWithoutCeilings(t *testing.T) {
 	a, buf := cmdApp(t)
-	a.cmdMission("start «просто цель»")
+	a.cmdMission("start \"просто цель\"")
 	if got := out(buf); !strings.Contains(got, "нечего запускать") {
 		t.Fatalf("ход без потолков должен быть отвергнут:\n%s", got)
 	}
@@ -184,7 +184,7 @@ func TestMissionChainAddListClear(t *testing.T) {
 
 	// Шаг без потолков — вечный прогон: цепочка его не принимает.
 	buf.Reset()
-	a.cmdMissionChain("add «просто цель»")
+	a.cmdMissionChain("add \"просто цель\"")
 	if !strings.Contains(out(buf), "потолок") {
 		t.Fatalf("шаг без потолка должен быть отвергнут:\n%s", out(buf))
 	}
@@ -196,7 +196,7 @@ func TestMissionChainAddListClear(t *testing.T) {
 	}
 
 	buf.Reset()
-	a.cmdMissionChain("add long-time «починить core»")
+	a.cmdMissionChain("add long-time \"починить core\"")
 	if !strings.Contains(out(buf), "шаг 1 добавлен") {
 		t.Fatalf("добавление шага:\n%s", out(buf))
 	}

@@ -17,6 +17,220 @@ import (
 	"gcli/ui"
 )
 
+// ---------- Каталог команд: один источник для роутера, /help и палитры ----------
+//
+// Раньше список команд жил в трёх местах — в switch роутера, в таблице
+// /help и в палитре TUI — и списки расползались: палитра предлагала
+// команду, которой нет в обработчике, /help не упоминал команду, которая
+// есть. Теперь команда описана один раз, и всё остальное собирается из
+// этой таблицы.
+
+// commandDef — описание slash-команды.
+type commandDef struct {
+	// names — имя и алиасы с ведущим слэшем; names[0] идёт в палитру.
+	names []string
+	// usage — строка для /help («/models [фильтр|N|refresh]»); пусто — names[0].
+	usage string
+	// desc — подпись в /help и палитре.
+	desc string
+	// group — заголовок группы в /help; пусто — команда не печатается
+	// в справке и не попадает в палитру (внутренние).
+	group string
+	// more — дополнительные строки справки под основной (подкоманды).
+	more [][2]string
+	// run — обработчик; false = завершить сеанс.
+	run func(a *app, rest, arg string) bool
+}
+
+// commandDefs — каталог всех команд в порядке справки.
+//
+// Заполняется в init, а не литералом: замыкание /help вызывает cmdHelp,
+// которая читает commandDefs, и литерал в var создаёт цикл
+// инициализации.
+var commandDefs []commandDef
+
+func init() {
+	commandDefs = buildCommandDefs()
+	commandIndex = buildCommandIndex(commandDefs)
+}
+
+// buildCommandDefs — таблица команд.
+func buildCommandDefs() []commandDef {
+	return []commandDef{
+		// ---- Настройка ----
+		{group: "Настройка", names: []string{"/setup"}, desc: "мастер: провайдер -> ключ -> модель",
+			run: func(a *app, rest, arg string) bool { a.runSetup(); return true }},
+		{group: "Настройка", names: []string{"/provider"},
+			usage: "/provider [id] | add | key | model | test | rm",
+			desc:  "провайдеры: свой endpoint (ctx= - окно), ключи, проверка",
+			more: [][2]string{
+				{"/provider add <id> <url> [openai|anthropic] [ctx=N]", "свой endpoint; ctx=N - окно контекста"},
+				{"/provider test [id]", "проверить endpoint: живой ответ и время"},
+			},
+			run: func(a *app, rest, arg string) bool { a.cmdProvider(rest); return true }},
+		{group: "Настройка", names: []string{"/models"},
+			usage: "/models [фильтр|N|refresh]",
+			desc:  "модели с endpoint-а; N - установить по номеру из таблицы",
+			run:   func(a *app, rest, arg string) bool { a.cmdModels(rest); return true }},
+		{group: "Настройка", names: []string{"/model"},
+			usage: "/model [имя]",
+			desc:  "сменить модель",
+			run:   func(a *app, rest, arg string) bool { a.cmdModel(rest); return true }},
+		{group: "Настройка", names: []string{"/think"},
+			usage: "/think on|off|auto",
+			desc:  "размышления модели",
+			run:   func(a *app, rest, arg string) bool { a.cmdThink(arg); return true }},
+
+		// ---- Агент ----
+		{group: "Агент", names: []string{"/agents"}, desc: "субагенты: список, запуск, настройки",
+			more: [][2]string{
+				{"/agents run <тип> <задача>", "запустить: explorer, planner, tester, frontend..."},
+				{"/agents types", "все типы + свои агенты"},
+				{"/agents new <имя>", "свой агент (.gcli/agents/*.md)"},
+			},
+			run: func(a *app, rest, arg string) bool { a.cmdAgents(rest); return true }},
+		{group: "Агент", names: []string{"/agent"},
+			usage: "/agent on|off",
+			desc:  "агентный режим (инструменты)",
+			run:   func(a *app, rest, arg string) bool { a.cmdAgent(arg); return true }},
+		{group: "Агент", names: []string{"/plan"},
+			usage: "/plan on|off",
+			desc:  "режим планирования: сначала план - потом код",
+			run:   func(a *app, rest, arg string) bool { a.cmdPlan(rest); return true }},
+		{group: "Агент", names: []string{"/ab"},
+			usage: "/ab <модель> <промпт>",
+			desc:  "один вопрос двум моделям: сравнить ответ, время, цену",
+			run:   func(a *app, rest, arg string) bool { a.cmdAb(rest); return true }},
+		{group: "Агент", names: []string{"/autopilot"},
+			usage: "/autopilot on|off|all",
+			desc:  "автопилот: одобрять безопасные действия самому",
+			run:   func(a *app, rest, arg string) bool { a.cmdAutopilot(rest); return true }},
+		{group: "Агент", names: []string{"/sandbox"},
+			usage: "/sandbox on|off",
+			desc:  "песочница файлов: пути вне рабочего каталога запрещены",
+			run:   func(a *app, rest, arg string) bool { a.cmdSandbox(rest); return true }},
+		{group: "Агент", names: []string{"/cron"},
+			usage: "/cron on|off|status",
+			desc:  "автономные итерации: сам ищет и чинит баги, уязвимости, проблемы",
+			run:   func(a *app, rest, arg string) bool { a.cmdCron(rest); return true }},
+		{group: "Агент", names: []string{"/yolo"}, desc: "без подтверждений (кроме опасных команд)",
+			run: func(a *app, rest, arg string) bool { a.cmdYolo(); return true }},
+		{group: "Агент", names: []string{"/tools"}, desc: "список инструментов агента",
+			run: func(a *app, rest, arg string) bool { a.cmdTools(); return true }},
+		{group: "Агент", names: []string{"/mission"},
+			usage: "/mission start|stop|status|save|report|chain",
+			desc:  "автономный прогон: задание, журнал, отчёт, цепочка прогонов",
+			run:   func(a *app, rest, arg string) bool { a.cmdMission(rest); return true }},
+		{group: "Агент", names: []string{"/iters"}, desc: "лимит итераций и продления хода; при прогоне - его расход",
+			run: func(a *app, rest, arg string) bool { a.cmdIters(); return true }},
+		{group: "Агент", names: []string{"/todos"}, desc: "план текущей задачи",
+			run: func(a *app, rest, arg string) bool {
+				a.ui.RenderTodos(a.sessionTodos())
+				a.ui.Println("")
+				return true
+			}},
+		{group: "Агент", names: []string{"/compact"}, desc: "сжать историю диалога",
+			run: func(a *app, rest, arg string) bool { a.cmdCompact(); return true }},
+		{group: "Агент", names: []string{"/snapshots"}, desc: "снимки проекта по ходам",
+			run: func(a *app, rest, arg string) bool { a.cmdSnapshots(); return true }},
+		{group: "Агент", names: []string{"/revert"},
+			usage: "/revert N",
+			desc:  "откат к снимку N",
+			run:   func(a *app, rest, arg string) bool { a.cmdRevert(rest); return true }},
+
+		// ---- Расширение ----
+		{group: "Расширение", names: []string{"/skills", "/skill"}, desc: "навыки; new, on|off, показать",
+			run: func(a *app, rest, arg string) bool { a.cmdSkills(rest); return true }},
+		{group: "Расширение", names: []string{"/ext"}, desc: "расширения; new, trust, reload",
+			run: func(a *app, rest, arg string) bool { a.cmdExt(rest); return true }},
+		{group: "Расширение", names: []string{"/mcp"}, desc: "MCP-серверы; trust, reload, new, path",
+			run: func(a *app, rest, arg string) bool { a.cmdMcp(rest); return true }},
+		{group: "Расширение", names: []string{"/init"},
+			usage: "/init [show|force]",
+			desc:  "разобрать проект: GCLI.md + gcli.json",
+			run:   func(a *app, rest, arg string) bool { a.cmdInit(rest); return true }},
+		{group: "Расширение", names: []string{"/memory"}, desc: "файлы памяти проекта",
+			run: func(a *app, rest, arg string) bool { a.cmdMemory(); return true }},
+
+		// ---- Сессия ----
+		{group: "Сессия", names: []string{"/status"}, desc: "состояние сессии, ключей и окружения",
+			run: func(a *app, rest, arg string) bool { a.cmdStatus(); return true }},
+		{group: "Сессия", names: []string{"/usage"}, desc: "расход токенов и деньги",
+			run: func(a *app, rest, arg string) bool { a.cmdUsage(); return true }},
+		{group: "Сессия", names: []string{"/stats"},
+			usage: "/stats [дней]",
+			desc:  "дашборд расходов: по дням и моделям",
+			run:   func(a *app, rest, arg string) bool { a.cmdStats(rest); return true }},
+		{group: "Сессия", names: []string{"/context"}, desc: "разбивка контекста по частям",
+			run: func(a *app, rest, arg string) bool { a.cmdContext(); return true }},
+		{group: "Сессия", names: []string{"/sessions"}, desc: "сохранённые сессии",
+			run: func(a *app, rest, arg string) bool { a.cmdSessions(); return true }},
+		{group: "Сессия", names: []string{"/resume"},
+			usage: "/resume [N]",
+			desc:  "возобновить сессию по номеру из /sessions",
+			run:   func(a *app, rest, arg string) bool { a.cmdResume(arg); return true }},
+		{group: "Сессия", names: []string{"/fork"},
+			usage: "/fork [N]",
+			desc:  "новая сессия из истории текущей до сообщения N",
+			run:   func(a *app, rest, arg string) bool { a.cmdFork(rest); return true }},
+		{group: "Сессия", names: []string{"/clear"}, desc: "новая сессия",
+			run: func(a *app, rest, arg string) bool { a.cmdClear(); return true }},
+		{group: "Сессия", names: []string{"/export"}, desc: "экспорт диалога в Markdown",
+			run: func(a *app, rest, arg string) bool { a.cmdExport(); return true }},
+		{group: "Сессия", names: []string{"/undo"}, desc: "отменить последнюю правку файла",
+			run: func(a *app, rest, arg string) bool { a.cmdUndo(); return true }},
+		{group: "Сессия", names: []string{"/permissions"},
+			usage: "/permissions [reset]",
+			desc:  "разрешения сессии, доверие коду, сброс",
+			run:   func(a *app, rest, arg string) bool { a.cmdPerms(rest); return true }},
+
+		// ---- Сервис ----
+		{group: "Сервис", names: []string{"/help", "/?", "/h"}, desc: "эта справка",
+			run: func(a *app, rest, arg string) bool { a.cmdHelp(); return true }},
+		{group: "Сервис", names: []string{"/doctor"},
+			usage: "/doctor [key]",
+			desc:  "диагностика окружения и ключа",
+			run:   func(a *app, rest, arg string) bool { a.cmdDoctor(rest); return true }},
+		{group: "Сервис", names: []string{"/copy"}, desc: "скопировать последний ответ (OSC52)",
+			run: func(a *app, rest, arg string) bool { a.cmdCopy(); return true }},
+		{group: "Сервис", names: []string{"/cls", "/clear-screen"}, desc: "очистить экран",
+			run: func(a *app, rest, arg string) bool {
+				a.ui.ClearScreen()
+				// В полноэкранном режиме приветствие живёт в транскрипте:
+				// после чистки стенки оно должно вернуться.
+				if a.ui.ScreenActive() && !a.quiet {
+					a.banner()
+				}
+				return true
+			}},
+		{group: "Сервис", names: []string{"/quit", "/exit", "/q"}, desc: "выход (также Ctrl+D)",
+			run: func(a *app, rest, arg string) bool { return false }},
+	}
+}
+
+// commandIndex — имя → описание; собирается в init рядом с каталогом.
+var commandIndex map[string]*commandDef
+
+// buildCommandIndex — индекс по всем именам и алиасам; дубликат в
+// каталоге — ошибка компоновки, а не молчаливая замена.
+func buildCommandIndex(defs []commandDef) map[string]*commandDef {
+	m := make(map[string]*commandDef, len(defs)*2)
+	for i := range defs {
+		for _, n := range defs[i].names {
+			if _, dup := m[n]; dup {
+				panic("дубликат команды в commandDefs: " + n)
+			}
+			m[n] = &defs[i]
+		}
+	}
+	return m
+}
+
+// lookupCommand — найти команду по имени (с алиасами). Не найдена — nil.
+func lookupCommand(name string) *commandDef {
+	return commandIndex[strings.ToLower(name)]
+}
+
 // handleCommand — обработать slash-команду. false = выход.
 func (a *app) handleCommand(line string) bool {
 	fields := strings.Fields(line)
@@ -29,172 +243,135 @@ func (a *app) handleCommand(line string) bool {
 	if len(fields) > 1 {
 		arg = fields[1]
 	}
-
-	switch cmd {
-	case "/quit", "/exit", "/q":
-		return false
-	case "/help", "/?", "/h":
-		a.cmdHelp()
-	case "/status":
-		a.cmdStatus()
-	case "/iters":
-		a.cmdIters()
-	case "/model":
-		a.cmdModel(rest)
-	case "/provider":
-		a.cmdProvider(rest)
-	case "/setup":
-		a.runSetup()
-	case "/models":
-		a.cmdModels(rest)
-	case "/think":
-		a.cmdThink(arg)
-	case "/skills", "/skill":
-		a.cmdSkills(rest)
-	case "/ext":
-		a.cmdExt(rest)
-	case "/agents":
-		a.cmdAgents(rest)
-	case "/agent":
-		a.cmdAgent(arg)
-	case "/yolo":
-		a.cmdYolo()
-	case "/autopilot":
-		a.cmdAutopilot(rest)
-	case "/mission":
-		a.cmdMission(rest)
-	case "/todos":
-		a.ui.RenderTodos(a.sessionTodos())
-		a.ui.Println("")
-	case "/compact":
-		a.cmdCompact()
-	case "/sessions":
-		a.cmdSessions()
-	case "/fork":
-		a.cmdFork(rest)
-	case "/resume":
-		a.cmdResume(arg)
-	case "/clear":
-		a.cmdClear()
-	case "/export":
-		a.cmdExport()
-	case "/permissions":
-		a.cmdPerms(rest)
-	case "/sandbox":
-		a.cmdSandbox(rest)
-	case "/cron":
-		a.cmdCron(rest)
-	case "/usage":
-		a.cmdUsage()
-	case "/stats":
-		a.cmdStats(rest)
-	case "/tools":
-		a.cmdTools()
-	case "/doctor":
-		a.cmdDoctor(rest)
-	case "/init":
-		a.cmdInit(rest)
-	case "/memory":
-		a.cmdMemory()
-	case "/mascot":
-		a.cmdMascot(rest)
-	case "/mcp":
-		a.cmdMcp(rest)
-	case "/context":
-		a.cmdContext()
-	case "/plan":
-		a.cmdPlan(rest)
-	case "/ab":
-		a.cmdAb(rest)
-	case "/undo":
-		a.cmdUndo()
-	case "/snapshots":
-		a.cmdSnapshots()
-	case "/revert":
-		a.cmdRevert(rest)
-	case "/copy":
-		a.cmdCopy()
-	case "/cls", "/clear-screen":
-		a.ui.ClearScreen()
-	default:
-		// Кастомные slash-команды из .gcli/commands и ~/.gcli/commands:
-		// файл commit.md превращается в /commit.
-		if cmd, ok := a.findCustomCommand(cmd); ok {
-			a.runCustomCommand(cmd, rest)
-			return true
-		}
-		a.ui.Warn("неизвестная команда: " + cmd + " — /help для списка")
+	if d := lookupCommand(cmd); d != nil {
+		return d.run(a, rest, arg)
 	}
+	// Кастомные slash-команды из .gcli/commands и ~/.gcli/commands:
+	// файл commit.md превращается в /commit.
+	if c, ok := a.findCustomCommand(cmd); ok {
+		a.runCustomCommand(c, rest)
+		return true
+	}
+	a.warnUnknownCommand(cmd)
 	return true
 }
 
-// ---------- Справка и статус ----------
-
-func (a *app) cmdHelp() {
-	groups := []struct {
-		title string
-		rows  [][2]string
-	}{
-		{"Настройка", [][2]string{
-			{"/setup", "мастер: провайдер → ключ → модель"},
-			{"/provider", "провайдеры; add — свой endpoint, key, model, rm"},
-			{"/models [фильтр]", "модели с endpoint-а провайдера"},
-			{"/model [имя]", "сменить модель"},
-			{"/think on|off|auto", "размышления модели"},
-			{"/mascot", "кот Искра: on|off, demo, say <текст>, wave"},
-		}},
-		{"Агент", [][2]string{
-			{"/agents", "субагенты: список, запуск, настройки"},
-			{"/agents run <тип> <задача>", "запустить: explorer, planner, tester, frontend…"},
-			{"/agents types", "все типы + свои агенты"},
-			{"/agents new <имя>", "свой агент (.gcli/agents/*.md)"},
-			{"/agent on|off", "агентный режим (инструменты)"},
-			{"/plan on|off", "режим планирования: сначала план — потом код"},
-			{"/ab <модель> <промпт>", "один вопрос двум моделям: сравнить ответ, время, цену"},
-			{"/autopilot on|off|all", "автопилот: одобрять безопасные действия самому"},
-			{"/sandbox on|off", "песочница файлов: пути вне рабочего каталога запрещены"},
-			{"/cron on|off|status", "автономные итерации: сам ищет и чинит баги, уязвимости, проблемы"},
-			{"/yolo", "без подтверждений (кроме опасных команд)"},
-			{"/tools", "список инструментов агента"},
-			{"/mission", "автономный прогон: start, stop, status, save, report"},
-			{"/cron on|off|status", "автономные итерации: поиск и исправление багов, уязвимости, проблемы при тишине 15–20 мин"},
-			{"/iters", "лимит итераций и продления хода; при прогоне — его расход"},
-			{"/todos", "план текущей задачи"},
-			{"/compact", "сжать историю диалога"},
-			{"/snapshots, /revert N", "снимки проекта по ходам; откат к снимку N"},
-		}},
-		{"Расширение", [][2]string{
-			{"/skills, /skill", "навыки; new, on|off, показать"},
-			{"/ext", "расширения; new, trust, reload"},
-			{"/mcp", "MCP-серверы; trust, reload, new, path"},
-			{"/init", "разобрать проект: GCLI.md + gcli.json; show, force"},
-			{"/memory", "файлы памяти проекта"},
-		}},
-		{"Сессия", [][2]string{
-			{"/status, /usage", "состояние, токены, контекст"},
-			{"/stats [дней]", "дашборд расходов: по дням и моделям"},
-			{"/context", "разбивка контекста по частям"},
-			{"/sessions, /resume", "сохранённые сессии"},
-			{"/fork [N]", "новая сессия из истории текущей до сообщения N"},
-			{"/clear", "новая сессия"},
-			{"/export", "экспорт диалога в Markdown"},
-			{"/undo", "отменить последнюю правку файла"},
-			{"/permissions [reset]", "разрешения сессии, доверие коду, сброс"},
-		}}, {"Сервис", [][2]string{
-			{"/doctor [key]", "диагностика окружения и ключа"},
-			{"/copy", "скопировать последний ответ (OSC52)"},
-			{"/cls", "очистить экран"},
-			{"/quit", "выход (также Ctrl+D)"},
-		}},
+// warnUnknownCommand — сообщить об опечатке и предложить ближайшее.
+//
+// Голое «неизвестная команда» бесполезно: человек опечатался в /models и
+// должен сам открывать справку и искать похожую. Подсказка строится по
+// префиксу и расстоянию Левенштейна по всем именам каталога и своим
+// командам.
+func (a *app) warnUnknownCommand(cmd string) {
+	a.ui.Warn("неизвестная команда: " + cmd + " - /help для списка")
+	if sugg := a.closestCommands(cmd); len(sugg) > 0 {
+		a.ui.Hint("похожие: " + strings.Join(sugg, " | "))
 	}
+}
+
+// knownCommandNames — все имена каталога плюс свои команды.
+func (a *app) knownCommandNames() []string {
+	out := make([]string, 0, len(commandIndex)+8)
+	for name := range commandIndex {
+		out = append(out, name)
+	}
+	for _, r := range a.customHelpRows() {
+		if name := strings.TrimPrefix(r[0], "/"); lookupCommand("/"+name) == nil {
+			out = append(out, "/"+name)
+		}
+	}
+	return out
+}
+
+// closestCommands — до трёх самых похожих команд на опечатку.
+//
+// Сначала префиксные совпадения (человек начал печатать и промахнулся),
+// потом ближайшие по расстоянию Левенштейна. Сортировка по имени делает
+// результат воспроизводимым: одна и та же опечатка советует одно и то же.
+func (a *app) closestCommands(typo string) []string {
+	typo = strings.ToLower(typo)
+	if typo == "" {
+		return nil
+	}
+	known := a.knownCommandNames()
+	var byPrefix, byDistance []string
+	for _, name := range known {
+		lname := strings.ToLower(name)
+		if lname == typo {
+			// Точное совпадение не доходит сюда (маршрут уже найден),
+			// но перестраховаться честнее, чем советовать саму себя.
+			continue
+		}
+		switch {
+		case strings.HasPrefix(lname, typo):
+			byPrefix = append(byPrefix, name)
+		case levenshtein(typo, lname) <= 2:
+			byDistance = append(byDistance, name)
+		}
+	}
+	sort.Strings(byPrefix)
+	sort.Strings(byDistance)
+	out := append(byPrefix, byDistance...)
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
+// levenshtein — расстояние редактирования между двумя строками.
+//
+// Две строки в цикле команд — обычно имена до двадцати символов, поэтому
+// классическая матрица со свёрткой в одну строку достаточна и понятна.
+func levenshtein(a, b string) int {
+	ra, rb := []rune(strings.ToLower(a)), []rune(strings.ToLower(b))
+	if len(ra) == 0 {
+		return len(rb)
+	}
+	if len(rb) == 0 {
+		return len(ra)
+	}
+	prev := make([]int, len(rb)+1)
+	cur := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = core.Min(core.Min(cur[j-1]+1, prev[j]+1), prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(rb)]
+}
+
+// cmdHelp — справка из каталога команд.
+func (a *app) cmdHelp() {
 	a.ui.Println("")
-	for _, g := range groups {
-		a.ui.Println("  " + a.ui.Head(g.title))
-		for _, r := range g.rows {
+	group := ""
+	for i := range commandDefs {
+		d := &commandDefs[i]
+		if d.group == "" {
+			continue
+		}
+		if d.group != group {
+			group = d.group
+			a.ui.Println("  " + a.ui.Head(group))
+		}
+		usage := d.usage
+		if usage == "" {
+			usage = d.names[0]
+		}
+		a.ui.Println("    " + a.ui.Accent(ui.PadRight(usage, 28)) + a.ui.Gray(d.desc))
+		for _, r := range d.more {
 			a.ui.Println("    " + a.ui.Accent(ui.PadRight(r[0], 28)) + a.ui.Gray(r[1]))
 		}
-		a.ui.Println("")
 	}
+	a.ui.Println("")
 	// Кастомные команды из каталогов .gcli/commands.
 	if rows := a.customHelpRows(); len(rows) > 0 {
 		a.ui.Println("  " + a.ui.Head("Свои команды"))
@@ -203,9 +380,41 @@ func (a *app) cmdHelp() {
 		}
 		a.ui.Println("")
 	}
-	a.ui.Println("  " + a.ui.Gray("Подсказки: @файл — приложить файл · \\ в конце строки — перенос"))
-	a.ui.Println("  " + a.ui.Gray("#текст — записать факт в память проекта (GCLI.md) · Ctrl+C — прервать генерацию"))
+	a.ui.Println("  " + a.ui.Gray("/ - меню команд · @файл - приложить файл · \\ + Enter - перенос строки"))
+	a.ui.Println("  " + a.ui.Gray("esc - прервать ход · ctrl+o - показать размышления · ctrl+l - очистить экран"))
+	a.ui.Println("  " + a.ui.Gray("#текст - записать факт в память проекта (GCLI.md) · ctrl+d - выход"))
 	a.ui.Println("")
+}
+
+// modelsCacheEntry — список моделей с endpoint-а провайдера.
+type modelsCacheEntry struct {
+	prov   string    // чей список
+	models []string  // полный каталог
+	shown  []string  // последняя показанная таблица (для «/models N»)
+	at     time.Time // когда получен
+}
+
+// modelsCacheTTL — сколько живёт список моделей.
+//
+// Каталог endpoint-а меняется днями, а не секундами; десять минут —
+// компромисс между свежестью и секундой ожидания на каждый вызов.
+// /models refresh игнорирует кеш.
+const modelsCacheTTL = 10 * time.Minute
+
+// fetchModelList — каталог моделей провайдера: из кеша или с endpoint-а.
+func (a *app) fetchModelList(refresh bool) ([]string, error) {
+	if !refresh && a.modelsCache.prov == a.prov.ID &&
+		len(a.modelsCache.models) > 0 && time.Since(a.modelsCache.at) < modelsCacheTTL {
+		return a.modelsCache.models, nil
+	}
+	a.ui.SpinnerStart("Получаю список моделей с " + a.prov.ID)
+	models, err := providers.FetchModels(context.Background(), a.client, a.prov)
+	a.ui.SpinnerStop()
+	if err != nil {
+		return nil, err
+	}
+	a.modelsCache = modelsCacheEntry{prov: a.prov.ID, models: models, at: time.Now()}
+	return models, nil
 }
 
 func (a *app) cmdStatus() {
@@ -220,18 +429,18 @@ func (a *app) cmdStatus() {
 		{"Провайдер", a.prov.Label + "  (" + a.prov.ID + ")"},
 		{"Модель", a.model},
 		{"Ключ", keyStatus(a.prov)},
-		{"Режим", modeStatus(a.agentMode()) + " · инструментов: " + strconv.Itoa(a.tools.Count()) +
-			" · расширений: " + strconv.Itoa(a.tools.ExtCount()) +
-			" · MCP: " + strconv.Itoa(a.tools.MCPToolCount())},
+		{"Режим", modeStatus(a.agentMode()) + " | инструментов: " + strconv.Itoa(a.tools.Count()) +
+			" | расширений: " + strconv.Itoa(a.tools.ExtCount()) +
+			" | MCP: " + strconv.Itoa(a.tools.MCPToolCount())},
 		{"Субагенты", agentsStatus(a)},
-		{"Автопилот", autopilotStatus(a) + " · " + autopilotHint(a)},
+		{"Автопилот", autopilotStatus(a) + " | " + autopilotHint(a)},
 		{"Размышления", a.repo.Cfg.Think},
-		{"Сессия", id + " · сообщений: " + strconv.Itoa(len(msgs)) + " · ходов: " + strconv.Itoa(turnsN)},
+		{"Сессия", id + " | сообщений: " + strconv.Itoa(len(msgs)) + " | ходов: " + strconv.Itoa(turnsN)},
 		{"Контекст", "~" + core.Kfmt(core.EstimateContext(msgs)) + " ток. / порог " + core.Kfmt(a.autoCompactLimit())},
-		{"Токены", "↑" + core.Kfmt(u.PromptTokens) + " ↓" + core.Kfmt(u.CompletionTokens)},
+		{"Токены", "in " + core.Kfmt(u.PromptTokens) + " out " + core.Kfmt(u.CompletionTokens)},
 		{"Скиллы", strconv.Itoa(len(a.tools.LoadSkills()))},
 		{"Цвет", a.ui.ColorLevel().String() +
-			" · оболочка: " + tools.ShellName()},
+			" | оболочка: " + tools.ShellName()},
 		{"Каталог", a.workDir},
 	})
 	a.ui.Println("")
@@ -242,7 +451,7 @@ func keyStatus(p *providers.Provider) string {
 		return "не требуется (локальный)"
 	}
 	if p.Key == "" {
-		return "НЕ ЗАДАН — /setup"
+		return "НЕ ЗАДАН - /setup"
 	}
 	return providers.MaskKey(p.Key)
 }
@@ -258,7 +467,7 @@ func agentsStatus(a *app) string {
 	if !a.pool.Enabled() {
 		return "выключены (/agents on)"
 	}
-	return fmt.Sprintf("включены · параллельно: %d · глубина: %d · запусков: %d",
+	return fmt.Sprintf("включены | параллельно: %d | глубина: %d | запусков: %d",
 		a.repo.Cfg.SubMaxPar, a.repo.Cfg.SubMaxDepth, a.subagentRunCount())
 }
 
@@ -266,11 +475,11 @@ func agentsStatus(a *app) string {
 func autopilotStatus(a *app) string {
 	switch {
 	case a.sess.Perms.AutopilotAll:
-		return "all — одобряет всё, включая опасные команды (рискованно)"
+		return "all - одобряет всё, включая опасные команды (рискованно)"
 	case a.sess.Perms.Autopilot:
-		return "on — безопасные действия одобряются без вопроса"
+		return "on - безопасные действия одобряются без вопроса"
 	}
-	return "off — каждое действие спрашивает"
+	return "off - каждое действие спрашивает"
 }
 
 // autopilotHint — короткая подсказка по автопилоту.
@@ -290,20 +499,42 @@ func (a *app) cmdProvider(rest string) {
 		return
 	}
 	switch parts[0] {
+	case "test", "проверить", "ping":
+		a.cmdProviderTest(parts[1:])
+		return
 	case "add", "import":
 		if len(parts) < 3 {
-			a.ui.Err("формат: /provider add <id> <base_url> [openai|anthropic]")
-			a.ui.Hint("пример: /provider add myapi https://api.myservice.ru/v1")
+			a.ui.Err("формат: /provider add <id> <base_url> [openai|anthropic] [ctx=N]")
+			a.ui.Hint("пример: /provider add myapi https://api.myservice.ru/v1 openai ctx=200000")
 			return
 		}
 		id := strings.ToLower(parts[1])
 		base := parts[2]
+		// Остальные токены: протокол (openai|anthropic) и ctx=N — окно
+		// контекста своего endpoint-а. Раньше окно своего провайдера не
+		// задавалось вовсе, и порог авто-сжатия считался от дефолтных
+		// 128k — на endpoint-е с окном в миллион сжатие срабатывало в
+		// пять раз раньше нужного.
 		proto := providers.ProtoOpenAI
-		if len(parts) > 3 {
-			proto = strings.ToLower(parts[3])
+		ctxLimit := 0
+		protoSet := false
+		for _, tok := range parts[3:] {
+			if v, ok := strings.CutPrefix(strings.ToLower(tok), "ctx="); ok {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1000 {
+					a.ui.Err("ctx=N: число токенов, минимум 1000 - например ctx=200000")
+					return
+				}
+				ctxLimit = n
+				continue
+			}
+			if !protoSet {
+				proto = strings.ToLower(tok)
+				protoSet = true
+			}
 		}
 		if !providers.ValidID(id) {
-			a.ui.Err("id: латиница/цифры/_/-, 2–25 символов")
+			a.ui.Err("id: латиница/цифры/_/-, 2-25 символов")
 			return
 		}
 		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
@@ -318,10 +549,14 @@ func (a *app) cmdProvider(rest string) {
 		pc.BaseURL = strings.TrimRight(base, "/")
 		pc.Protocol = proto
 		pc.Custom = true
+		pc.ContextLimit = ctxLimit
 		a.saveConfig()
 		a.registry = a.registry.Rebuild(a.repo.Cfg)
-		a.ui.Ok(fmt.Sprintf("провайдер «%s» → %s (%s)", id, base, proto))
-		a.ui.Hint("далее: /provider key " + id + " <ключ> · /provider " + id)
+		a.ui.Ok(fmt.Sprintf("провайдер \"%s\" -> %s (%s)", id, base, proto))
+		if ctxLimit > 0 {
+			a.ui.Hint(fmt.Sprintf("окно контекста: %s ток. (поменять: /provider add %s %s ctx=N)", core.Kfmt(ctxLimit), id, base))
+		}
+		a.ui.Hint("далее: /provider key " + id + " <ключ> | /provider " + id)
 	case "key", "ключ", "keys", "ключи":
 		a.cmdProviderKey(parts)
 	case "model", "модель":
@@ -330,10 +565,16 @@ func (a *app) cmdProvider(rest string) {
 			return
 		}
 		id := strings.ToLower(parts[1])
+		// Опечатка в имени модели раньше сохранялась молча: провайдер
+		// начинал отвечать «модель не найдена» на каждом запросе. Пресет
+		// известен — сверяемся с ним; своему endpoint-у верим на слово.
+		if p := a.registry.Find(id); p != nil && !p.Custom && len(p.Models) > 0 && !containsModel(p.Models, parts[2]) {
+			a.ui.Warn("модели \"" + parts[2] + "\" нет в списке \"" + id + "\" - сохраняю, но проверь: /models покажет точный каталог")
+		}
 		a.repo.EnsureProviderCfg(id).Model = parts[2]
 		a.saveConfig()
 		a.registry = a.registry.Rebuild(a.repo.Cfg)
-		a.ui.Ok(fmt.Sprintf("модель «%s» для «%s» сохранена", parts[2], id))
+		a.ui.Ok(fmt.Sprintf("модель \"%s\" для \"%s\" сохранена", parts[2], id))
 	case "rm", "remove", "удалить":
 		if len(parts) < 2 {
 			a.ui.Err("формат: /provider rm <id>")
@@ -342,7 +583,7 @@ func (a *app) cmdProvider(rest string) {
 		id := strings.ToLower(parts[1])
 		pc, ok := a.repo.Cfg.Providers[id]
 		if !ok || !pc.Custom {
-			a.ui.Err("«" + id + "» не найден среди своих провайдеров (пресеты удалить нельзя)")
+			a.ui.Err("\"" + id + "\" не найден среди своих провайдеров (пресеты удалить нельзя)")
 			return
 		}
 		delete(a.repo.Cfg.Providers, id)
@@ -352,14 +593,99 @@ func (a *app) cmdProvider(rest string) {
 			np := a.registry.Pick("")
 			a.setProviderModel(np, providers.ResolveModel(np, "", a.repo.Cfg.Model))
 		}
-		a.ui.Ok("провайдер «" + id + "» удалён")
+		a.ui.Ok("провайдер \"" + id + "\" удалён")
 	default:
 		if p := a.registry.Find(strings.ToLower(parts[0])); p != nil {
 			a.switchProvider(p)
 		} else {
-			a.ui.Warn("нет провайдера «" + parts[0] + "» — /provider list")
+			a.ui.Warn("нет провайдера \"" + parts[0] + "\" - /provider list")
+			if sugg := closestNames(parts[0], a.providerIDs()); len(sugg) > 0 {
+				a.ui.Hint("похожие: " + strings.Join(sugg, " | "))
+			}
 		}
 	}
+}
+
+// cmdProviderTest — проверить endpoint провайдера: список моделей
+// отвечает, ключ годен, сколько занимает запрос. Полезно после add и
+// при диагностике «модель молчит»: отличает мёртвый ключ от мёртвой
+// сети одной командой.
+func (a *app) cmdProviderTest(args []string) {
+	id := a.prov.ID
+	if len(args) > 0 {
+		id = strings.ToLower(args[0])
+	}
+	p := a.registry.Find(id)
+	if p == nil {
+		a.ui.Err("провайдер \"" + id + "\" не найден - /provider list")
+		return
+	}
+	if !p.HasKey() && !p.NoKey {
+		a.ui.Warn("у \"" + id + "\" нет ключа - /provider key " + id + " <ключ>")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	a.ui.SpinnerStart("Проверяю " + p.BaseURL)
+	t0 := time.Now()
+	models, err := providers.FetchModels(ctx, a.client, p)
+	dt := time.Since(t0)
+	a.ui.SpinnerStop()
+	if err != nil {
+		a.ui.Err("endpoint не ответил: " + core.Truncate(core.OneLine(err.Error()), 120))
+		a.ui.Hint("проверь base_url и ключ; ключи и их статусы: /provider keys " + id)
+		return
+	}
+	a.ui.Ok(fmt.Sprintf("%s отвечает: %d моделей за %s", id, len(models), core.HumanDuration(dt)))
+	if len(models) == 0 {
+		a.ui.Hint("каталог пуст - endpoint может не поддерживать /models; задай модель вручную: /provider model " + id + " <имя>")
+	}
+}
+
+// providerIDs — все id провайдеров реестра.
+func (a *app) providerIDs() []string {
+	out := make([]string, 0, len(a.registry.All))
+	for _, p := range a.registry.All {
+		if p != nil {
+			out = append(out, p.ID)
+		}
+	}
+	return out
+}
+
+// containsModel — есть ли модель в списке провайдера.
+func containsModel(models []string, m string) bool {
+	for _, x := range models {
+		if strings.EqualFold(x, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// closestNames — до трёх ближайших имён по префиксу и Левенштейну.
+func closestNames(typo string, known []string) []string {
+	typo = strings.ToLower(typo)
+	if typo == "" {
+		return nil
+	}
+	var byPrefix, byDistance []string
+	for _, name := range known {
+		lname := strings.ToLower(name)
+		switch {
+		case strings.HasPrefix(lname, typo) && lname != typo:
+			byPrefix = append(byPrefix, name)
+		case levenshtein(typo, lname) <= 2:
+			byDistance = append(byDistance, name)
+		}
+	}
+	sort.Strings(byPrefix)
+	sort.Strings(byDistance)
+	out := append(byPrefix, byDistance...)
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
 }
 
 // cmdProviderKey — работа с ключами провайдера.
@@ -385,7 +711,7 @@ func (a *app) cmdProviderKey(parts []string) {
 		return
 	}
 	if len(parts) < 3 {
-		a.ui.Err("формат: /provider key add <id> <ключ> · /provider keys <id>")
+		a.ui.Err("формат: /provider key add <id> <ключ> | /provider keys <id>")
 		return
 	}
 	sub := strings.ToLower(parts[1])
@@ -408,7 +734,7 @@ func (a *app) cmdProviderKey(parts []string) {
 	case "reset", "сброс":
 		a.resetProviderKeys(id)
 	default:
-		a.ui.Err("подкоманда: add · rm · use · reset · /provider keys <id>")
+		a.ui.Err("подкоманда: add | rm | use | reset | /provider keys <id>")
 	}
 }
 
@@ -465,7 +791,7 @@ func (a *app) addProviderKeys(id string, raw []string) {
 			a.saveConfig()
 		}
 	}
-	a.ui.Ok(fmt.Sprintf("ключей у «%s» добавлено: %d (всего %d)", id, added, len(pc.Keys)))
+	a.ui.Ok(fmt.Sprintf("ключей у \"%s\" добавлено: %d (всего %d)", id, added, len(pc.Keys)))
 	a.ui.Hint("при лимите gcli переключится на следующий ключ сам")
 }
 
@@ -482,7 +808,7 @@ func (a *app) removeProviderKey(id string, args []string) {
 	}
 	pc := a.repo.EnsureProviderCfg(id)
 	if n > len(pc.Keys) {
-		a.ui.Err(fmt.Sprintf("у «%s» всего %d ключей", id, len(pc.Keys)))
+		a.ui.Err(fmt.Sprintf("у \"%s\" всего %d ключей", id, len(pc.Keys)))
 		return
 	}
 	removed := pc.Keys[n-1]
@@ -496,7 +822,7 @@ func (a *app) removeProviderKey(id string, args []string) {
 	a.saveConfig()
 	a.registry = a.registry.Rebuild(a.repo.Cfg)
 	a.syncProvider()
-	a.ui.Ok(fmt.Sprintf("ключ #%d у «%s» убран: %s", n, id, providers.MaskKey(removed)))
+	a.ui.Ok(fmt.Sprintf("ключ #%d у \"%s\" убран: %s", n, id, providers.MaskKey(removed)))
 }
 
 // useProviderKey — сделать ключ номер N основным.
@@ -512,12 +838,12 @@ func (a *app) useProviderKey(id string, args []string) {
 	}
 	p := a.registry.Find(id)
 	if p == nil || p.Pool == nil {
-		a.ui.Err(fmt.Sprintf("у «%s» нет пула ключей", id))
+		a.ui.Err(fmt.Sprintf("у \"%s\" нет пула ключей", id))
 		return
 	}
 	statuses := p.KeyStatuses()
 	if n > len(statuses) {
-		a.ui.Err(fmt.Sprintf("у «%s» всего %d ключей", id, len(statuses)))
+		a.ui.Err(fmt.Sprintf("у \"%s\" всего %d ключей", id, len(statuses)))
 		return
 	}
 	key := p.Pool.Keys()[n-1]
@@ -528,30 +854,30 @@ func (a *app) useProviderKey(id string, args []string) {
 	pc.APIKey = key
 	a.saveConfig()
 	a.syncProvider()
-	a.ui.Ok(fmt.Sprintf("ключ #%d у «%s» стал основным: %s", n, id, providers.MaskKey(key)))
+	a.ui.Ok(fmt.Sprintf("ключ #%d у \"%s\" стал основным: %s", n, id, providers.MaskKey(key)))
 }
 
 // resetProviderKeys — снять паузы с ключей провайдера.
 func (a *app) resetProviderKeys(id string) {
 	p := a.registry.Find(id)
 	if p == nil || p.Pool == nil {
-		a.ui.Err(fmt.Sprintf("у «%s» нет пула ключей", id))
+		a.ui.Err(fmt.Sprintf("у \"%s\" нет пула ключей", id))
 		return
 	}
 	p.Pool.Reset()
-	a.ui.Ok(fmt.Sprintf("паузы ключей «%s» сняты", id))
+	a.ui.Ok(fmt.Sprintf("паузы ключей \"%s\" сняты", id))
 }
 
 // showProviderKeys — показать пул ключей провайдера.
 func (a *app) showProviderKeys(id string) {
 	p := a.registry.Find(id)
 	if p == nil {
-		a.ui.Err(fmt.Sprintf("провайдер «%s» не найден — /provider list", id))
+		a.ui.Err(fmt.Sprintf("провайдер \"%s\" не найден - /provider list", id))
 		return
 	}
 	statuses := p.KeyStatuses()
 	if len(statuses) == 0 {
-		a.ui.Warn("у провайдера «" + id + "» нет ключей")
+		a.ui.Warn("у провайдера \"" + id + "\" нет ключей")
 		return
 	}
 	rows := make([][2]string, 0, len(statuses))
@@ -559,26 +885,26 @@ func (a *app) showProviderKeys(id string) {
 		mark := " "
 		switch {
 		case st.Current:
-			mark = "→"
+			mark = ">"
 		case st.Invalid:
-			mark = "×"
+			mark = "x"
 		case st.Paused:
-			mark = "⏸"
+			mark = "||"
 		}
 		state := ""
 		switch {
 		case st.Invalid:
 			state = a.ui.Red("отвергнут: " + st.Reason)
 		case st.Paused:
-			state = a.ui.Yellow("пауза до " + st.Until.Format("15:04:05") + " · " + st.Reason)
+			state = a.ui.Yellow("пауза до " + st.Until.Format("15:04:05") + " | " + st.Reason)
 		}
 		rows = append(rows, [2]string{
 			mark + " " + strconv.Itoa(st.Index) + ".",
 			a.ui.Accent(st.Masked) + "  " + state,
 		})
 	}
-	a.ui.KVPanel("Ключи · "+id, rows)
-	a.ui.Hint("добавить: /provider key add " + id + " <ключ> · основной: /provider key use " + id + " <N>")
+	a.ui.KVPanel("Ключи | "+id, rows)
+	a.ui.Hint("добавить: /provider key add " + id + " <ключ> | основной: /provider key use " + id + " <N>")
 }
 
 // syncProvider — обновить текущего провайдера после пересборки реестра.
@@ -609,7 +935,7 @@ func (a *app) onKeyRotate(from, to int, reason string) {
 	if a.quiet {
 		return
 	}
-	a.ui.Warn(fmt.Sprintf("ключ #%d %s — переключаюсь на #%d", from, reason, to))
+	a.ui.Warn(fmt.Sprintf("ключ #%d %s - переключаюсь на #%d", from, reason, to))
 }
 
 // containsKey — есть ли ключ в списке.
@@ -627,7 +953,7 @@ func (a *app) listProviders() {
 	for i, p := range a.registry.All {
 		mark := " "
 		if p.ID == a.prov.ID {
-			mark = "→"
+			mark = ">"
 		}
 		key := a.ui.Red("нет ключа")
 		switch {
@@ -660,9 +986,9 @@ func (a *app) listProviders() {
 		{Title: "base URL", Width: 42},
 		{Title: "ключ", Width: 20},
 	}, rows, ui.BlockOpts{Title: "Провайдеры"})
-	a.ui.Println("  " + a.ui.Gray("свой endpoint: /provider add <id> <url> [openai|anthropic] · ключ: /provider key <id> <ключ>"))
-	a.ui.Println("  " + a.ui.Gray("пул ключей: /provider keys <id> · добавить: /provider key add <id> <ключ> · при лимите gcli переключается сам"))
-	a.ui.Println("  " + a.ui.Gray("переключиться: /provider <id> · удалить свой: /provider rm <id>"))
+	a.ui.Println("  " + a.ui.Gray("свой endpoint: /provider add <id> <url> [openai|anthropic] | ключ: /provider key <id> <ключ>"))
+	a.ui.Println("  " + a.ui.Gray("пул ключей: /provider keys <id> | добавить: /provider key add <id> <ключ> | при лимите gcli переключается сам"))
+	a.ui.Println("  " + a.ui.Gray("переключиться: /provider <id> | удалить свой: /provider rm <id>"))
 	a.ui.Println("")
 }
 
@@ -692,7 +1018,7 @@ func (a *app) switchProvider(p *providers.Provider) {
 	a.saveConfig()
 	a.saveSession()
 	a.syncMetrics()
-	a.ui.Ok(fmt.Sprintf("провайдер: %s · модель: %s", p.Label, next))
+	a.ui.Ok(fmt.Sprintf("провайдер: %s | модель: %s", p.Label, next))
 }
 
 // syncMetrics — обновить нижнюю панель и шапку TUI после смены модели.
@@ -713,7 +1039,7 @@ func (a *app) cmdModel(rest string) {
 		for _, p := range a.registry.All {
 			mark := " "
 			if p.ID == a.prov.ID {
-				mark = "→"
+				mark = ">"
 			}
 			rows = append(rows, []string{mark + " " + p.ID, p.Label, strings.Join(p.Models, ", ")})
 		}
@@ -723,7 +1049,7 @@ func (a *app) cmdModel(rest string) {
 			{Title: "модели", Width: 50},
 		}, rows, ui.BlockOpts{Title: "Провайдеры и модели"})
 		a.ui.Println("  " + a.ui.Gray("текущая: ") + a.ui.Bold(a.model))
-		a.ui.Println("  " + a.ui.Gray("сменить: /model glm-4.6 · или /provider openai, затем /model gpt-4o"))
+		a.ui.Println("  " + a.ui.Gray("сменить: /model glm-4.6 | или /provider openai, затем /model gpt-4o"))
 		a.ui.Println("")
 		return
 	}
@@ -753,19 +1079,46 @@ func (a *app) setModel(m string) {
 	a.ui.Ok("модель: " + m)
 }
 
-func (a *app) cmdModels(filter string) {
-	if !a.prov.HasKey() {
-		a.ui.Warn("нет ключа для «" + a.prov.ID + "» — /provider key " + a.prov.ID + " <ключ>")
+// cmdModels — каталог моделей endpoint-а.
+//
+//	/models           — таблица с окнами контекста
+//	/models фильтр    — подстрочный поиск по каталогу
+//	/models 3         — установить модель №3 из последней таблицы
+//	/models refresh   — перечитать каталог, сбросив кеш на 10 минут
+func (a *app) cmdModels(rest string) {
+	rest = strings.TrimSpace(rest)
+	refresh := false
+	switch strings.ToLower(rest) {
+	case "refresh", "обновить":
+		refresh = true
+		rest = ""
+	case "clear", "сброс":
+		a.modelsCache = modelsCacheEntry{}
+		a.ui.Ok("кеш списка моделей сброшен")
 		return
 	}
-	a.ui.SpinnerStart("Получаю список моделей с " + a.prov.ID)
-	models, err := providers.FetchModels(context.Background(), a.client, a.prov)
-	a.ui.SpinnerStop()
+	// «/models 3» — установить по номеру из последней показанной таблицы:
+	// длинные openrouter-слаги набирать целиком неудобно, а таблица уже
+	// перед глазами.
+	if n, err := strconv.Atoi(rest); err == nil && n != 0 {
+		if n > 0 {
+			a.pickModelByNumber(n)
+		} else {
+			a.ui.Err("номер модели: целое число от 1 - /models покажет таблицу")
+		}
+		return
+	}
+	if !a.prov.HasKey() {
+		a.ui.Warn("нет ключа для \"" + a.prov.ID + "\" - /provider key " + a.prov.ID + " <ключ>")
+		return
+	}
+	models, err := a.fetchModelList(refresh)
 	if err != nil {
 		a.ui.Err("список моделей недоступен: " + core.Truncate(core.OneLine(err.Error()), 110))
 		a.ui.Hint("задай модель вручную: /model <имя>")
 		return
 	}
+	filter := rest
 	if filter != "" {
 		var f []string
 		for _, m := range models {
@@ -776,7 +1129,7 @@ func (a *app) cmdModels(filter string) {
 		models = f
 	}
 	if len(models) == 0 {
-		a.ui.Warn("по фильтру «" + filter + "» ничего не найдено")
+		a.ui.Warn("по фильтру \"" + filter + "\" ничего не найдено")
 		return
 	}
 	shown := core.Min(len(models), 40)
@@ -784,18 +1137,50 @@ func (a *app) cmdModels(filter string) {
 	for i := 0; i < shown; i++ {
 		mark := " "
 		if models[i] == a.model {
-			mark = "→"
+			mark = ">"
 		}
-		rows = append(rows, []string{mark + " " + strconv.Itoa(i+1), models[i]})
+		ctx := "-"
+		if n, ok := providers.ModelCtxLimit(models[i]); ok && n > 0 {
+			ctx = core.Kfmt(n)
+		}
+		rows = append(rows, []string{mark + " " + strconv.Itoa(i+1), models[i], ctx})
 	}
+	a.modelsCache.shown = models[:shown]
 	a.ui.Table([]ui.Column{
 		{Title: "", Width: 5},
 		{Title: "модель", Width: 50},
+		{Title: "окно", Width: 9},
 	}, rows, ui.BlockOpts{
 		Title:  "Модели " + a.prov.ID,
-		Footer: fmt.Sprintf("всего: %d — установить: /model <имя>", len(models)),
+		Footer: fmt.Sprintf("всего: %d - установить: /models N | /model <имя>", len(models)),
 	})
 	a.ui.Println("")
+}
+
+// pickModelByNumber — установить модель по номеру из последней таблицы.
+//
+// Таблица могла устареть (перезапуск, смена провайдера): тогда список
+// перечитывается, и номер применяется к свежему каталогу — пользователь
+// не должен повторять весь путь «/models, посмотрел, /model <имя>».
+func (a *app) pickModelByNumber(n int) {
+	list := a.modelsCache.shown
+	if a.modelsCache.prov != a.prov.ID || len(list) == 0 {
+		if !a.prov.HasKey() {
+			a.ui.Warn("нет ключа для \"" + a.prov.ID + "\" - /provider key " + a.prov.ID + " <ключ>")
+			return
+		}
+		models, err := a.fetchModelList(false)
+		if err != nil {
+			a.ui.Err("список моделей недоступен: " + core.Truncate(core.OneLine(err.Error()), 110))
+			return
+		}
+		list = models
+	}
+	if n > len(list) {
+		a.ui.Err(fmt.Sprintf("в списке всего %d моделей - номер %d вне таблицы", len(list), n))
+		return
+	}
+	a.setModel(list[n-1])
 }
 
 func (a *app) cmdThink(arg string) {
@@ -817,7 +1202,7 @@ func (a *app) cmdThink(arg string) {
 	a.saveConfig()
 	switch providers.ThinkState(a.repo.Cfg) {
 	case "on":
-		a.ui.Ok("размышления включены — модель получает запрос на thinking")
+		a.ui.Ok("размышления включены - модель получает запрос на thinking")
 	case "off":
 		a.ui.Ok("размышления скрыты")
 	default:
@@ -840,7 +1225,7 @@ func (a *app) cmdSessions() {
 		}
 		cur := ""
 		if s.ID == a.sess.ID {
-			cur = " ← текущая"
+			cur = " <- текущая"
 		}
 		rows = append(rows, []string{
 			strconv.Itoa(i + 1),
@@ -863,7 +1248,7 @@ func (a *app) cmdSessions() {
 
 func (a *app) cmdResume(arg string) {
 	if a.turnActive() {
-		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /resume подменяет сессию под ногами хода")
+		a.ui.Warn("ход ещё идёт - прерви (Esc) или подожди: /resume подменяет сессию под ногами хода")
 		return
 	}
 	ss := a.repo.ListSessionInfos()
@@ -876,7 +1261,7 @@ func (a *app) cmdResume(arg string) {
 		idx = n - 1
 	} else {
 		a.cmdSessions()
-		s, ok := a.askLine("Номер сессии (Enter — отмена)")
+		s, ok := a.askLine("Номер сессии (Enter - отмена)")
 		if !ok {
 			return
 		}
@@ -918,12 +1303,12 @@ func (a *app) cmdResume(arg string) {
 	a.syncMetrics()
 	// Прежний диалог больше не относится к загруженной сессии.
 	a.ui.ClearScreen()
-	a.ui.Ok(fmt.Sprintf("сессия %s · сообщений: %d", a.sess.ID, len(a.sess.Messages)))
+	a.ui.Ok(fmt.Sprintf("сессия %s | сообщений: %d", a.sess.ID, len(a.sess.Messages)))
 }
 
 func (a *app) cmdClear() {
 	if a.turnActive() {
-		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /clear подменяет сессию под ногами хода")
+		a.ui.Warn("ход ещё идёт - прерви (Esc) или подожди: /clear подменяет сессию под ногами хода")
 		return
 	}
 	// Экран чистим до сообщения о новой сессии: иначе в ленте остался бы
@@ -933,6 +1318,11 @@ func (a *app) cmdClear() {
 	a.sessSwap.Lock()
 	defer a.sessSwap.Unlock()
 	a.ui.ClearScreen()
+	// В полноэкранном режиме приветствие живёт в транскрипте: после
+	// чистки стенки оно должно вернуться.
+	if a.ui.ScreenActive() && !a.quiet {
+		a.banner()
+	}
 	a.saveSession()
 	a.sess = a.repo.NewSession(a.prov.ID, a.model, a.workDir)
 	a.saveSession()
@@ -952,16 +1342,16 @@ func (a *app) cmdUsage() {
 	a.ui.Println("")
 	a.ui.Println("  " + a.ui.Head("Токены (по данным API)"))
 	a.ui.KVPanel("Расход", [][2]string{
-		{"вход", a.ui.Accent("↑ " + core.Kfmt(u.PromptTokens))},
-		{"выход", a.ui.Accent("↓ " + core.Kfmt(u.CompletionTokens))},
+		{"вход", a.ui.Accent(core.Kfmt(u.PromptTokens))},
+		{"выход", a.ui.Accent(core.Kfmt(u.CompletionTokens))},
 		{"всего", a.ui.Bold(core.Kfmt(u.Total()))},
 		{"контекст", bar + "  " + core.Kfmt(est) + " / " + core.Kfmt(limit)},
-		{"модель", a.model + " · лимит " + core.Kfmt(a.prov.CtxLimit())},
-		{"сообщений", fmt.Sprintf("%d · чекпоинтов: %d", len(msgs), ckptN)},
+		{"модель", a.model + " | лимит " + core.Kfmt(a.prov.CtxLimit())},
+		{"сообщений", fmt.Sprintf("%d | чекпоинтов: %d", len(msgs), ckptN)},
 	})
 	a.printEconomy()
 	if est >= limit {
-		a.ui.Warn("контекст заполнен — история сожмётся после следующего хода (/compact — сейчас)")
+		a.ui.Warn("контекст заполнен - история сожмётся после следующего хода (/compact - сейчас)")
 	}
 	a.ui.Println("")
 }
@@ -1010,7 +1400,7 @@ func (a *app) printEconomy() {
 	}
 	if name, tok := e.TopTool(); name != "" {
 		rows = append(rows, [2]string{
-			"дороже всего в контексте", name + " · " + core.Kfmt(tok) + " ток.",
+			"дороже всего в контексте", name + " | " + core.Kfmt(tok) + " ток.",
 		})
 	}
 	a.ui.KVPanel("Экономия", rows)
@@ -1024,7 +1414,7 @@ func (a *app) printEconomy() {
 func (a *app) showPermissionRules() {
 	if a.rules.Len() == 0 {
 		a.ui.Println("")
-		a.ui.Println("  " + a.ui.Gray("правил в конфигах нет — всё спрашивается"))
+		a.ui.Println("  " + a.ui.Gray("правил в конфигах нет - всё спрашивается"))
 		a.ui.Println("  " + a.ui.Gray("завести правила: /permissions init"))
 		return
 	}
@@ -1042,7 +1432,7 @@ func (a *app) showPermissionRules() {
 		if r.Source != "" {
 			src = a.ui.Gray("  (" + r.Source + ")")
 		}
-		a.ui.Println("    " + r.String() + "  → " + mode + src)
+		a.ui.Println("    " + r.String() + "  -> " + mode + src)
 	}
 }
 
@@ -1060,12 +1450,12 @@ func (a *app) permsSub(arg, rest string) {
 	case "where", "где":
 		a.ui.Println("")
 		for _, p := range core.PermissionSources(a.workDir) {
-			a.ui.Println("  " + a.ui.Gray("· "+core.RelToWD(a.workDir, p)))
+			a.ui.Println("  " + a.ui.Gray("| "+core.RelToWD(a.workDir, p)))
 		}
 	case "test", "проверить":
 		a.permsTest(rest)
 	default:
-		a.ui.Warn("не понял: " + arg + " — /permissions init | rules | where | test | reset")
+		a.ui.Warn("не понял: " + arg + " - /permissions init | rules | where | test | reset")
 	}
 }
 
@@ -1137,12 +1527,12 @@ func (a *app) showPermDecision(name, subject string, d core.Permission, hit core
 	a.ui.Println("  " + a.ui.Bold(name) + " " + a.ui.Gray(subject))
 	switch {
 	case !ok:
-		a.ui.Println("  " + a.ui.Gray("решение: спросить пользователя — правил нет"))
+		a.ui.Println("  " + a.ui.Gray("решение: спросить пользователя - правил нет"))
 		a.ui.Hint("завести правило: /permissions init")
 	case hit.Tool == "":
 		// Решение из блока mode: правила, которое совпало, не существует,
 		// и показывать нечего — показываем сам дефолт.
-		a.ui.Println("  " + a.ui.Gray("решение: "+string(d)+" — из блока \"mode\" конфига"))
+		a.ui.Println("  " + a.ui.Gray("решение: "+string(d)+" - из блока \"mode\" конфига"))
 	default:
 		verb := map[core.Permission]string{
 			core.PermAllow: "разрешить",
@@ -1231,7 +1621,7 @@ func (a *app) permsInit() {
 	}
 	a.rules = a.setupRules()
 	a.ui.Ok("создал gcli.json с заготовкой правил: " + core.RelToWD(a.workDir, path))
-	a.ui.Hint("правила применятся в следующем запуске — сейчас перезапусти gcli")
+	a.ui.Hint("правила применятся в следующем запуске - сейчас перезапусти gcli")
 }
 
 // cmdPerms — /permissions [init|rules|where|test|reset] [аргументы].
@@ -1265,20 +1655,20 @@ func (a *app) cmdPerms(rest string) {
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Gray("разрешённые команды:"))
 		for _, c := range exact {
-			a.ui.Println("    " + a.ui.Gray("· "+c))
+			a.ui.Println("    " + a.ui.Gray("| "+c))
 		}
 	}
 	if sb := a.sandbox; sb.Enabled() {
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Gray("песочница разрешает:"))
 		for _, p := range sb.Roots() {
-			a.ui.Println("    " + a.ui.Gray("· "+p))
+			a.ui.Println("    " + a.ui.Gray("| "+p))
 		}
 		if d := sb.Deny(); len(d) > 0 {
 			a.ui.Println("")
 			a.ui.Println("  " + a.ui.Gray("песочница запрещает (даже внутри корня):"))
 			for _, p := range d {
-				a.ui.Println("    " + a.ui.Gray("· "+p))
+				a.ui.Println("    " + a.ui.Gray("| "+p))
 			}
 		}
 	}
@@ -1294,14 +1684,14 @@ func (a *app) cmdPerms(rest string) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			a.ui.Println("    " + a.ui.Gray("· "+k+"  отпечаток "+core.Truncate(trusted[k], 12)))
+			a.ui.Println("    " + a.ui.Gray("| "+k+"  отпечаток "+core.Truncate(trusted[k], 12)))
 		}
 	}
 	if pending := a.tools.ScanProjectCode(); len(pending) > 0 {
 		a.ui.Println("")
 		a.ui.Println("  " + a.ui.Gray("ждёт подтверждения:"))
 		for _, w := range pending {
-			a.ui.Println("    " + a.ui.Gray("· "+w.Label()+" — "+w.Path))
+			a.ui.Println("    " + a.ui.Gray("| "+w.Label()+" - "+w.Path))
 		}
 	}
 	if strings.TrimSpace(rest) == "reset" {
@@ -1332,12 +1722,12 @@ func (a *app) cmdPerms(rest string) {
 				n, extBefore, mcpBefore))
 		}
 		if pending := a.tools.ScanProjectCode(); len(pending) > 0 {
-			a.ui.Hint("код из проекта снова ждёт подтверждения: /ext trust <имя> · /mcp trust <имя>")
+			a.ui.Hint("код из проекта снова ждёт подтверждения: /ext trust <имя> | /mcp trust <имя>")
 		}
 	} else {
 		a.ui.Println("")
-		a.ui.Println("  " + a.ui.Gray("автопилот: /autopilot on|off|all · сброс: /permissions reset · песочница: /sandbox on|off"))
-		a.ui.Println("  " + a.ui.Gray("код проекта: /ext trust <имя> · /mcp trust <имя>"))
+		a.ui.Println("  " + a.ui.Gray("автопилот: /autopilot on|off|all | сброс: /permissions reset | песочница: /sandbox on|off"))
+		a.ui.Println("  " + a.ui.Gray("код проекта: /ext trust <имя> | /mcp trust <имя>"))
 	}
 	a.ui.Println("")
 }
@@ -1353,12 +1743,12 @@ func sandboxStatus(sb *tools.Sandbox) string {
 // showSandbox — напечатать состояние песочницы (/sandbox без аргументов).
 func (a *app) showSandbox() {
 	if !a.sandbox.Enabled() {
-		a.ui.Println("песочница выключена — инструменты видят всю файловую систему")
+		a.ui.Println("песочница выключена - инструменты видят всю файловую систему")
 		return
 	}
 	a.ui.Ok("песочница включена: пути ограничены рабочим каталогом, секреты закрыты")
 	for _, p := range a.sandbox.Roots() {
-		a.ui.Println("    " + a.ui.Gray("· "+p))
+		a.ui.Println("    " + a.ui.Gray("| "+p))
 	}
 }
 
@@ -1375,7 +1765,7 @@ func (a *app) cmdSandbox(rest string) {
 	}
 	mode, ok := core.ParseSandboxMode(arg)
 	if !ok {
-		a.ui.Warn("не понял: " + rest + " — /sandbox on | off | status")
+		a.ui.Warn("не понял: " + rest + " - /sandbox on | off | status")
 		return
 	}
 	if mode == core.SandboxUnset {
@@ -1399,7 +1789,7 @@ func (a *app) cmdSandbox(rest string) {
 	a.saveConfig()
 	a.buildTools()
 	if a.sandbox.Enabled() {
-		a.ui.Ok("песочница включена — пути вне рабочего каталога запрещены")
+		a.ui.Ok("песочница включена - пути вне рабочего каталога запрещены")
 	} else {
 		a.ui.Ok("песочница выключена")
 	}
@@ -1419,7 +1809,7 @@ func (a *app) showCron() {
 	}
 	a.ui.Ok("автономные итерации: " + state)
 	if enabled {
-		a.ui.Println("  интервал: " + interval.String() + " (15–20 мин, случайный сдвиг)")
+		a.ui.Println("  интервал: " + interval.String() + " (15-20 мин, случайный сдвиг)")
 		d := time.Since(lastActive)
 		if d < 0 {
 			d = 0
@@ -1462,10 +1852,7 @@ func (a *app) cmdCron(rest string) {
 		a.repo.Cfg.Cron = true
 		cfgMu.Unlock()
 		a.saveConfig()
-		if t := a.tuiApp(); t != nil {
-			t.SetCronEnabled(true)
-		}
-		a.ui.Ok("автономные итерации включены — через 15–20 мин тишины агент сам найдёт и починит баги, проблемы, уязвимости")
+		a.ui.Ok("автономные итерации включены - через 15-20 мин тишины агент сам найдёт и починит баги, проблемы, уязвимости")
 	case "off", "выкл", "0", "false":
 		a.cronMu.Lock()
 		if !a.cronEnabled {
@@ -1483,12 +1870,9 @@ func (a *app) cmdCron(rest string) {
 		a.repo.Cfg.Cron = false
 		cfgMu.Unlock()
 		a.saveConfig()
-		if t := a.tuiApp(); t != nil {
-			t.SetCronEnabled(false)
-		}
 		a.ui.Ok("автономные итерации выключены")
 	default:
-		a.ui.Warn("не понял: " + rest + " — /cron on | off | status")
+		a.ui.Warn("не понял: " + rest + " - /cron on | off | status")
 	}
 }
 
@@ -1533,9 +1917,9 @@ func (a *app) cmdAgent(arg string) {
 	a.saveConfig()
 	a.saveSession()
 	if a.agentMode() {
-		a.ui.Ok(fmt.Sprintf("агентный режим включён · инструментов: %d", a.tools.Count()))
+		a.ui.Ok(fmt.Sprintf("агентный режим включён | инструментов: %d", a.tools.Count()))
 	} else {
-		a.ui.Ok("агентный режим выключен — обычный чат без инструментов")
+		a.ui.Ok("агентный режим выключен - обычный чат без инструментов")
 	}
 }
 
@@ -1562,7 +1946,7 @@ func (a *app) cmdAutopilot(rest string) {
 		// Без аргумента — переключение on/off (all всегда требует явного ввода).
 		if a.sess.Perms.Autopilot {
 			a.setAutopilot(false)
-			a.ui.Ok("автопилот выключен — опасные действия снова спрашивают")
+			a.ui.Ok("автопилот выключен - опасные действия снова спрашивают")
 		} else {
 			a.setAutopilot(true)
 			a.ui.Ok("автопилот включён: безопасные действия одобряются без вопроса")
@@ -1580,7 +1964,7 @@ func (a *app) cmdAutopilot(rest string) {
 		return
 	case "off", "выкл", "0", "false":
 		a.setAutopilot(false)
-		a.ui.Ok("автопилот выключен — опасные действия снова спрашивают")
+		a.ui.Ok("автопилот выключен - опасные действия снова спрашивают")
 		return
 	case "status", "статус", "?":
 		// Ниже — вывод состояния.
@@ -1592,17 +1976,17 @@ func (a *app) cmdAutopilot(rest string) {
 	a.ui.Println("")
 	switch {
 	case a.sess.Perms.AutopilotAll:
-		a.ui.Println("  " + a.ui.Red("● автопилот: all") +
-			a.ui.Gray("  — одобряется всё, включая опасные команды. Рискованно."))
-		a.ui.Println("  " + a.ui.Gray("безопасные действия, сеть, запись файлов, опасные команды — без вопроса"))
+		a.ui.Println("  " + a.ui.Red("* автопилот: all") +
+			a.ui.Gray("  - одобряется всё, включая опасные команды. Рискованно."))
+		a.ui.Println("  " + a.ui.Gray("безопасные действия, сеть, запись файлов, опасные команды - без вопроса"))
 	case a.sess.Perms.Autopilot:
-		a.ui.Println("  " + a.ui.Accent("● автопилот: on") +
-			a.ui.Gray("  — безопасные действия одобряются самим агентом"))
+		a.ui.Println("  " + a.ui.Accent("* автопилот: on") +
+			a.ui.Gray("  - безопасные действия одобряются самим агентом"))
 		a.ui.Println("  " + a.ui.Gray("потенциально опасные команды по-прежнему требуют подтверждения"))
 	default:
-		a.ui.Println("  " + a.ui.Gray("● автопилот: off — каждое действие спрашивает подтверждение"))
+		a.ui.Println("  " + a.ui.Gray("* автопилот: off - каждое действие спрашивает подтверждение"))
 	}
-	a.ui.Println("  " + a.ui.Gray("переключить: /autopilot on · /autopilot all · /autopilot off"))
+	a.ui.Println("  " + a.ui.Gray("переключить: /autopilot on | /autopilot all | /autopilot off"))
 	a.ui.Println("")
 }
 
@@ -1616,7 +2000,7 @@ func (a *app) cmdCopy() {
 		}
 	}
 	if last == "" {
-		a.ui.Info("нечего копировать — ответов ещё нет")
+		a.ui.Info("нечего копировать - ответов ещё нет")
 		return
 	}
 	enc := base64.StdEncoding.EncodeToString([]byte(last))
@@ -1657,7 +2041,7 @@ func (a *app) cmdInit(arg string) {
 	// память проекта, не мог получить правила вообще — пришлось бы
 	// звать /init force и рисковать перезаписью своего файла.
 	if mdErr == nil && cfgErr == nil && !force {
-		a.ui.Warn("GCLI.md и gcli.json уже есть — перезаписать оба: /init force")
+		a.ui.Warn("GCLI.md и gcli.json уже есть - перезаписать оба: /init force")
 		a.ui.Hint("посмотреть, что найдено о проекте, ничего не записывая: /init show")
 		return
 	}
@@ -1667,14 +2051,14 @@ func (a *app) cmdInit(arg string) {
 			a.ui.Err("не удалось создать GCLI.md: " + err.Error())
 			return
 		}
-		a.ui.Ok("создан GCLI.md — память проекта для агента")
+		a.ui.Ok("создан GCLI.md - память проекта для агента")
 	}
 	if cfgErr != nil || force {
 		rules := core.ProjectConfigDoc(tools.PermissionRules(prof))
 		if err := os.WriteFile(cfg, []byte(rules), 0o600); err != nil {
 			a.ui.Warn("GCLI.md создан, но gcli.json не записался: " + err.Error())
 		} else {
-			a.ui.Ok("создан gcli.json — правила разрешений под этот проект")
+			a.ui.Ok("создан gcli.json - правила разрешений под этот проект")
 			a.rules = a.setupRules()
 		}
 	}
@@ -1693,7 +2077,7 @@ func (a *app) initShow() {
 	allowed := 0
 	for _, r := range rules {
 		if strings.Contains(r, ": allow") {
-			a.ui.Println("    " + a.ui.Green("· "+r))
+			a.ui.Println("    " + a.ui.Green("| "+r))
 			allowed++
 		}
 	}
@@ -1701,7 +2085,7 @@ func (a *app) initShow() {
 	// не пуст» ещё не значит, что проект понят. Без этой оговорки
 	// человек увидит четыре правила и решит, что /init разобрался.
 	if prof.Stack() == "" {
-		a.ui.Println("    " + a.ui.Yellow("стек не найден — выше только базовые правила"))
+		a.ui.Println("    " + a.ui.Yellow("стек не найден - выше только базовые правила"))
 	}
 	if allowed == 0 {
 		a.ui.Println("    " + a.ui.Gray("разрешать нечего"))
@@ -1711,7 +2095,7 @@ func (a *app) initShow() {
 	a.ui.Println("  " + a.ui.Head("Останется вопросом"))
 	for _, r := range rules {
 		if strings.Contains(r, ": ask") {
-			a.ui.Println("    " + a.ui.Yellow("· "+r))
+			a.ui.Println("    " + a.ui.Yellow("| "+r))
 		}
 	}
 
@@ -1719,7 +2103,7 @@ func (a *app) initShow() {
 	a.ui.Println("  " + a.ui.Head("Будет запрещено"))
 	for _, r := range rules {
 		if strings.Contains(r, ": deny") {
-			a.ui.Println("    " + a.ui.Red("· "+r))
+			a.ui.Println("    " + a.ui.Red("| "+r))
 		}
 	}
 }
@@ -1742,13 +2126,13 @@ func (a *app) initReport(p tools.InitProfile) {
 	if len(p.Test) > 0 {
 		a.ui.Hint("правило allow на проверку: /permissions test bash \"" + p.Test[0] + "\"")
 	}
-	a.ui.Hint("заполни строки вида <…> в GCLI.md — остальное агент уже знает")
+	a.ui.Hint("заполни строки вида <...> в GCLI.md - остальное агент уже знает")
 }
 
 // orDash — значение или прочерк, чтобы в таблице не было пустот.
 func orDash(s string) string {
 	if strings.TrimSpace(s) == "" {
-		return "—"
+		return "-"
 	}
 	return s
 }
@@ -1757,7 +2141,7 @@ func (a *app) cmdMemory() {
 	files := a.memory.Files()
 	a.ui.Println("")
 	if len(files) == 0 {
-		a.ui.Info("файлов памяти нет — создай: /init")
+		a.ui.Info("файлов памяти нет - создай: /init")
 		a.ui.Println("")
 		return
 	}
@@ -1788,7 +2172,7 @@ func (a *app) cmdUndo() {
 		if err != nil {
 			a.ui.Err("откат не удался: " + err.Error())
 		} else {
-			a.ui.Info("нечего отменять — чекпоинтов в сессии нет")
+			a.ui.Info("нечего отменять - чекпоинтов в сессии нет")
 		}
 		return
 	}
@@ -1802,7 +2186,7 @@ func (a *app) cmdUndo() {
 // cmdSnapshots — список теневых снимков проекта (старые сверху, как ходы).
 func (a *app) cmdSnapshots() {
 	if !core.SnapshotsAvailable() {
-		a.ui.Warn("git не найден в PATH — снимки недоступны")
+		a.ui.Warn("git не найден в PATH - снимки недоступны")
 		return
 	}
 	if err := a.lastSnapErr(); err != nil {
@@ -1814,7 +2198,7 @@ func (a *app) cmdSnapshots() {
 		return
 	}
 	if len(snaps) == 0 {
-		a.ui.Info("снимков пока нет — они появляются после первого хода")
+		a.ui.Info("снимков пока нет - они появляются после первого хода")
 		return
 	}
 	rows := make([][]string, 0, len(snaps))
@@ -1828,7 +2212,7 @@ func (a *app) cmdSnapshots() {
 		{Title: "#", Width: 4, Right: true}, {Title: "время", Width: 11},
 		{Title: "ход", Width: 54}, {Title: "снимок", Width: 8},
 	}, rows, ui.BlockOpts{Title: "Снимки проекта"})
-	a.ui.Println("  " + a.ui.Gray("откатить: /revert <номер> — проект вернётся к состоянию хода"))
+	a.ui.Println("  " + a.ui.Gray("откатить: /revert <номер> - проект вернётся к состоянию хода"))
 }
 
 // cmdRevert — откатить проект к снимку N из /snapshots.
@@ -1846,7 +2230,7 @@ func (a *app) cmdRevert(rest string) {
 		return
 	}
 	if n > len(snaps) {
-		a.ui.Warn(fmt.Sprintf("снимка №%d нет — всего их %d (/snapshots)", n, len(snaps)))
+		a.ui.Warn(fmt.Sprintf("снимка N%d нет - всего их %d (/snapshots)", n, len(snaps)))
 		return
 	}
 	target := snaps[n-1]
@@ -1855,9 +2239,9 @@ func (a *app) cmdRevert(rest string) {
 		a.ui.Err("откат не удался: " + err.Error())
 		return
 	}
-	a.ui.Ok(fmt.Sprintf("проект откачен к снимку №%d «%s» (%s)",
+	a.ui.Ok(fmt.Sprintf("проект откачен к снимку N%d \"%s\" (%s)",
 		n, core.OneLine(snap.Subject), snap.Time.Format("02.01 15:04")))
-	a.ui.Info("состояние на момент отката сохранено: /snapshots → ветка keep/pre-revert")
+	a.ui.Info("состояние на момент отката сохранено: /snapshots -> ветка keep/pre-revert")
 }
 
 func (a *app) saveConfig() { _ = a.repo.SaveConfig() }

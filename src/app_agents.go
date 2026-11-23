@@ -11,7 +11,6 @@ import (
 	"gcli/core"
 	"gcli/subagents"
 	"gcli/tools"
-	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -135,7 +134,7 @@ func (a *app) setSubagents(on bool) {
 	a.pool.SetEnabled(on)
 	if on {
 		a.tools.RegisterSubagentTools()
-		a.ui.Ok("субагенты включены — модель может делегировать подзадачи")
+		a.ui.Ok("субагенты включены - модель может делегировать подзадачи")
 	} else {
 		a.ui.Ok("субагенты выключены")
 	}
@@ -161,7 +160,7 @@ func (a *app) setSubRoute(parts []string) {
 		if a.repo.Cfg.SubBudget > 0 {
 			a.ui.Hint(fmt.Sprintf("бюджет сессии: %s токенов (изменить: /agents budget 500000)", core.Kfmt(a.repo.Cfg.SubBudget)))
 		} else {
-			a.ui.Hint("бюджет не задан — понижение будет только по роли; бюджет: /agents budget 500000")
+			a.ui.Hint("бюджет не задан - понижение будет только по роли; бюджет: /agents budget 500000")
 		}
 		return
 	}
@@ -171,7 +170,7 @@ func (a *app) setSubRoute(parts []string) {
 		a.repo.Cfg.SubRoute = true
 		cfgMu.Unlock()
 		a.saveConfig()
-		a.ui.Ok("маршрутизация включена — простые роли поедут на дешёвую модель")
+		a.ui.Ok("маршрутизация включена - простые роли поедут на дешёвую модель")
 		if a.repo.Cfg.SubBudget <= 0 {
 			a.ui.Hint("бюджет сессии не задан, поэтому понижение по нему не сработает: /agents budget 500000")
 		}
@@ -180,7 +179,7 @@ func (a *app) setSubRoute(parts []string) {
 		a.repo.Cfg.SubRoute = false
 		cfgMu.Unlock()
 		a.saveConfig()
-		a.ui.Ok("маршрутизация выключена — субагенты едут на модели " +
+		a.ui.Ok("маршрутизация выключена - субагенты едут на модели " +
 			core.FirstNonEmpty(a.repo.Cfg.SubModel, a.model))
 	default:
 		a.ui.Err("значение: on | off")
@@ -201,9 +200,9 @@ func (a *app) setSubBudget(parts []string) {
 			v := subagents.JudgeBudget(subagents.Budget{Spent: spent, Limit: a.repo.Cfg.SubBudget})
 			extra := ""
 			if v.Critical {
-				extra = " · на пределе: понижаются все роли"
+				extra = " | на пределе: понижаются все роли"
 			} else if v.Tight {
-				extra = " · жмёт: понижаются все роли"
+				extra = " | жмёт: понижаются все роли"
 			}
 			a.ui.Info(fmt.Sprintf("бюджет сессии: %s токенов, израсходовано %s (%d%%)%s",
 				core.Kfmt(a.repo.Cfg.SubBudget), core.Kfmt(spent), v.UsedPct, extra))
@@ -217,7 +216,7 @@ func (a *app) setSubBudget(parts []string) {
 		a.repo.Cfg.SubBudget = 0
 		cfgMu.Unlock()
 		a.saveConfig()
-		a.ui.Ok("бюджет сессии снят — маршрутизация понижает только по роли")
+		a.ui.Ok("бюджет сессии снят - маршрутизация понижает только по роли")
 		return
 	}
 	n, err := strconv.Atoi(raw)
@@ -231,7 +230,7 @@ func (a *app) setSubBudget(parts []string) {
 	a.repo.Cfg.SubBudget = n
 	cfgMu.Unlock()
 	a.saveConfig()
-	a.ui.Ok(fmt.Sprintf("бюджет сессии: %s токенов — на 70%% и 90%% маршрутизация понизит модель", core.Kfmt(n)))
+	a.ui.Ok(fmt.Sprintf("бюджет сессии: %s токенов - на 70%% и 90%% маршрутизация понизит модель", core.Kfmt(n)))
 	if !a.repo.Cfg.SubRoute {
 		a.ui.Hint("маршрутизация выключена: /agents route on")
 	}
@@ -267,7 +266,7 @@ func (a *app) listAgentTypes() {
 			if ca.ReadOnly {
 				mode = "только чтение"
 			}
-			model := core.FirstNonEmpty(ca.Model, "—")
+			model := core.FirstNonEmpty(ca.Model, "-")
 			rows = append(rows, []string{ca.Name, ca.Scope, mode, model,
 				core.Truncate(core.OneLine(ca.Desc), 40)})
 		}
@@ -279,7 +278,7 @@ func (a *app) listAgentTypes() {
 			{Title: "описание", Width: 36},
 		}, rows, ui.BlockOpts{Title: "Свои агенты (.gcli/agents/*.md)"})
 	}
-	a.ui.Hint("создать своего: /agents new <имя> — запускается по имени через spawn_agent")
+	a.ui.Hint("создать своего: /agents new <имя> - запускается по имени через spawn_agent")
 	a.ui.Println("")
 }
 
@@ -311,11 +310,11 @@ func (a *app) listAgents() {
 	rows := a.pool.Table()
 	a.ui.Println("")
 	a.ui.Println("  " + a.ui.Head("Субагенты") + " " + a.ui.Gray(fmt.Sprintf(
-		"· состояние: %s · параллельно: %d · глубина: %d",
+		"| состояние: %s | параллельно: %d | глубина: %d",
 		enabledWord(a.pool.Enabled()), a.repo.Cfg.SubMaxPar, a.repo.Cfg.SubMaxDepth)))
 	a.ui.Println("")
 	if len(rows) == 0 {
-		a.ui.Println("  " + a.ui.Gray("запусков ещё не было — модель может вызвать spawn_agent"))
+		a.ui.Println("  " + a.ui.Gray("запусков ещё не было - модель может вызвать spawn_agent"))
 	} else {
 		a.ui.Table([]ui.Column{
 			{Title: "имя", Width: 16},
@@ -327,7 +326,7 @@ func (a *app) listAgents() {
 		}, rows, ui.BlockOpts{})
 	}
 	a.ui.Println("  " + a.ui.Gray("запустить вручную: /agents run explorer \"найди, где реализована авторизация\""))
-	a.ui.Println("  " + a.ui.Gray("настройки: /agents on|off · /agents par N · /agents depth N · /agents model <имя> · /agents timeout N · /agents route on|off · /agents budget N · /agents types"))
+	a.ui.Println("  " + a.ui.Gray("настройки: /agents on|off | /agents par N | /agents depth N | /agents model <имя> | /agents timeout N | /agents route on|off | /agents budget N | /agents types"))
 	a.ui.Println("")
 }
 
@@ -351,9 +350,9 @@ func customNames(cas []subagents.CustomAgent) []string {
 func (a *app) runAgentCommand(parts []string) {
 	if len(parts) < 2 {
 		a.ui.Err("формат: /agents run <тип|имя-своего> <задача>")
-		a.ui.Hint("типы: " + strings.Join(subagents.TypeNames(), " · "))
+		a.ui.Hint("типы: " + strings.Join(subagents.TypeNames(), " | "))
 		if cas := a.customAgents(); len(cas) > 0 {
-			a.ui.Hint("свои: " + strings.Join(customNames(cas), " · "))
+			a.ui.Hint("свои: " + strings.Join(customNames(cas), " | "))
 		}
 		return
 	}
@@ -373,7 +372,7 @@ func (a *app) runAgentCommand(parts []string) {
 	defer cancel()
 
 	a.ui.Println("")
-	a.ui.Println("  " + a.ui.Magenta("◆ субагент: ") + a.ui.Bold(string(t)) + a.ui.Gray(" · "+core.Truncate(task, 60)))
+	a.ui.Println("  " + a.ui.Magenta("* субагент: ") + a.ui.Bold(string(t)) + a.ui.Gray(" | "+core.Truncate(task, 60)))
 	a.ui.SpinnerStart("Субагент работает")
 
 	t0 := core.RandID(4)
@@ -393,7 +392,7 @@ func (a *app) runAgentCommand(parts []string) {
 	a.ui.Block(res.Full, ui.BlockOpts{
 		Title:  "Отчёт субагента " + res.Name,
 		Accent: true,
-		Footer: fmt.Sprintf("инструментов: %d · токены: ↑%s ↓%s",
+		Footer: fmt.Sprintf("инструментов: %d | токены: in %s out %s",
 			res.ToolCall, core.Kfmt(res.Usage.PromptTokens), core.Kfmt(res.Usage.CompletionTokens)),
 	})
 	a.ui.Println("")
@@ -408,7 +407,7 @@ func (a *app) runAgentCommand(parts []string) {
 func skillRowDesc(s tools.Skill) string {
 	d := s.Desc
 	if s.When != "" {
-		d += " · " + s.When
+		d += " | " + s.When
 	}
 	return core.Truncate(core.OneLine(d), 46)
 }
@@ -437,7 +436,7 @@ func (a *app) cmdSkills(rest string) {
 			{Title: "состояние", Width: 10},
 			{Title: "описание", Width: 48},
 		}, rows, ui.BlockOpts{Title: "Навыки"})
-		a.ui.Println("  " + a.ui.Gray("показать: /skill <имя> · подобрать: /skill <описание задачи> · выключить: /skill off <имя> · создать: /skill new <имя>"))
+		a.ui.Println("  " + a.ui.Gray("показать: /skill <имя> | подобрать: /skill <описание задачи> | выключить: /skill off <имя> | создать: /skill new <имя>"))
 		a.ui.Println("")
 
 	case parts[0] == "new" || parts[0] == "новый":
@@ -478,7 +477,7 @@ func (a *app) cmdSkills(rest string) {
 		cfgMu.Unlock()
 		a.tools.SetSkillsOff(kept)
 		a.saveConfig()
-		a.ui.Ok("навык «" + name + "» включён")
+		a.ui.Ok("навык \"" + name + "\" включён")
 
 	case parts[0] == "off" && len(parts) > 1:
 		name := parts[1]
@@ -493,7 +492,7 @@ func (a *app) cmdSkills(rest string) {
 			a.tools.SetSkillsOff(a.repo.Cfg.SkillsOff)
 			a.saveConfig()
 		}
-		a.ui.Ok("навык «" + name + "» выключен")
+		a.ui.Ok("навык \"" + name + "\" выключен")
 
 	default:
 		name := parts[0]
@@ -501,7 +500,7 @@ func (a *app) cmdSkills(rest string) {
 			if s.Name == name {
 				a.ui.Block(s.Body, ui.BlockOpts{
 					Title:    s.Name,
-					Subtitle: s.Scope + " · " + s.Path,
+					Subtitle: s.Scope + " | " + s.Path,
 					Accent:   true,
 				})
 				return
@@ -514,7 +513,7 @@ func (a *app) cmdSkills(rest string) {
 			if s, alts, err := a.tools.MatchSkillTop(rest); err == nil {
 				a.ui.Block(s.Body, ui.BlockOpts{
 					Title:    s.Name,
-					Subtitle: s.Scope + " · " + s.Path,
+					Subtitle: s.Scope + " | " + s.Path,
 					Accent:   true,
 				})
 				if len(alts) > 0 {
@@ -528,7 +527,7 @@ func (a *app) cmdSkills(rest string) {
 				return
 			}
 		}
-		a.ui.Warn("навык «" + name + "» не найден — список: /skills")
+		a.ui.Warn("навык \"" + name + "\" не найден - список: /skills")
 	}
 }
 
@@ -567,7 +566,7 @@ func (a *app) cmdExt(rest string) {
 			}
 			subtitle := ext.Desc
 			if pending[ext.Name] {
-				subtitle = a.ui.Yellow("не подтверждено (/ext trust "+ext.Name+")") + " · " + ext.Desc
+				subtitle = a.ui.Yellow("не подтверждено (/ext trust "+ext.Name+")") + " | " + ext.Desc
 			}
 			a.ui.Table([]ui.Column{
 				{Title: "инструмент", Width: 20},
@@ -579,7 +578,7 @@ func (a *app) cmdExt(rest string) {
 				Subtitle: subtitle,
 			})
 		}
-		a.ui.Println("  " + a.ui.Gray("подключено инструментов: "+strconv.Itoa(a.tools.ExtCount())+" · перечитать: /ext reload"))
+		a.ui.Println("  " + a.ui.Gray("подключено инструментов: "+strconv.Itoa(a.tools.ExtCount())+" | перечитать: /ext reload"))
 		a.ui.Println("")
 
 	case parts[0] == "new" || parts[0] == "новый":
@@ -618,7 +617,7 @@ func (a *app) cmdExt(rest string) {
 		a.ui.Ok(fmt.Sprintf("инструменты перечитаны: всего %d (расширения: %d)",
 			a.tools.Count(), a.tools.ExtCount()))
 	default:
-		a.ui.Warn("не понял: " + rest + " — доступно: /ext · /ext new <имя> · /ext trust [<имя>] · /ext reload")
+		a.ui.Warn("не понял: " + rest + " - доступно: /ext | /ext new <имя> | /ext trust [<имя>] | /ext reload")
 	}
 }
 
@@ -651,8 +650,8 @@ func (a *app) trustCode(kind string, parts []string) {
 			cmd = "/mcp trust"
 		}
 		a.ui.Println("")
-		a.ui.Info("недоверенного кода из проекта нет — " + label + " подключены все")
-		a.ui.Hint("свои расширения: /ext new <имя> · список: " + cmd)
+		a.ui.Info("недоверенного кода из проекта нет - " + label + " подключены все")
+		a.ui.Hint("свои расширения: /ext new <имя> | список: " + cmd)
 		a.ui.Println("")
 		return
 	}
@@ -665,19 +664,19 @@ func (a *app) trustCode(kind string, parts []string) {
 	name := parts[1]
 	w, ok := a.tools.FindPendingCode(kind, name)
 	if !ok {
-		a.ui.Err("не найден недоверенный " + kind + " «" + name + "»")
+		a.ui.Err("не найден недоверенный " + kind + " \"" + name + "\"")
 		a.showPendingCode(pending, kind)
 		return
 	}
 	if !a.askTrustCode(w) {
-		a.ui.Info("не подтверждено — " + w.Label() + " остаётся отключённым")
+		a.ui.Info("не подтверждено - " + w.Label() + " остаётся отключённым")
 		return
 	}
 	a.tools.TrustCode(w)
 	// Сразу подключаем: иначе пришлось бы ещё раз перезапускать сессию.
 	a.buildTools()
 	if n := a.tools.ExtCount(); kind == "ext" && n > 0 {
-		a.ui.Ok(w.Label() + ": доверено, подключено инструментов расширений — " + strconv.Itoa(n))
+		a.ui.Ok(w.Label() + ": доверено, подключено инструментов расширений - " + strconv.Itoa(n))
 	} else {
 		a.ui.Ok(w.Label() + ": доверено")
 	}
@@ -691,8 +690,8 @@ func (a *app) askTrustCode(w tools.ProjectCodeWarning) bool {
 	if w.Kind == "mcp" {
 		kindWord = "MCP-сервер"
 	}
-	a.ui.Println("  " + a.ui.Accent("◆") + " " + a.ui.Bold(w.Label()) +
-		a.ui.Gray("  · код из проекта: "+w.Path))
+	a.ui.Println("  " + a.ui.Accent("*") + " " + a.ui.Bold(w.Label()) +
+		a.ui.Gray("  | код из проекта: "+w.Path))
 	if w.What != "" {
 		a.ui.Println("    " + a.ui.Gray("выполнит: "+core.Truncate(core.OneLine(w.What), 100)))
 	}
@@ -701,13 +700,6 @@ func (a *app) askTrustCode(w tools.ProjectCodeWarning) bool {
 	}
 	if w.Hash != "" {
 		a.ui.Println("    " + a.ui.Gray("отпечаток: "+core.Truncate(w.Hash, 16)))
-	}
-	if ch, ok := a.tuiConfirm(tui.Confirm{
-		Title:  fmt.Sprintf("Доверять и подключить (%s)?", kindWord),
-		Detail: w.Label(),
-		Note:   "код из проекта: " + w.Path,
-	}); ok {
-		return ch == tui.ChoiceYes || ch == tui.ChoiceAlways
 	}
 	if a.quiet {
 		// В машинном режиме (один запрос, CI) подтверждать чужой код нельзя:
@@ -749,7 +741,7 @@ func (a *app) showPendingCode(pending []tools.ProjectCodeWarning, kind string) {
 		{Title: "что выполнит", Width: 40},
 		{Title: "отпечаток", Width: 12},
 	}, rows, ui.BlockOpts{})
-	a.ui.Hint("подтвердить: " + cmd + " <имя>   ·   всё подключено: /ext trust, /mcp trust по одному")
+	a.ui.Hint("подтвердить: " + cmd + " <имя>   |   всё подключено: /ext trust, /mcp trust по одному")
 	a.ui.Hint("сбросить согласия: /permissions reset")
 	a.ui.Println("")
 }
@@ -762,7 +754,7 @@ func (a *app) cmdExport() {
 	p := filepath.Join(dir, "gcli-"+a.sess.ID+".md")
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Диалог gcli · %s\n\n", a.sessionTitle())
+	fmt.Fprintf(&b, "# Диалог gcli | %s\n\n", a.sessionTitle())
 	fmt.Fprintf(&b, "- Сессия: `%s`\n- Создана: %s\n- Провайдер: %s (%s)\n- Модель: %s\n",
 		a.sess.ID, a.sess.Created.Format("02.01.2006 15:04"), a.prov.Label, a.prov.ID, a.model)
 
@@ -774,14 +766,14 @@ func (a *app) cmdExport() {
 	sessMu.Unlock()
 	msgCount := len(msgs)
 
-	fmt.Fprintf(&b, "- Сообщений: %d · токены: ↑%s ↓%s\n\n---\n",
+	fmt.Fprintf(&b, "- Сообщений: %d | токены: in %s out %s\n\n---\n",
 		msgCount, core.Kfmt(usage.PromptTokens), core.Kfmt(usage.CompletionTokens))
 
 	subReports := a.subagentReports()
 	if len(subReports) > 0 {
 		b.WriteString("\n## Субагенты\n\n")
 		for _, r := range subReports {
-			fmt.Fprintf(&b, "- **%s** (%s) — %s, инструментов: %d\n", r.Name, r.Type, r.Status, r.Tools)
+			fmt.Fprintf(&b, "- **%s** (%s) - %s, инструментов: %d\n", r.Name, r.Type, r.Status, r.Tools)
 			if r.Summary != "" {
 				fmt.Fprintf(&b, "  > %s\n", core.Truncate(core.OneLine(r.Summary), 200))
 			}
@@ -822,7 +814,7 @@ func (a *app) cmdCompact() {
 		// фоновый ход cron/watch — без проверки /compact резал
 		// историю под ногами идущего хода, и newAgent писал
 		// a.stream параллельно с его чтением в AddMessage.
-		a.ui.Warn("ход ещё идёт — прерви (Esc) или подожди: /compact подменяет историю под ногами хода")
+		a.ui.Warn("ход ещё идёт - прерви (Esc) или подожди: /compact подменяет историю под ногами хода")
 		return
 	}
 	a.ui.SpinnerStart("Сжимаю историю")
@@ -850,15 +842,15 @@ func (a *app) cmdDoctor(rest string) {
 		rows = append(rows, [3]string{fmt.Sprint(ok), k, v})
 	}
 
-	add(true, "версия", "gcli v"+version()+" · "+osGOOS()+" · "+osArch())
+	add(true, "версия", "gcli v"+version()+" | "+osGOOS()+" | "+osArch())
 	add(true, "каталог данных", a.store.Root)
 	if _, err := os.Stat(a.store.ConfigPath()); err == nil {
 		add(true, "config.json", "найден")
 	} else {
-		add(true, "config.json", "нет — создастся при настройке")
+		add(true, "config.json", "нет - создастся при настройке")
 	}
 	add(true, "рабочий каталог", a.workDir)
-	add(a.prov.HasKey(), "ключ "+a.prov.ID, keyStatus(a.prov)+" · "+a.prov.BaseURL)
+	add(a.prov.HasKey(), "ключ "+a.prov.ID, keyStatus(a.prov)+" | "+a.prov.BaseURL)
 
 	// Сеть.
 	a.ui.SpinnerStart("Проверяю доступность " + a.prov.ID)
@@ -867,14 +859,14 @@ func (a *app) cmdDoctor(rest string) {
 	if err != nil {
 		add(false, "сеть "+a.prov.ID, "недоступен: "+core.Truncate(core.OneLine(err.Error()), 50))
 	} else {
-		add(true, "сеть "+a.prov.ID, fmt.Sprintf("HTTP %d · %d мс", code, el.Milliseconds()))
+		add(true, "сеть "+a.prov.ID, fmt.Sprintf("HTTP %d | %d мс", code, el.Milliseconds()))
 	}
 
 	// Ключ.
 	if a.prov.NoKey {
-		add(true, "тест ключа", "локальный провайдер — не нужен")
+		add(true, "тест ключа", "локальный провайдер - не нужен")
 	} else if a.prov.Key == "" {
-		add(false, "тест ключа", "не задан — /doctor key")
+		add(false, "тест ключа", "не задан - /doctor key")
 	} else {
 		a.ui.SpinnerStart("Проверяю ключ " + a.prov.ID)
 		ok, detail := testKey(a)
@@ -885,28 +877,28 @@ func (a *app) cmdDoctor(rest string) {
 	// Хранилище.
 	ns := len(a.repo.ListSessionInfos())
 	_, ckptN, _ := a.sessionCounters()
-	add(true, "хранилище", fmt.Sprintf("сессий: %d · чекпоинтов: %d · навыков: %d · расширений: %d",
+	add(true, "хранилище", fmt.Sprintf("сессий: %d | чекпоинтов: %d | навыков: %d | расширений: %d",
 		ns, ckptN, len(a.tools.LoadSkills()), len(a.tools.LoadExtensions())))
 
 	// Память.
 	if mems := a.memory.Files(); len(mems) > 0 {
 		add(true, "память проекта", strings.Join(mems, ", "))
 	} else {
-		add(false, "память проекта", "нет — /init")
+		add(false, "память проекта", "нет - /init")
 	}
 
 	add(true, "инструменты", fmt.Sprintf("%d (расширений: %d)", a.tools.Count(), a.tools.ExtCount()))
 	add(a.pool.Enabled(), "субагенты", enabledWord(a.pool.Enabled())+
-		fmt.Sprintf(" · параллельно: %d · глубина: %d", a.repo.Cfg.SubMaxPar, a.repo.Cfg.SubMaxDepth))
+		fmt.Sprintf(" | параллельно: %d | глубина: %d", a.repo.Cfg.SubMaxPar, a.repo.Cfg.SubMaxDepth))
 	add(true, "размышления", a.repo.Cfg.Think)
 	add(true, "оболочка", tools.ShellName())
 
 	// Печать таблицей.
 	trows := make([][]string, 0, len(rows))
 	for _, r := range rows {
-		mark := a.ui.Red("✗")
+		mark := a.ui.Red("x")
 		if r[0] == "true" {
-			mark = a.ui.Green("✓")
+			mark = a.ui.Green("+")
 		}
 		trows = append(trows, []string{mark, r[1], r[2]})
 	}
@@ -925,12 +917,12 @@ func (a *app) doctorKey(id string) {
 		if cand := a.registry.Find(strings.ToLower(id)); cand != nil {
 			p = cand
 		} else {
-			a.ui.Err("нет провайдера «" + id + "» — /provider list")
+			a.ui.Err("нет провайдера \"" + id + "\" - /provider list")
 			return
 		}
 	}
 	a.ui.Println("")
-	a.ui.Println("  " + a.ui.Head("Тест ключа") + " " + a.ui.Gray(p.ID+" → "+p.BaseURL))
+	a.ui.Println("  " + a.ui.Head("Тест ключа") + " " + a.ui.Gray(p.ID+" -> "+p.BaseURL))
 	a.ui.SpinnerStart("Запрос к " + p.ID)
 	ok, detail := testKeyFor(a, p)
 	a.ui.SpinnerStop()

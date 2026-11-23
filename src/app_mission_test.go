@@ -44,7 +44,7 @@ func TestParseMissionArgsObjectiveAndAcceptance(t *testing.T) {
 		t.Fatalf("критериев %d, хотели 2: %v", len(m.Acceptance), m.Acceptance)
 	}
 	if m.Acceptance[0] != "go test ./... зелёные" {
-		t.Errorf("первый критерий %q — кавычки не удержали фразу", m.Acceptance[0])
+		t.Errorf("первый критерий %q - кавычки не удержали фразу", m.Acceptance[0])
 	}
 }
 
@@ -189,10 +189,10 @@ func TestMissionStateRoundTrip(t *testing.T) {
 func TestLoadMissionStateAbsent(t *testing.T) {
 	_, ok, err := core.LoadMissionState(filepath.Join(t.TempDir(), "нет.json"))
 	if err != nil {
-		t.Errorf("отсутствие файла — не ошибка: %v", err)
+		t.Errorf("отсутствие файла - не ошибка: %v", err)
 	}
 	if ok {
-		t.Error("отсутствующий файл не должен читаться как «состояние есть»")
+		t.Error("отсутствующий файл не должен читаться как \"состояние есть\"")
 	}
 }
 
@@ -200,11 +200,11 @@ func TestFreshMissionState(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	fresh := core.MissionState{Updated: now.Add(-time.Hour).Format(time.RFC3339)}
 	if !core.FreshMissionState(fresh, now, 24*time.Hour) {
-		t.Error("состояние час назад — свежее")
+		t.Error("состояние час назад - свежее")
 	}
 	old := core.MissionState{Updated: now.Add(-48 * time.Hour).Format(time.RFC3339)}
 	if core.FreshMissionState(old, now, 24*time.Hour) {
-		t.Error("состояние двое суток назад — не свежее")
+		t.Error("состояние двое суток назад - не свежее")
 	}
 	if core.FreshMissionState(core.MissionState{}, now, 24*time.Hour) {
 		t.Error("без метки времени состояние не бывает свежим")

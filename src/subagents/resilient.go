@@ -209,12 +209,12 @@ func endsSettled(s string) bool {
 	// завершённый отчёт и уходило в кеш повторов.
 	for _, u := range unfinishedVerbs {
 		if strings.HasSuffix(tail, u) || strings.HasSuffix(tail, u+",") ||
-			strings.HasSuffix(tail, u+".") || strings.HasSuffix(tail, u+"…") {
+			strings.HasSuffix(tail, u+".") || strings.HasSuffix(tail, u+"...") {
 			return false
 		}
 	}
 	// Оборванное многоточием без завершённого знака.
-	if strings.HasSuffix(tail, "...") || strings.HasSuffix(tail, "…") {
+	if strings.HasSuffix(tail, "...") || strings.HasSuffix(tail, "...") {
 		return false
 	}
 	return true
@@ -254,11 +254,11 @@ func RetryHintAudit(err error, q Quality, audit *GroundingReport) string {
 		b.WriteString(t + "\n")
 	}
 	b.WriteString("Что делать сейчас:\n")
-	b.WriteString("1. Не начинай исследование заново — используй то, что уже есть в твоей истории.\n")
+	b.WriteString("1. Не начинай исследование заново - используй то, что уже есть в твоей истории.\n")
 	b.WriteString("2. Больше не расширяй задачу: нужен только ответ на исходный вопрос.\n")
 	b.WriteString("3. Пиши отчёт сразу: конкретно, по фактам, со ссылками на файлы и строки.\n")
 	b.WriteString("4. Отчёт обязан быть самодостаточным: заказчик не видит твоего контекста.\n")
-	b.WriteString("5. Если часть работы не удалась — так и напиши, что именно не вышло, и не выдавай это за успех.")
+	b.WriteString("5. Если часть работы не удалась - так и напиши, что именно не вышло, и не выдавай это за успех.")
 	b.WriteString(GroundHint(audit))
 	return b.String()
 }
@@ -409,7 +409,7 @@ func degradedReport(full string, spec Spec, err, lastErr error, q Quality, attem
 	// Согласование обязательно: «после 2 попыток» читается как опечатка,
 	// а этот текст главный агент показывает пользователю как объяснение,
 	// почему субагент не справился.
-	fmt.Fprintf(&b, "⚠ Отчёт неполный: субагент «%s» не смог сдать результат после %s.\n",
+	fmt.Fprintf(&b, "! Отчёт неполный: субагент \"%s\" не смог сдать результат после %s.\n",
 		spec.Type.Label(), pluralAttempts(attempts))
 	if err != nil {
 		fmt.Fprintf(&b, "Причина: %s\n", core.Truncate(err.Error(), 300))
@@ -418,7 +418,7 @@ func degradedReport(full string, spec Spec, err, lastErr error, q Quality, attem
 	} else if t := QualityText(q); t != "" {
 		fmt.Fprintf(&b, "Причина: %s\n", t)
 	}
-	b.WriteString("Что делать главному агенту: не полагаться на этот результат — либо поставить задачу заново " +
+	b.WriteString("Что делать главному агенту: не полагаться на этот результат - либо поставить задачу заново " +
 		"с более узкой формулировкой и меньшим числом шагов, либо выполнить работу самому.")
 	return b.String()
 }

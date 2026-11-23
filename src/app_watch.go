@@ -155,8 +155,8 @@ func (a *app) runWatch(command string, maxFixes int) {
 		a.ui.Err("укажи команду проверки: gcli -watch \"go test ./...\"")
 		return
 	}
-	a.ui.Info("watch: слежу за " + core.RelToWD(a.workDir, a.workDir) + " · проверка: " + command)
-	a.ui.Info("остановка: Ctrl+C · починок подряд не более " + fmt.Sprint(maxFixes))
+	a.ui.Info("watch: слежу за " + core.RelToWD(a.workDir, a.workDir) + " | проверка: " + command)
+	a.ui.Info("остановка: Ctrl+C | починок подряд не более " + fmt.Sprint(maxFixes))
 
 	prev := watchFileMap(a.workDir)
 	fixes := 0
@@ -186,12 +186,12 @@ func (a *app) runWatch(command string, maxFixes int) {
 
 		fixes++
 		if fixes > maxFixes {
-			a.ui.Err("watch: подряд " + fmt.Sprint(maxFixes) + " починок не помогли — останавливаюсь, смотри вывод выше")
+			a.ui.Err("watch: подряд " + fmt.Sprint(maxFixes) + " починок не помогли - останавливаюсь, смотри вывод выше")
 			return
 		}
 
 		prompt := "Watch: проверка проекта упала. Команда: " + command + "\n" +
-			"Почини код проекта так, чтобы эта команда снова проходила. Правь код, а не команду: команда — эталон.\n" +
+			"Почини код проекта так, чтобы эта команда снова проходила. Правь код, а не команду: команда - эталон.\n" +
 			"Вывод команды:\n```\n" + tailChars(out, 6000) + "\n```"
 		if err := a.turn(prompt); err != nil {
 			a.ui.Err("watch: ход агента не удался: " + err.Error())

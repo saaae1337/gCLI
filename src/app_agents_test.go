@@ -134,7 +134,7 @@ func TestAgentsRouteAliases(t *testing.T) {
 		a, _ := agentsApp(t)
 		a.cmdAgents("route " + on)
 		if !a.repo.Cfg.SubRoute {
-			t.Errorf("«/agents route %s» должен включать маршрутизацию", on)
+			t.Errorf("\"/agents route %s\" должен включать маршрутизацию", on)
 		}
 	}
 	for _, off := range []string{"off", "выкл", "0", "false", "нет"} {
@@ -142,7 +142,7 @@ func TestAgentsRouteAliases(t *testing.T) {
 		a.repo.Cfg.SubRoute = true
 		a.cmdAgents("route " + off)
 		if a.repo.Cfg.SubRoute {
-			t.Errorf("«/agents route %s» должен выключать маршрутизацию", off)
+			t.Errorf("\"/agents route %s\" должен выключать маршрутизацию", off)
 		}
 	}
 }
@@ -255,10 +255,10 @@ func TestAgentsBudgetRejectsBadValues(t *testing.T) {
 		a.cmdAgents("budget " + bad)
 
 		if a.repo.Cfg.SubBudget != 123_456 {
-			t.Errorf("«budget %s» изменил бюджет на %d", bad, a.repo.Cfg.SubBudget)
+			t.Errorf("\"budget %s\" изменил бюджет на %d", bad, a.repo.Cfg.SubBudget)
 		}
 		if s := out(buf); !strings.Contains(s, "50000") {
-			t.Errorf("«budget %s»: не показаны допустимые границы:\n%s", bad, s)
+			t.Errorf("\"budget %s\": не показаны допустимые границы:\n%s", bad, s)
 		}
 	}
 }
@@ -269,12 +269,12 @@ func TestCmdAgentsRoutingDispatchAliases(t *testing.T) {
 	a, buf := agentsApp(t)
 	a.cmdAgents("маршрут on")
 	if !a.repo.Cfg.SubRoute {
-		t.Error("«/agents маршрут on» не включил маршрутизацию")
+		t.Error("\"/agents маршрут on\" не включил маршрутизацию")
 	}
 
 	a.cmdAgents("бюджет 750000")
 	if a.repo.Cfg.SubBudget != 750_000 {
-		t.Errorf("«/agents бюджет 750000»: cfg.SubBudget = %d", a.repo.Cfg.SubBudget)
+		t.Errorf("\"/agents бюджет 750000\": cfg.SubBudget = %d", a.repo.Cfg.SubBudget)
 	}
 	if s := out(buf); s == "" {
 		t.Error("ожидался вывод по кириллическим синонимам")
@@ -293,7 +293,7 @@ func TestCmdAgentsParDepthValidation(t *testing.T) {
 			t.Errorf("SubMaxPar = %d, ожидалось 5", a.repo.Cfg.SubMaxPar)
 		}
 		if a.pool == old {
-			t.Error("пул не пересобран — новый лимит не применится")
+			t.Error("пул не пересобран - новый лимит не применится")
 		}
 		if got := savedConfig(t, a).SubMaxPar; got != 5 {
 			t.Errorf("sub_max_par в config.json = %d", got)
@@ -301,11 +301,11 @@ func TestCmdAgentsParDepthValidation(t *testing.T) {
 
 		a.cmdAgents("par 99")
 		if a.repo.Cfg.SubMaxPar != 5 {
-			t.Errorf("«par 99» изменил лимит на %d", a.repo.Cfg.SubMaxPar)
+			t.Errorf("\"par 99\" изменил лимит на %d", a.repo.Cfg.SubMaxPar)
 		}
 		a.cmdAgents("par abc")
 		if a.repo.Cfg.SubMaxPar != 5 {
-			t.Errorf("«par abc» изменил лимит на %d", a.repo.Cfg.SubMaxPar)
+			t.Errorf("\"par abc\" изменил лимит на %d", a.repo.Cfg.SubMaxPar)
 		}
 	})
 
@@ -321,7 +321,7 @@ func TestCmdAgentsParDepthValidation(t *testing.T) {
 		}
 		a.cmdAgents("depth 9")
 		if a.repo.Cfg.SubMaxDepth != 2 {
-			t.Errorf("«depth 9» изменил глубину на %d", a.repo.Cfg.SubMaxDepth)
+			t.Errorf("\"depth 9\" изменил глубину на %d", a.repo.Cfg.SubMaxDepth)
 		}
 	})
 }
@@ -361,7 +361,7 @@ func TestCmdAgentsTimeoutValidation(t *testing.T) {
 
 	a.cmdAgents("timeout 61")
 	if a.repo.Cfg.SubTimeoutMin != 20 {
-		t.Errorf("«timeout 61» изменил таймаут на %d", a.repo.Cfg.SubTimeoutMin)
+		t.Errorf("\"timeout 61\" изменил таймаут на %d", a.repo.Cfg.SubTimeoutMin)
 	}
 }
 
@@ -372,7 +372,7 @@ func TestCmdAgentsEmptyAndUnknownListRun(t *testing.T) {
 		a, buf := agentsApp(t)
 		a.cmdAgents(rest)
 		if s := out(buf); !strings.Contains(s, "/agents run explorer") {
-			t.Errorf("«/agents %s» не показал подсказку запуска:\n%s", rest, s)
+			t.Errorf("\"/agents %s\" не показал подсказку запуска:\n%s", rest, s)
 		}
 	}
 }
@@ -435,7 +435,7 @@ func TestCmdAgentsRunRejectsUnknownType(t *testing.T) {
 		t.Errorf("нет предупреждения о неизвестном типе:\n%s", got)
 	}
 	if len(a.pool.All()) != 0 {
-		t.Error("запусков быть не должно — тип не распознан")
+		t.Error("запусков быть не должно - тип не распознан")
 	}
 }
 

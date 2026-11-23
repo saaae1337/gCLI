@@ -13,11 +13,11 @@ import (
 // runSetup — мастер настройки: провайдер → ключ → модель.
 func (a *app) runSetup() {
 	a.ui.Println("")
-	a.ui.Println("  " + a.ui.Bold("Мастер настройки gcli") + a.ui.Gray("   провайдер → ключ → модель"))
+	a.ui.Println("  " + a.ui.Bold("Мастер настройки gcli") + a.ui.Gray("   провайдер -> ключ -> модель"))
 	a.listProviders()
 
 	// 1. Провайдер.
-	s, ok := a.askLine("Провайдер (номер или id, Enter — " + a.prov.ID + ")")
+	s, ok := a.askLine("Провайдер (номер или id, Enter - " + a.prov.ID + ")")
 	if !ok {
 		return
 	}
@@ -28,24 +28,24 @@ func (a *app) runSetup() {
 		} else if cand := a.registry.Find(strings.ToLower(s)); cand != nil {
 			p = cand
 		} else {
-			a.ui.Err("нет провайдера «" + s + "»")
+			a.ui.Err("нет провайдера \"" + s + "\"")
 			return
 		}
 	}
 
 	// 2. Ключ.
 	if p.NoKey {
-		a.ui.Println("  " + a.ui.Gray("локальный провайдер — ключ не нужен ("+p.BaseURL+")"))
+		a.ui.Println("  " + a.ui.Gray("локальный провайдер - ключ не нужен ("+p.BaseURL+")"))
 	} else {
-		hint := "Enter — оставить как есть"
+		hint := "Enter - оставить как есть"
 		if p.Key == "" {
-			hint = "Enter — взять из переменных окружения"
+			hint = "Enter - взять из переменных окружения"
 		}
 		cur := ""
 		if p.Key != "" {
 			cur = " (сейчас " + providers.MaskKey(p.Key) + ")"
 		}
-		k, ok := a.askSecret("API-ключ для " + p.ID + cur + " · " + hint)
+		k, ok := a.askSecret("API-ключ для " + p.ID + cur + " | " + hint)
 		if !ok {
 			return
 		}
@@ -71,7 +71,7 @@ func (a *app) runSetup() {
 		for i := 0; i < shown; i++ {
 			cur := ""
 			if models[i] == p.DefaultModel {
-				cur = "← по умолчанию"
+				cur = "<- по умолчанию"
 			}
 			rows = append(rows, []string{strconv.Itoa(i + 1), models[i], cur})
 		}
@@ -81,7 +81,7 @@ func (a *app) runSetup() {
 			{Title: "", Width: 18},
 		}, rows, ui.BlockOpts{
 			Title:  "Доступно моделей: " + strconv.Itoa(len(models)),
-			Footer: "Enter — модель по умолчанию, или введи имя вручную",
+			Footer: "Enter - модель по умолчанию, или введи имя вручную",
 		})
 		s, ok := a.askLine("Модель (номер или имя)")
 		if !ok {
@@ -101,7 +101,7 @@ func (a *app) runSetup() {
 		if err != nil {
 			a.ui.Warn("список моделей получить не удалось (" + core.Truncate(core.OneLine(err.Error()), 70) + ")")
 		}
-		s, ok := a.askLine("Модель вручную (Enter — " + p.DefaultModel + ")")
+		s, ok := a.askLine("Модель вручную (Enter - " + p.DefaultModel + ")")
 		if !ok {
 			return
 		}
@@ -135,8 +135,8 @@ func (a *app) runSetup() {
 
 	a.ui.Println("")
 	a.ui.Block("Провайдер: "+a.prov.Label+"\nМодель:    "+model+"\nИнструментов: "+strconv.Itoa(a.tools.Count())+
-		" · субагенты: "+enabledWord(a.pool.Enabled()),
+		" | субагенты: "+enabledWord(a.pool.Enabled()),
 		ui.BlockOpts{Title: "Готово", Accent: true})
-	a.ui.Println("  " + a.ui.Gray("Ставь задачу — агент выполнит её, используя файлы, команды и веб."))
+	a.ui.Println("  " + a.ui.Gray("Ставь задачу - агент выполнит её, используя файлы, команды и веб."))
 	a.ui.Println("")
 }

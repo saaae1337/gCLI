@@ -120,7 +120,7 @@ const ProjectConfigTemplate = `{
   // web_fetch, read_file, и другие имена из /tools.
   "permissions": {
     "rules": [
-      // Чтение и запись внутри проекта — обычно без вопросов.
+      // Чтение и запись внутри проекта - обычно без вопросов.
       "read_file: allow",
       "edit(*): allow",
 
@@ -132,11 +132,11 @@ const ProjectConfigTemplate = `{
       "bash(git diff*): allow",
       "bash(git log*): allow",
 
-      // Публикация и разрушительные команды — только с вопроса.
+      // Публикация и разрушительные команды - только с вопроса.
       "bash(git push*): ask",
       "bash(rm *): ask",
 
-      // Сети наружу — всегда вопрос.
+      // Сети наружу - всегда вопрос.
       "web_fetch: ask"
     ]
   }

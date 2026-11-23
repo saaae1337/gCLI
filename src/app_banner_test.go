@@ -34,9 +34,7 @@ func bannerApp(t *testing.T, buf *strings.Builder, anim bool) *app {
 }
 
 // TestBannerShowsSession — баннер печатает параметры сессии: имя
-// проекта, версия, модель, каталог, ключ. Кота в баннере нет: у кота
-// один пост — над строкой состояния, два кота на первом экране
-// выглядели как баг.
+// проекта, версия, модель, каталог, ключ.
 func TestBannerShowsSession(t *testing.T) {
 	buf := &strings.Builder{}
 	a := bannerApp(t, buf, true)
@@ -44,13 +42,17 @@ func TestBannerShowsSession(t *testing.T) {
 
 	out := buf.String()
 	clean := ui.StripANSI(out)
-	for _, want := range []string{"gcli", "ИИ-агент в терминале", "модель", "каталог", "ключ"} {
+	for _, want := range []string{"gCLI", "Welcome", "/help for help", "cwd:", "model:"} {
 		if !strings.Contains(clean, want) {
 			t.Errorf("в баннере нет %q:\n%s", want, clean)
 		}
 	}
+	// Бокс - и есть вид Claude Code: скруглённая рамка и логотип.
+	if !strings.Contains(clean, "╭") || !strings.Contains(clean, "╰") {
+		t.Errorf("в баннере нет бокса приветствия:\n%s", clean)
+	}
 	if strings.Contains(clean, "/\\_/\\") || strings.Contains(clean, "> ^ <") {
-		t.Errorf("баннер не должен рисовать кота — его пост над строкой состояния:\n%s", clean)
+		t.Errorf("баннер не должен рисовать маскота:\n%s", clean)
 	}
 }
 
@@ -67,7 +69,7 @@ func TestBannerPlainWithoutAnimations(t *testing.T) {
 		t.Errorf("без анимаций в баннере не должно быть управления курсором:\n%q", firstRunes(out))
 	}
 	clean := ui.StripANSI(out)
-	for _, want := range []string{"gcli", "модель"} {
+	for _, want := range []string{"gCLI", "model:"} {
 		if !strings.Contains(clean, want) {
 			t.Errorf("в баннере нет %q:\n%s", want, clean)
 		}
@@ -78,7 +80,7 @@ func TestBannerPlainWithoutAnimations(t *testing.T) {
 func firstRunes(s string) string {
 	r := []rune(s)
 	if len(r) > 400 {
-		return string(r[:400]) + "…"
+		return string(r[:400]) + "..."
 	}
 	return s
 }

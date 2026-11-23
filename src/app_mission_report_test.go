@@ -117,7 +117,7 @@ func TestKindLabel(t *testing.T) {
 		core.JournalStop:       "остановка",
 		core.JournalClose:      "сеанс закрыт",
 		core.JournalResume:     "продолжение",
-		"":                     "—",
+		"":                     "-",
 		"чтотостранное":        "чтотостранное",
 	}
 	for kind, want := range cases {

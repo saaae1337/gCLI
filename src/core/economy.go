@@ -109,12 +109,17 @@ func Digest(text string, maxTokens int) string {
 		return text
 	}
 	// Бюджет по символам считаем от самого текста: сколько символов в нём
-	// приходится на токен. Для кириллицы это около 1.4, для латиницы — 4,
+	// приходится на токен. Для кириллицы это около 1.5, для латиницы — 4,
 	// и одна цифра «3 на токен» давала бы то ли обрезку без толку, то ли
 	// вдвое больший результат.
+	//
+	// От лимита заранее отступается место под саму пометку о свёртке:
+	// раньше она не считалась, и результат «100 токенов» выходил
+	// на 5–10 токенов длиннее обещанного — на сотнях свёрток в истории
+	// это заметно.
 	tok := ApproxTokens(text)
 	r := []rune(text)
-	limit := int(float64(maxTokens) * float64(len(r)) / float64(tok))
+	limit := int(float64(maxTokens)*float64(len(r))/float64(tok)) - 40
 	if limit < 40 {
 		limit = 40
 	}
@@ -136,7 +141,7 @@ func Digest(text string, maxTokens int) string {
 		return text
 	}
 	return string(r[:head]) +
-		"\n…[свёрнуто символов: " + strconv.Itoa(hidden) + "]…\n" +
+		"\n...[свёрнуто символов: " + strconv.Itoa(hidden) + "]...\n" +
 		string(r[len(r)-tail:])
 }
 
@@ -149,6 +154,6 @@ func DigestResult(name, text string, maxTokens int) string {
 		return text
 	}
 	lines := len(SplitLines(text))
-	head := "[свёрнуто: " + name + " — " + strconv.Itoa(lines) + " строк, показаны начало и конец]\n"
+	head := "[свёрнуто: " + name + " - " + strconv.Itoa(lines) + " строк, показаны начало и конец]\n"
 	return head + Digest(text, maxTokens)
 }

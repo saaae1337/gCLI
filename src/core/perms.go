@@ -70,7 +70,7 @@ func (r Rule) String() string {
 
 // Label — правило с указанием источника, для списка в /permissions.
 func (r Rule) Label() string {
-	s := r.String() + " → " + string(r.Mode)
+	s := r.String() + " -> " + string(r.Mode)
 	if r.Source != "" {
 		s += "  (" + r.Source + ")"
 	}
@@ -304,7 +304,7 @@ func (rs Rules) Explain(tool, subject string) string {
 	if def, ok := rs.Default(); ok {
 		return "mode=" + string(def) + " (правил нет)"
 	}
-	return "нет правил — " + string(d)
+	return "нет правил - " + string(d)
 }
 
 // matchGlob — сравнение паттерна с текстом.

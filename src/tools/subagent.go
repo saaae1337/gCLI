@@ -11,21 +11,21 @@ import (
 
 // registerSubagentTools — инструменты делегирования (доступны в агентном режиме).
 func (r *Registry) registerSubagentTools() {
-	r.registerBound("spawn_agent", "Запустить субагента — отдельного ИИ-агента с собственным контекстом и (возможно) другой моделью. "+
-		"Указывай task — этого достаточно, роль подберётся сама по тексту задачи (исправь → coder, тест → tester, найди баги → reviewer, план → planner, вёрстка → frontend, найди в интернете → researcher). "+
+	r.registerBound("spawn_agent", "Запустить субагента - отдельного ИИ-агента с собственным контекстом и (возможно) другой моделью. "+
+		"Указывай task - этого достаточно, роль подберётся сама по тексту задачи (исправь -> coder, тест -> tester, найди баги -> reviewer, план -> planner, вёрстка -> frontend, найди в интернете -> researcher). "+
 		"Переопредели через type, если роль очевидна иначе: explorer (карта кода), reviewer (баги/безопасность), planner (план), coder (реализация), "+
 		"tester (тесты), frontend (верстка с проверкой по скриншотам), researcher (веб/доки), docs (документация), general (универсал). "+
-		"Также работают имена твоих агентов из .gcli/agents/*.md. Используй для независимых подзадач; субагент вернёт отчёт — дождись и используй его.",
+		"Также работают имена твоих агентов из .gcli/agents/*.md. Используй для независимых подзадач; субагент вернёт отчёт - дождись и используй его.",
 		schemaSpawn, "agent", false, func(r *Registry) Handler { return r.hSpawnAgent })
-	r.registerBound("agent_status", "Сводка по субагентам: status — что сейчас работает, list — все запуски сессии, result — итог по имени.",
+	r.registerBound("agent_status", "Сводка по субагентам: status - что сейчас работает, list - все запуски сессии, result - итог по имени.",
 		schemaAgents, "agent", false, func(r *Registry) Handler { return r.hAgentStatus })
-	r.registerBound("spawn_agents", "Запустить пачку субагентов параллельно — независимые подзадачи одним вызовом вместо N последовательных. "+
+	r.registerBound("spawn_agents", "Запустить пачку субагентов параллельно - независимые подзадачи одним вызовом вместо N последовательных. "+
 		"Каждому передай task (что сделать и что вернуть) и по возможности name. Порядок отчётов совпадает с порядком в agents. "+
-		"Если задачи связаны (план → реализация → тесты, ревью после правок), укажи depends_on: имя или «#N» субагента, чей вывод нужен ДО старта — "+
-		"его вывод подставится в task, а зависимые запустятся позже. Нужны несколько выводов — depends_on принимает список имён. "+
+		"Если задачи связаны (план -> реализация -> тесты, ревью после правок), укажи depends_on: имя или \"#N\" субагента, чей вывод нужен ДО старта - "+
+		"его вывод подставится в task, а зависимые запустятся позже. Нужны несколько выводов - depends_on принимает список имён. "+
 		"Без depends_on всё идёт одной волной параллельно.",
 		schemaSpawnMany, "agent", false, func(r *Registry) Handler { return r.hSpawnAgents })
-	r.registerBound("ask_user", "Задать вопрос пользователю, когда без его решения задачу нельзя продолжить. Используй редко — только для развилок.",
+	r.registerBound("ask_user", "Задать вопрос пользователю, когда без его решения задачу нельзя продолжить. Используй редко - только для развилок.",
 		schemaAsk, "agent", false, func(r *Registry) Handler { return r.hAskUser })
 }
 
@@ -35,13 +35,13 @@ func (r *Registry) RegisterSubagentTools() { r.registerSubagentTools() }
 // hSpawnAgent — делегировать подзадачу субагенту.
 func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, error) {
 	if r.env.Spawn == nil {
-		return Result{Error: "субагенты отключены — включи: /agents on"}, nil
+		return Result{Error: "субагенты отключены - включи: /agents on"}, nil
 	}
 	// Глубина считается от главного агента (0). Субагент запускается на 1,
 	// поэтому лимит «1» означает: субагенты разрешены, но вложенные — нет.
 	if r.env.Depth >= r.env.MaxDepth {
 		return Result{
-			Text: fmt.Sprintf("Достигнута максимальная глубина вложенности (%d) — выполни задачу самостоятельно. "+
+			Text: fmt.Sprintf("Достигнута максимальная глубина вложенности (%d) - выполни задачу самостоятельно. "+
 				"Если нужен свежий взгляд или параллельная работа, скажи об этом пользователю.", r.env.MaxDepth),
 			Summary: "лимит глубины",
 		}, nil
@@ -56,7 +56,7 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 		Depth:    r.env.Depth + 1,
 	}
 	if strings.TrimSpace(args.Task) == "" {
-		return Result{}, fmt.Errorf("укажи task — что именно должен сделать субагент")
+		return Result{}, fmt.Errorf("укажи task - что именно должен сделать субагент")
 	}
 
 	res, err := r.env.Spawn(ctx, args)
@@ -90,7 +90,7 @@ func (r *Registry) hSpawnAgent(ctx context.Context, m map[string]any) (Result, e
 	// собранный на дешёвой модели из-за роли или предела бюджета, заказчик
 	// обязан взвесить иначе, чем такой же текст с полной моделью.
 	if res.ModelWhy != "" {
-		typeNote += fmt.Sprintf("\n(модель: %s — %s)", res.Model, res.ModelWhy)
+		typeNote += fmt.Sprintf("\n(модель: %s - %s)", res.Model, res.ModelWhy)
 	}
 	// Подсказываем, где взять полный отчёт: раньше модель получала только
 	// сводку и не знала, что полный текст доступен через agent_status.
@@ -116,21 +116,21 @@ const spawnMaxAgents = 6
 // «случайно» сделала бы вывод бессмысленным.
 func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, error) {
 	if r.env.Spawn == nil {
-		return Result{Error: "субагенты отключены — включи: /agents on"}, nil
+		return Result{Error: "субагенты отключены - включи: /agents on"}, nil
 	}
 	raw, _ := m["agents"].([]any)
 	if len(raw) == 0 {
-		return Result{}, fmt.Errorf("укажи agents — массив задач для субагентов (до %d)", spawnMaxAgents)
+		return Result{}, fmt.Errorf("укажи agents - массив задач для субагентов (до %d)", spawnMaxAgents)
 	}
 	if len(raw) > spawnMaxAgents {
-		return Result{}, fmt.Errorf("слишком много субагентов: %d, максимум %d за вызов — разбей на два вызова",
+		return Result{}, fmt.Errorf("слишком много субагентов: %d, максимум %d за вызов - разбей на два вызова",
 			len(raw), spawnMaxAgents)
 	}
 	// Глубина — та же проверка, что у одиночного запуска: пачка на предельной
 	// глубине это N отказов вместо одного.
 	if r.env.Depth >= r.env.MaxDepth {
 		return Result{
-			Text: fmt.Sprintf("Достигнута максимальная глубина вложенности (%d) — выполни задачи самостоятельно. "+
+			Text: fmt.Sprintf("Достигнута максимальная глубина вложенности (%d) - выполни задачи самостоятельно. "+
 				"Если нужны параллельная работа или свежий взгляд, скажи об этом пользователю.", r.env.MaxDepth),
 			Summary: "лимит глубины",
 		}, nil
@@ -234,7 +234,7 @@ func (r *Registry) hSpawnAgents(ctx context.Context, m map[string]any) (Result, 
 				// потому что один бюджет делится на шесть субагентов, и три
 				// дешёвых отчёта легко принять за шесть равноценных.
 				if res.ModelWhy != "" {
-					body += fmt.Sprintf("\n\n[Модель: %s — %s]", res.Model, res.ModelWhy)
+					body += fmt.Sprintf("\n\n[Модель: %s - %s]", res.Model, res.ModelWhy)
 				}
 				return Result{
 					Text: body,
@@ -307,7 +307,7 @@ func (r *Registry) hAgentStatus(_ context.Context, m map[string]any) (Result, er
 // hAskUser — вопрос пользователю.
 func (r *Registry) hAskUser(_ context.Context, m map[string]any) (Result, error) {
 	if r.env.Ask == nil {
-		return Result{Error: "интерактивный режим недоступен (работа в режиме -p) — реши задачу самостоятельно"}, nil
+		return Result{Error: "интерактивный режим недоступен (работа в режиме -p) - реши задачу самостоятельно"}, nil
 	}
 	q := ArgStr(m, "question")
 	if strings.TrimSpace(q) == "" {

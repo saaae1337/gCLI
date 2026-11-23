@@ -26,7 +26,7 @@ var (
 	reItalic    = regexp.MustCompile(`(^|[^*\w])\*([^*\n]+)\*`)
 )
 
-// Stream — потоковый рендерер markdown для стриминга ответа модели.
+// Stream - потоковый рендерер markdown для стриминга ответа модели.
 type Stream struct {
 	u     *UI
 	pend  string
@@ -38,7 +38,7 @@ type streamState struct {
 	lang  string
 }
 
-// NewStream — создать потоковый рендерер.
+// NewStream - создать потоковый рендерер.
 func (u *UI) NewStream() *Stream {
 	if sink := u.sink(); sink != nil {
 		sink.BeginStream()
@@ -46,17 +46,17 @@ func (u *UI) NewStream() *Stream {
 	return &Stream{u: u, state: &streamState{}}
 }
 
-// Reset — сбросить состояние (начало нового ответа).
+// Reset - сбросить состояние (начало нового ответа).
 func (s *Stream) Reset() {
 	s.state.fence = false
 	s.state.lang = ""
 	s.pend = ""
 }
 
-// FenceOpen — внутри ли сейчас блока кода.
+// FenceOpen - внутри ли сейчас блока кода.
 func (s *Stream) FenceOpen() bool { return s.state.fence }
 
-// Write — принять кусок текста и напечатать готовые строки.
+// Write - принять кусок текста и напечатать готовые строки.
 func (s *Stream) Write(chunk string) {
 	s.pend += chunk
 	for {
@@ -72,14 +72,13 @@ func (s *Stream) Write(chunk string) {
 	}
 }
 
-// End — допечатать остаток и закрыть незакрытый блок кода.
+// End - допечатать остаток и закрыть незакрытый блок кода.
 func (s *Stream) End() {
 	if s.pend != "" {
 		s.u.Println(s.u.renderLine(s.pend, s.state))
 		s.pend = ""
 	}
 	if s.state.fence {
-		s.u.Println(s.u.Gray(s.u.g.BL + s.u.g.H + s.u.g.H))
 		s.state.fence = false
 	}
 	if sink := s.u.sink(); sink != nil {
@@ -87,16 +86,18 @@ func (s *Stream) End() {
 	}
 }
 
-// renderLine — отрендерить одну строку markdown.
+// renderLine - отрендерить одну строку markdown.
 func (u *UI) renderLine(line string, st *streamState) string {
 	trimmed := strings.TrimSpace(line)
 	// Маркер блока кода проверяем ДО раннего выхода «мы внутри блока»:
 	// иначе закрывающий ``` печатается как обычный текст кода.
 	isFence := strings.HasPrefix(trimmed, "```")
 
-	// Внутри блока кода — моноширинный серый, без разметки.
+	// Внутри блока кода - обычный цвет терминала, без разметки.
+	// Claude Code печатает код без перекраски: строки кода читаются
+	// по ограде и отступу, а не по цвету.
 	if st.fence && !isFence {
-		return u.c(u.pal.Muted, line)
+		return line
 	}
 
 	if isFence {
@@ -104,26 +105,20 @@ func (u *UI) renderLine(line string, st *streamState) string {
 		if !st.fence {
 			st.fence = true
 			st.lang = lang
-			// Блок кода помечен ромбом, как и любое другое событие,
-			// а язык — приглушённым хвостом. Иначе строка «◆ ``` go »
-			// читается как ещё один заголовок, а кода под ней нет.
-			head := "  " + u.emberMark(u.pal.Code)
-			if lang != "" {
-				head += " " + u.c(u.pal.Muted, lang)
-			}
-			return head
+			// Claude Code не рисует ограды блоков кода: сам блок отличает
+			// приглушённый цвет строк. Ограда печатается пустой строкой,
+			// чтобы код не слипался с прозой.
+			return ""
 		}
 		st.fence = false
-		// Закрывающий зубец: блок «схлопывается» в зубок, а не
-		// обводится рамкой, и глаз видит, где код кончился.
-		return "  " + u.emberTail()
+		return ""
 	}
 
 	if trimmed != "" && reHRule.MatchString(trimmed) {
 		return u.c(u.pal.Muted, strings.Repeat(u.g.H, maxInt(10, u.Width()-2)))
 	}
 
-	// Разделитель таблицы — скрываем.
+	// Разделитель таблицы - скрываем.
 	if reTableSep.MatchString(trimmed) {
 		return ""
 	}
@@ -131,13 +126,9 @@ func (u *UI) renderLine(line string, st *streamState) string {
 	if m := reH.FindStringSubmatch(line); m != nil {
 		level, title := len(m[1]), strings.TrimSpace(m[2])
 		if level <= 2 {
-			body := u.Bold(u.c(u.pal.Accent, title))
-			// Заголовок ответа — ровно как заголовок блока: тот же
-			// ромб и та же линия вправо. Иначе он уезжает в край
-			// терминала и выглядит как вывод чужой программы.
-			n := maxInt(4, minInt(cellWidth(title), u.Width()-6))
-			return "  " + u.emberMark(u.pal.Accent) + " " + body + " " +
-				u.emberRule(n)
+			// Заголовок ответа - просто жирный текст: в Claude Code ответы
+			// печатаются как обычный markdown, без маркеров и линеек.
+			return u.Bold(title)
 		}
 		return u.Bold(title)
 	}
@@ -153,12 +144,14 @@ func (u *UI) renderLine(line string, st *streamState) string {
 
 	if m := reOrdered.FindStringSubmatch(line); m != nil {
 		indent, num, text := m[1], m[2], m[3]
-		return indent + u.c(u.pal.Accent, num+".") + " " + u.inline(text)
+		return indent + num + ". " + u.inline(text)
 	}
 
 	if m := reBullet.FindStringSubmatch(line); m != nil {
 		indent, text := m[1], m[2]
-		return indent + u.c(u.pal.Accent, u.g.Bullet) + " " + u.inline(text)
+		// Маркер списка - как в Claude Code: обычный цвет терминала,
+		// без подсветки. Выделяется содержимое, а не структура.
+		return indent + u.g.Bullet + " " + u.inline(text)
 	}
 
 	if m := reQuote.FindStringSubmatch(line); m != nil {
@@ -168,12 +161,12 @@ func (u *UI) renderLine(line string, st *streamState) string {
 	return u.inline(line)
 }
 
-// RenderLine — разовый рендер строки (для истории сообщений).
+// RenderLine - разовый рендер строки (для истории сообщений).
 func (u *UI) RenderLine(line string) string {
 	return u.renderLine(line, &streamState{})
 }
 
-// RenderText — отрендерить многострочный текст.
+// RenderText - отрендерить многострочный текст.
 func (u *UI) RenderText(text string) string {
 	st := &streamState{}
 	lines := strings.Split(text, "\n")
@@ -183,7 +176,7 @@ func (u *UI) RenderText(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// inline — обработать inline-разметку с защитой от вложенных замен.
+// inline - обработать inline-разметку с защитой от вложенных замен.
 func (u *UI) inline(s string) string {
 	var stash []string
 	keep := func(rendered string) string {
@@ -191,7 +184,7 @@ func (u *UI) inline(s string) string {
 		return "\x00" + itoa(len(stash)-1) + "\x00"
 	}
 
-	// 1. Код — раньше всего, содержимое не трогаем.
+	// 1. Код - раньше всего, содержимое не трогаем.
 	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
 		inner := m
 		if i := strings.Index(inner, "`"); i >= 0 {
@@ -211,7 +204,7 @@ func (u *UI) inline(s string) string {
 		// Длинный URL укорачиваем по колонкам: срез по байтам рвал
 		// многобайтовый UTF-8 посреди символа.
 		if cellWidth(url) > 34 {
-			url = u.c(u.pal.Muted, truncateCells(url, 31)) + u.c(u.pal.Link, "…")
+			url = u.c(u.pal.Muted, truncateCells(url, 31)) + u.c(u.pal.Link, "...")
 		} else {
 			url = u.c(u.pal.Link, url)
 		}
@@ -222,7 +215,7 @@ func (u *UI) inline(s string) string {
 	s = reBareURL.ReplaceAllStringFunc(s, func(m string) string {
 		p := reBareURL.FindStringSubmatch(m)
 		lead, url := p[1], p[2]
-		return lead + keep(u.c(u.pal.Link, "⟨"+url+"⟩"))
+		return lead + keep(u.c(u.pal.Link, "<"+url+">"))
 	})
 
 	// 4. Жирный, зачёркнутый, курсив.
@@ -264,13 +257,13 @@ func (u *UI) inline(s string) string {
 	return s
 }
 
-// StripANSI — убрать escape-последовательности (для экспорта и подсчёта ширины).
+// StripANSI - убрать escape-последовательности (для экспорта и подсчёта ширины).
 //
 // Разбор общий с width.go: прежняя версия знала только SGR с финальной «m»
 // и проглатывала весь текст после «ESC[K» или OSC-заголовка.
 func StripANSI(s string) string { return stripANSI(s) }
 
-// minInt — минимум из двух int.
+// minInt - минимум из двух int.
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -278,5 +271,5 @@ func minInt(a, b int) int {
 	return b
 }
 
-// PadRight — дополнить строку пробелами до ширины w (с учётом ANSI).
+// PadRight - дополнить строку пробелами до ширины w (с учётом ANSI).
 func PadRight(s string, w int) string { return padRight(s, w) }

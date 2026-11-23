@@ -53,7 +53,7 @@ var snapshotExcludes = []string{
 	"builds/",
 }
 
-var errNoGit = errors.New("git не найден в PATH — снапшоты недоступны")
+var errNoGit = errors.New("git не найден в PATH - снапшоты недоступны")
 
 // SnapshotsGitDir — каталог теневого репозитория проекта.
 func SnapshotsGitDir(workDir string) string {
@@ -78,13 +78,13 @@ func guardSnapshotWorkDir(workDir string) error {
 	}
 	vol := filepath.VolumeName(wd)
 	if vol != "" && wd == vol+string(os.PathSeparator) {
-		return errors.New("снапшоты: рабочий каталог — корень диска, снимок не делается")
+		return errors.New("снапшоты: рабочий каталог - корень диска, снимок не делается")
 	}
 	if vol == "" && wd == string(os.PathSeparator) {
-		return errors.New("снапшоты: рабочий каталог — корень диска, снимок не делается")
+		return errors.New("снапшоты: рабочий каталог - корень диска, снимок не делается")
 	}
 	if h, err := os.UserHomeDir(); err == nil && filepath.Clean(h) == wd {
-		return errors.New("снапшоты: рабочий каталог — домашний каталог, снимок не делается")
+		return errors.New("снапшоты: рабочий каталог - домашний каталог, снимок не делается")
 	}
 	return nil
 }
@@ -301,7 +301,7 @@ func RestoreSnapshot(workDir, hash string) (Snapshot, error) {
 	// кормит. Здесь он кормит откат, и без него откат не выполняется.
 	if _, _, err := TakeSnapshot(workDir, "перед откатом"); err != nil {
 		return Snapshot{}, fmt.Errorf("откат отменён: не удалось снять снимок текущего состояния "+
-			"перед откатом — возвращаться будет некуда: %w", err)
+			"перед откатом - возвращаться будет некуда: %w", err)
 	}
 	// Уникальная ветка на каждый откат, а не одна переиспользуемая:
 	// --force стёр бы предыдущую точку, и состояние «два отката назад»
@@ -309,7 +309,7 @@ func RestoreSnapshot(workDir, hash string) (Snapshot, error) {
 	keep := "keep/pre-revert-" + time.Now().Format("20060102-150405") + "-" + RandID(4)
 	if _, err := gitShadow(workDir, 30*time.Second, "branch", "--force", keep, "HEAD"); err != nil {
 		return Snapshot{}, fmt.Errorf("откат отменён: не удалось сохранить точку возврата "+
-			"на ветке %s — работа не тронута, но вернуть её будет нечем: %w", keep, err)
+			"на ветке %s - работа не тронута, но вернуть её будет нечем: %w", keep, err)
 	}
 	cur, err := gitShadow(workDir, 30*time.Second, "rev-parse", "HEAD")
 	if err == nil && strings.TrimSpace(cur) == hash {

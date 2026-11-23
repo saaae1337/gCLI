@@ -99,7 +99,7 @@ func TestOutlineGoLineNumbersAreReal(t *testing.T) {
 		want := strings.TrimSpace(lines[decl.line-1])
 		found := false
 		for _, l := range strings.Split(got, "\n") {
-			cols := strings.SplitN(strings.TrimSpace(l), "│", 2)
+			cols := strings.SplitN(strings.TrimSpace(l), "|", 2)
 			if len(cols) != 2 || strings.TrimSpace(cols[0]) != itoa(decl.line) {
 				continue
 			}

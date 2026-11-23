@@ -35,7 +35,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	// подменит его посреди ожидания — прежний пул доест своих.
 	pool := a.agentsPool()
 	if !pool.Enabled() {
-		return tools.SpawnResult{}, fmt.Errorf("субагенты отключены — включи: /agents on")
+		return tools.SpawnResult{}, fmt.Errorf("субагенты отключены - включи: /agents on")
 	}
 	// Имена пользовательских агентов читаются один раз: список нужен и для
 	// разбора типа, и для проверки «а не пользовательский ли это агент», а
@@ -66,7 +66,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		}
 		if custom == nil && t == subagents.TypeCustom {
 			return tools.SpawnResult{}, fmt.Errorf(
-				"тип «%s» не найден; типы: %s — или создай своего: /agents new <имя>",
+				"тип \"%s\" не найден; типы: %s - или создай своего: /agents new <имя>",
 				args.Type, strings.Join(subagents.TypeNames(), ", "))
 		}
 	}
@@ -75,7 +75,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	// general, а не возвращаем отказ — задача-то обычно выполнима.
 	if custom == nil && args.Type == "" && t.ReadOnly() && !args.ReadOnly {
 		t = subagents.TypeGeneral
-		hint += "; роль только для чтения понижена до general — задаче нужен исполнитель"
+		hint += "; роль только для чтения понижена до general - задаче нужен исполнитель"
 	}
 	readOnly := args.ReadOnly || t.ReadOnly()
 	if custom != nil {
@@ -115,7 +115,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	if spec.Model == "" {
 		spec.Model, spec.ModelWhy = a.routeModelFor(t)
 	} else if cfg.SubRoute {
-		spec.ModelWhy = "модель указана явно — не меняю"
+		spec.ModelWhy = "модель указана явно - не меняю"
 	}
 	// Ходы урезаются по бюджету на том же пределе, что и модель: потеря хода
 	// бьёт по качеству сильнее смены модели, поэтому включается позже.
@@ -140,7 +140,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 		name = custom.Name
 	}
 	if before == 0 && !a.quiet {
-		a.ui.Println("  " + a.ui.Magenta("◆ запускаю субагента: ") + a.ui.Bold(name) +
+		a.ui.Println("  " + a.ui.Magenta("* запускаю субагента: ") + a.ui.Bold(name) +
 			a.ui.Gray("  ("+string(t)+")"))
 	}
 	// Смена модели видна сразу, а не постфактум из счёта: невидимое
@@ -148,7 +148,7 @@ func (a *app) spawnAgent(ctx context.Context, args tools.SpawnArgs) (tools.Spawn
 	if spec.Model != "" && !a.quiet {
 		line := "  " + a.ui.Gray("модель: "+spec.Model)
 		if spec.ModelWhy != "" {
-			line += a.ui.Gray("  — " + spec.ModelWhy)
+			line += a.ui.Gray("  - " + spec.ModelWhy)
 		}
 		a.ui.Println(line)
 	}
@@ -228,7 +228,7 @@ func (a *app) runSubagent(ctx context.Context, spec subagents.Spec) (subagents.O
 		MaxIters:  core.Clamp(cfg.SubMaxTurns, 1, 60),
 		OnEvent: func(kind, detail string) {
 			if kind == "tool" && !a.quiet {
-				a.ui.Println("    " + a.ui.Gray("└ "+detail))
+				a.ui.Println("    " + a.ui.Gray("`- "+detail))
 			}
 		},
 	}

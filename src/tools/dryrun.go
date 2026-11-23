@@ -25,11 +25,11 @@ func (r *Registry) hDryRun(_ context.Context, m map[string]any) (Result, error) 
 	tool := strings.TrimSpace(ArgStr(m, "tool"))
 	args := ArgStr(m, "args")
 	if tool == "" {
-		return Result{}, fmt.Errorf("укажи tool — имя инструмента для проверки")
+		return Result{}, fmt.Errorf("укажи tool - имя инструмента для проверки")
 	}
 	t := r.Get(tool)
 	if t == nil {
-		return Result{}, fmt.Errorf("инструмента «%s» нет; есть: %s", tool, strings.Join(r.Names(), ", "))
+		return Result{}, fmt.Errorf("инструмента \"%s\" нет; есть: %s", tool, strings.Join(r.Names(), ", "))
 	}
 
 	var b strings.Builder
@@ -139,9 +139,9 @@ func (r *Registry) writeDryRun(t *Tool, args string) string {
 				cnt := strings.Count(cur, old)
 				switch {
 				case cnt == 0:
-					b.WriteString("- ⚠ old_string в файле НЕ найден — реальный вызов вернёт ошибку\n")
+					b.WriteString("- ! old_string в файле НЕ найден - реальный вызов вернёт ошибку\n")
 				case cnt > 1 && !ArgBool(am, "replace_all"):
-					fmt.Fprintf(&b, "- ⚠ вхождений %d: без replace_all реальный вызов вернёт ошибку\n", cnt)
+					fmt.Fprintf(&b, "- ! вхождений %d: без replace_all реальный вызов вернёт ошибку\n", cnt)
 				default:
 					updated := strings.Replace(cur, old, newS, 1)
 					if ArgBool(am, "replace_all") {
@@ -224,7 +224,7 @@ func (r *Registry) multiBashDryRun(args string) string {
 	for i, c := range cmds {
 		mark := "  "
 		if IsDangerous(c) {
-			mark = "⚠ "
+			mark = "! "
 		}
 		fmt.Fprintf(&b, "  %s%d. %s\n", mark, i+1, core.Truncate(core.OneLine(c), 200))
 	}

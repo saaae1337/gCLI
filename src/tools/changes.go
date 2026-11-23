@@ -311,14 +311,14 @@ func uniquePaths(list []Change) int {
 // hRevertLast — откатить последнюю правку.
 func (r *Registry) hRevertLast(_ context.Context, m map[string]any) (Result, error) {
 	if r.env.ReadOnly {
-		return Result{Error: "режим «только чтение»: откат запрещён"}, nil
+		return Result{Error: "режим \"только чтение\": откат запрещён"}, nil
 	}
 	c, ok := r.change().last()
 	if !ok {
 		return Result{}, fmt.Errorf("откатывать нечего: в этом ходе не было ни одной правки через write_file / edit_file")
 	}
 	if p := ArgStr(m, "path"); p != "" && r.resolvePath(p) != c.Path {
-		return Result{}, fmt.Errorf("последняя правка — не этот файл: последним менялся %s, а указан %s", c.Rel, p)
+		return Result{}, fmt.Errorf("последняя правка - не этот файл: последним менялся %s, а указан %s", c.Rel, p)
 	}
 
 	cur, err := os.ReadFile(c.Path)
@@ -328,7 +328,7 @@ func (r *Registry) hRevertLast(_ context.Context, m map[string]any) (Result, err
 	// Откат поверх изменённого файла затрёт чужую работу. Поэтому отказываем,
 	// если содержимое уже не то, что записал агент.
 	if string(cur) != c.New {
-		return Result{}, fmt.Errorf("%s изменён после правки агента — откат затронет чужую работу, сначала разберись вручную", c.Rel)
+		return Result{}, fmt.Errorf("%s изменён после правки агента - откат затронет чужую работу, сначала разберись вручную", c.Rel)
 	}
 
 	diff := unifiedDiff(string(cur), c.Old, c.Rel)

@@ -72,10 +72,10 @@ func (p InitProfile) RootRel() string {
 func MemoryDoc(p InitProfile) string {
 	var b strings.Builder
 
-	b.WriteString("# GCLI.md — память проекта для gcli\n\n")
+	b.WriteString("# GCLI.md - память проекта для gcli\n\n")
 	b.WriteString("> Этот файл подмешивается в системный промпт агента в каждой сессии.\n")
 	b.WriteString("> Сгенерирован командой /init: часть данных взята из конфигов проекта,\n")
-	b.WriteString("> часть — то, что допишет человек. Строки вида <…> ждут заполнения.\n\n")
+	b.WriteString("> часть - то, что допишет человек. Строки вида <...> ждут заполнения.\n\n")
 
 	b.WriteString("## О проекте\n")
 	if root := p.RootRel(); root != "" && root != "." {
@@ -97,9 +97,9 @@ func MemoryDoc(p InitProfile) string {
 		if d == "." {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s/ — <что здесь>\n", filepath.ToSlash(d))
+		fmt.Fprintf(&b, "- %s/ - <что здесь>\n", filepath.ToSlash(d))
 	}
-	b.WriteString("- <важный каталог> — <что здесь>\n\n")
+	b.WriteString("- <важный каталог> - <что здесь>\n\n")
 
 	b.WriteString("## Правила\n")
 	b.WriteString("- <что агенту нельзя делать в этом проекте>\n")

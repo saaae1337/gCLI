@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestProgressPrintsCounterAndLabel — прогресс показывает счётчик «3/7» и
+// TestProgressPrintsCounterAndLabel - прогресс показывает счётчик «3/7» и
 // подпись цели. Без счётчика пользователь не отличит «идёт пятый файл» от
 // «зависло», а по одной подписи без числа непонятно, сколько ещё ждать.
 func TestProgressPrintsCounterAndLabel(t *testing.T) {
@@ -24,7 +24,7 @@ func TestProgressPrintsCounterAndLabel(t *testing.T) {
 	}
 }
 
-// TestProgressShowsTargetError — ошибка отдельной цели видна сразу, а не
+// TestProgressShowsTargetError - ошибка отдельной цели видна сразу, а не
 // только в финальной сводке. Модель про ошибку узнает из текста пачки, но
 // пользователь смотрит на экран: молча проглоченный сбой читается как «всё
 // прошло», и он начнёт доверять неверному отчёту.
@@ -68,7 +68,7 @@ func TestProgressSanitizesNewlines(t *testing.T) {
 	}
 }
 
-// TestProgressFinalIsSummaryNotCounter — финальное событие печатается
+// TestProgressFinalIsSummaryNotCounter - финальное событие печатается
 // сводкой. Счётчик «7/7» после итоговой фразы выглядел бы как начало
 // новой операции, а следующая карточка инструмента только усилила бы
 // путаницу.
@@ -84,7 +84,7 @@ func TestProgressFinalIsSummaryNotCounter(t *testing.T) {
 	}
 }
 
-// TestProgressFinalWithoutLabel — пустая сводка не печатает пустую строку.
+// TestProgressFinalWithoutLabel - пустая сводка не печатает пустую строку.
 func TestProgressFinalWithoutLabel(t *testing.T) {
 	u, buf := testUI()
 	u.Progress(ProgressUpdate{Title: "multi_read", Final: true})
@@ -93,7 +93,7 @@ func TestProgressFinalWithoutLabel(t *testing.T) {
 	}
 }
 
-// TestProgressRespectsWidth — длинная подпись цели обрезается по ширине
+// TestProgressRespectsWidth - длинная подпись цели обрезается по ширине
 // терминала. Без обрезки длинный путь или вывод команды уезжает за правый
 // край и ломает весь рельс ниже.
 func TestProgressRespectsWidth(t *testing.T) {
@@ -108,15 +108,15 @@ func TestProgressRespectsWidth(t *testing.T) {
 	if n := visibleWidth(line); n > 30 {
 		t.Errorf("строка шире терминала: %d колонок вместо 30\n%q", n, line)
 	}
-	// Метка обрезки: «…» (одна колонка) или «...». Раньше это было ровно
-	// «...», теперь обрезка идёт по колонкам, и «…» даёт на два символа
-	// больше полезного текста — поэтому проверяем сам факт метки, а не её вид.
-	if !strings.HasSuffix(line, "...") && !strings.HasSuffix(line, "…") {
+	// Метка обрезки: «...» (одна колонка) или «...». Раньше это было ровно
+	// «...», теперь обрезка идёт по колонкам, и «...» даёт на два символа
+	// больше полезного текста - поэтому проверяем сам факт метки, а не её вид.
+	if !strings.HasSuffix(line, "...") && !strings.HasSuffix(line, "...") {
 		t.Errorf("длинная подпись не помечена обрезкой:\n%q", line)
 	}
 }
 
-// TestProgressQuietPrintsNothing — в тихом режиме (например -p) прогресс не
+// TestProgressQuietPrintsNothing - в тихом режиме (например -p) прогресс не
 // должен попадать в машинный вывод: он ломает парсинг результата.
 func TestProgressQuietPrintsNothing(t *testing.T) {
 	u, buf := testUI()
@@ -127,9 +127,9 @@ func TestProgressQuietPrintsNothing(t *testing.T) {
 	}
 }
 
-// TestProgressConcurrentIsSafe — события приходят из горутий инструментов.
+// TestProgressConcurrentIsSafe - события приходят из горутий инструментов.
 // Без мьютекса строки перемешиваются и портятся цветовые последовательности;
-// -race здесь ловит именно гонку, а проверка ниже — битый вывод.
+// -race здесь ловит именно гонку, а проверка ниже - битый вывод.
 func TestProgressConcurrentIsSafe(t *testing.T) {
 	u, buf := testUI()
 	var wg sync.WaitGroup
@@ -158,7 +158,7 @@ func TestProgressConcurrentIsSafe(t *testing.T) {
 	}
 }
 
-// TestProgressMixedWithAnswer — прогресс не должен съедать строку ответа:
+// TestProgressMixedWithAnswer - прогресс не должен съедать строку ответа:
 // печать гасит ожидание, но сама остаётся отдельной строкой.
 func TestProgressMixedWithAnswer(t *testing.T) {
 	u, buf := testUI()

@@ -36,11 +36,11 @@ import (
 const (
 	schemaMultiRead = `{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"},"description":"Пути к файлам (до 20). Читаются параллельно, один вызов вместо N."},"offset":{"type":"integer","description":"Начальная строка (1-based) для всех файлов"},"limit":{"type":"integer","description":"Максимум строк на файл (по умолчанию 800; на всю пачку действует общий бюджет)"},"max_chars":{"type":"integer","description":"Общий бюджет символов на всю пачку (по умолчанию 40000)"}},"required":["paths"]}`
 
-	schemaMultiEdit = `{"type":"object","properties":{"edits":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]},"description":"Список правок (до 20). Применяются параллельно к РАЗНЫМ файлам; один файл — один элемент, иначе гонка."},"atomic":{"type":"boolean","description":"true — при первой ошибке не применять остальные (всё или ничего)"}},"required":["edits"]}`
+	schemaMultiEdit = `{"type":"object","properties":{"edits":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]},"description":"Список правок (до 20). Применяются параллельно к РАЗНЫМ файлам; один файл - один элемент, иначе гонка."},"atomic":{"type":"boolean","description":"true - при первой ошибке не применять остальные (всё или ничего)"}},"required":["edits"]}`
 
-	schemaMultiGrep = `{"type":"object","properties":{"pattern":{"type":"string","description":"Регулярное выражение (Go/RE2). Одно на все каталоги."},"paths":{"type":"array","items":{"type":"string"},"description":"Каталоги поиска (до 20). Если пусто — рабочий каталог"},"include":{"type":"string","description":"Фильтр имён файлов, например *.go"},"max_results":{"type":"integer","description":"Лимит совпадений на один каталог (по умолчанию 50)"},"max_total":{"type":"integer","description":"Общий лимит совпадений на всю пачку (по умолчанию 150)"}},"required":["pattern"]}`
+	schemaMultiGrep = `{"type":"object","properties":{"pattern":{"type":"string","description":"Регулярное выражение (Go/RE2). Одно на все каталоги."},"paths":{"type":"array","items":{"type":"string"},"description":"Каталоги поиска (до 20). Если пусто - рабочий каталог"},"include":{"type":"string","description":"Фильтр имён файлов, например *.go"},"max_results":{"type":"integer","description":"Лимит совпадений на один каталог (по умолчанию 50)"},"max_total":{"type":"integer","description":"Общий лимит совпадений на всю пачку (по умолчанию 150)"}},"required":["pattern"]}`
 
-	schemaMultiBash = `{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"},"description":"Команды (до 10). Выполняются параллельно, каждая — отдельный вызов вместо N."},"timeout_sec":{"type":"integer","description":"Таймаут на каждую команду в секундах (5-300, по умолчанию 120)"},"workdir":{"type":"string","description":"Рабочий каталог всех команд (по умолчанию текущий)"},"max_output":{"type":"integer","description":"Сколько строк вывода показать на команду (по умолчанию 200)"}},"required":["commands"]}`
+	schemaMultiBash = `{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"},"description":"Команды (до 10). Выполняются параллельно, каждая - отдельный вызов вместо N."},"timeout_sec":{"type":"integer","description":"Таймаут на каждую команду в секундах (5-300, по умолчанию 120)"},"workdir":{"type":"string","description":"Рабочий каталог всех команд (по умолчанию текущий)"},"max_output":{"type":"integer","description":"Сколько строк вывода показать на команду (по умолчанию 200)"}},"required":["commands"]}`
 )
 
 // Лимиты пакетного режима. Задуманы как защита от двух разных бед:
@@ -201,11 +201,11 @@ func (r *Registry) hMultiRead(ctx context.Context, m map[string]any) (Result, er
 		}
 	}
 	if len(paths) == 0 {
-		return Result{}, fmt.Errorf("укажи paths — массив путей (до %d)", multiMaxTargets)
+		return Result{}, fmt.Errorf("укажи paths - массив путей (до %d)", multiMaxTargets)
 	}
 	paths = dedupePaths(paths)
 	if len(paths) > multiMaxTargets {
-		return Result{}, fmt.Errorf("слишком много целей: %d, максимум %d за вызов — разбей на два вызова",
+		return Result{}, fmt.Errorf("слишком много целей: %d, максимум %d за вызов - разбей на два вызова",
 			len(paths), multiMaxTargets)
 	}
 
@@ -266,7 +266,7 @@ func renderReadBatch(items []batchItem, budget int, workDir string) (string, str
 			rest := budget - spent
 			if rest < 400 {
 				truncated++
-				fmt.Fprintf(&b, "## %s\n[не показан: исчерпан общий бюджет %d символов — прочитай этот файл отдельно]\n\n",
+				fmt.Fprintf(&b, "## %s\n[не показан: исчерпан общий бюджет %d символов - прочитай этот файл отдельно]\n\n",
 					core.RelToWD(workDir, it.label), budget)
 				continue
 			}
@@ -299,7 +299,7 @@ func clipKeepTail(s string, n int) string {
 	head := n / 2
 	tail := n - head
 	return string(rn[:head]) +
-		fmt.Sprintf("\n…[обрезано: пропущено %d символов]…\n", len(rn)-head-tail) +
+		fmt.Sprintf("\n...[обрезано: пропущено %d символов]...\n", len(rn)-head-tail) +
 		string(rn[len(rn)-tail:])
 }
 
@@ -318,10 +318,10 @@ type multiEdit struct {
 func (r *Registry) hMultiEdit(ctx context.Context, m map[string]any) (Result, error) {
 	raw, _ := m["edits"].([]any)
 	if len(raw) == 0 {
-		return Result{}, fmt.Errorf("укажи edits — массив правок (до %d)", multiMaxTargets)
+		return Result{}, fmt.Errorf("укажи edits - массив правок (до %d)", multiMaxTargets)
 	}
 	if r.env.ReadOnly {
-		return Result{Error: "режим «только чтение»: изменение файлов запрещено"}, nil
+		return Result{Error: "режим \"только чтение\": изменение файлов запрещено"}, nil
 	}
 
 	var edits []multiEdit
@@ -346,7 +346,7 @@ func (r *Registry) hMultiEdit(ctx context.Context, m map[string]any) (Result, er
 		// другую: обе отметили бы успех, а в файле осталось бы первое.
 		key := r.resolvePath(e.Path)
 		if seen[key] {
-			return Result{}, fmt.Errorf("файл %s встречается в edits дважды — объедини правки в одну: "+
+			return Result{}, fmt.Errorf("файл %s встречается в edits дважды - объедини правки в одну: "+
 				"параллельные правки одного файла конфликтуют", core.RelToWD(r.workDir, key))
 		}
 		seen[key] = true
@@ -441,7 +441,7 @@ func (r *Registry) runAtomicEdits(ctx context.Context, edits []multiEdit, par in
 			// edit_file: без него atomic:true был бы лазейкой, где
 			// модель правит файл, который ни разу не открывала.
 			if !wasRead(r.env.ReadFiles, abs) {
-				fail(fmt.Errorf("%s: файл не прочитан — сначала read_file",
+				fail(fmt.Errorf("%s: файл не прочитан - сначала read_file",
 					core.RelToWD(r.workDir, abs)))
 				return
 			}
@@ -458,7 +458,7 @@ func (r *Registry) runAtomicEdits(ctx context.Context, edits []multiEdit, par in
 				return
 			}
 			if cnt > 1 && !edits[i].All {
-				fail(fmt.Errorf("%s: вхождений %d — нужен replace_all", core.RelToWD(r.workDir, p.path), cnt))
+				fail(fmt.Errorf("%s: вхождений %d - нужен replace_all", core.RelToWD(r.workDir, p.path), cnt))
 				return
 			}
 			if edits[i].All {
@@ -550,7 +550,7 @@ func (r *Registry) runAtomicEdits(ctx context.Context, edits []multiEdit, par in
 		}
 		fmt.Fprintf(&b, "- ОТКАТ: %s (изменено обратно файлов: %d из %d)\n", reason, len(done)-len(failed), len(done))
 		if len(failed) > 0 {
-			fmt.Fprintf(&b, "- ОТКАТ НЕ ЗАВЕРШЁН, эти файлы остались изменёнными — проверь их вручную:\n")
+			fmt.Fprintf(&b, "- ОТКАТ НЕ ЗАВЕРШЁН, эти файлы остались изменёнными - проверь их вручную:\n")
 			for _, f := range failed {
 				fmt.Fprintf(&b, "  - %s\n", f)
 			}
@@ -624,12 +624,12 @@ func renderEditBatch(items []batchItem) (string, string) {
 	for _, it := range items {
 		if it.Failed() {
 			failed++
-			fmt.Fprintf(&b, "- %s — ОШИБКА: %v\n", it.label, it.err)
+			fmt.Fprintf(&b, "- %s - ОШИБКА: %v\n", it.label, it.err)
 			continue
 		}
 		if strings.TrimSpace(it.warn) != "" {
 			failed++
-			fmt.Fprintf(&b, "- %s — %s\n", it.label, it.warn)
+			fmt.Fprintf(&b, "- %s - %s\n", it.label, it.warn)
 			continue
 		}
 		ok++
@@ -697,7 +697,7 @@ func renderGrepBatch(items []batchItem, total int, workDir string) (string, stri
 	for _, it := range items {
 		if it.Failed() {
 			errDirs++
-			lines = append(lines, fmt.Sprintf("## %s — ОШИБКА: %v", it.label, it.err))
+			lines = append(lines, fmt.Sprintf("## %s - ОШИБКА: %v", it.label, it.err))
 			continue
 		}
 		dirs++
@@ -735,7 +735,7 @@ func grepLines(text string) []string {
 		if l == "" {
 			continue
 		}
-		if l == "Совпадений нет (паттерн: …)" || strings.HasPrefix(l, "Совпадений нет") {
+		if strings.HasPrefix(l, "Совпадений нет") {
 			continue
 		}
 		if strings.HasPrefix(l, "Найдено ") {
@@ -767,7 +767,7 @@ func (r *Registry) hMultiBash(ctx context.Context, m map[string]any) (Result, er
 		}
 	}
 	if len(list) == 0 {
-		return Result{}, fmt.Errorf("укажи commands — массив команд (до %d)", multiMaxCommands)
+		return Result{}, fmt.Errorf("укажи commands - массив команд (до %d)", multiMaxCommands)
 	}
 	list = dedupeStrings(list)
 	if len(list) > multiMaxCommands {
@@ -827,6 +827,19 @@ func (r *Registry) hMultiBash(ctx context.Context, m map[string]any) (Result, er
 // Ненулевой код выхода считается провалом: hBash отдаёт его текстом, и если
 // не разобрать метку, пачка рапортует «3 успешно» про две упавшие команды —
 // а это ровно тот вывод, на котором модель потом строит неверный вывод.
+// bashExitCode — код выхода команды из пачки.
+//
+// Структурное поле ExitCode главнее: раньше успех определялся только по
+// текстовой метке «[код выхода: N]» в выводе, и любая правка формата
+// вывода hBash ломала сводку пачки. Разбор текста остался фолбэком для
+// результатов без поля — например, от расширений.
+func bashExitCode(res Result) int {
+	if res.ExitCode == 0 && strings.Contains(res.Text, "[код выхода:") {
+		return exitCodeFrom(res.Text)
+	}
+	return res.ExitCode
+}
+
 func renderBashBatch(items []batchItem, maxOut int) (string, string) {
 	var b strings.Builder
 	ok, failed := 0, 0
@@ -840,7 +853,7 @@ func renderBashBatch(items []batchItem, maxOut int) (string, string) {
 		case strings.TrimSpace(it.warn) != "":
 			failed++
 			fmt.Fprintf(&b, "%s\n\n", it.warn)
-		case exitCodeFrom(it.res.Text) != 0:
+		case bashExitCode(it.res) != 0:
 			// Вывод печатаем целиком (кроме усечения): именно stderr
 			// объясняет, почему код ненулевой. Бросать его ценой одного
 			// абзаца ошибки — значит отдать модели «упало» без причины.
@@ -892,7 +905,7 @@ func printBashOut(b *strings.Builder, text string, maxOut int) {
 	}
 	out := body
 	if hidden > 0 {
-		out = append(out, fmt.Sprintf("…[ещё %d строк]", hidden))
+		out = append(out, fmt.Sprintf("...[ещё %d строк]", hidden))
 	}
 	out = append(out, meta...)
 	fmt.Fprintf(b, "%s\n\n", strings.Join(out, "\n"))

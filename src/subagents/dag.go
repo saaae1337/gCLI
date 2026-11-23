@@ -127,12 +127,12 @@ func BuildDAG(names []string, deps [][]string) (*DAG, error) {
 	for i, n := range names {
 		n = strings.TrimSpace(n)
 		if n == "" {
-			return nil, fmt.Errorf("узел %d: пустое имя — зависимости не на что адресовать", i+1)
+			return nil, fmt.Errorf("узел %d: пустое имя - зависимости не на что адресовать", i+1)
 		}
 		clean[i] = n
 		key := strings.ToLower(n)
 		if prev, dup := seen[key]; dup {
-			return nil, fmt.Errorf("имена «%s» повторяются (узлы %d и %d) — переименуй один из них",
+			return nil, fmt.Errorf("имена \"%s\" повторяются (узлы %d и %d) - переименуй один из них",
 				n, prev+1, i+1)
 		}
 		seen[key] = i
@@ -150,7 +150,7 @@ func BuildDAG(names []string, deps [][]string) (*DAG, error) {
 		for _, ref := range refs {
 			j, ok := RefIndex(ref, clean)
 			if !ok {
-				return nil, fmt.Errorf("%s: зависимость «%s» не найдена; доступно: %s (или #1..#%d)",
+				return nil, fmt.Errorf("%s: зависимость \"%s\" не найдена; доступно: %s (или #1..#%d)",
 					clean[i], strings.TrimSpace(ref), strings.Join(clean, ", "), len(clean))
 			}
 			if j == i {
@@ -201,8 +201,8 @@ func topoWaves(names []string, deps [][]int) ([][]int, error) {
 			}
 		}
 		if len(layer) == 0 {
-			return nil, fmt.Errorf("зависимости образуют цикл: %s — разорви его (задача не может ждать сама себя)",
-				strings.Join(cyclePath(names, deps, done), " → "))
+			return nil, fmt.Errorf("зависимости образуют цикл: %s - разорви его (задача не может ждать сама себя)",
+				strings.Join(cyclePath(names, deps, done), " -> "))
 		}
 		for _, i := range layer {
 			done[i] = true

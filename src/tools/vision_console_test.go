@@ -60,7 +60,7 @@ func TestScreenshotReportsConsoleErrors(t *testing.T) {
 	if os.Getenv("GCLI_NO_BROWSER_TESTS") != "" {
 		t.Skip("GCLI_NO_BROWSER_TESTS задан: браузерный тест пропущен")
 	}
-	if p, _ := findBrowser(); p == "" {
+	if p := findBrowser(); p == "" {
 		t.Skip("браузера нет")
 	}
 	dir := t.TempDir()

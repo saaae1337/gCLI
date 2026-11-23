@@ -56,7 +56,7 @@ func winptyRelaunch(machine bool) (bool, string) {
 	}
 	winpty, err := exec.LookPath("winpty")
 	if err != nil {
-		return false, "Git Bash/mintty: консольный ввод недоступен, а winpty не найден — " +
+		return false, "Git Bash/mintty: консольный ввод недоступен, а winpty не найден - " +
 			"полноэкранный интерфейс здесь не поднимется (запусти в Windows Terminal или cmd)"
 	}
 	exe, err := os.Executable()
@@ -75,7 +75,7 @@ func winptyRelaunch(machine bool) (bool, string) {
 		if ee, ok := err.(*exec.ExitError); ok {
 			os.Exit(ee.ExitCode())
 		}
-		return false, fmt.Sprintf("winpty не смог запустить gcli (%v) — продолжаю в построчном режиме", err)
+		return false, fmt.Sprintf("winpty не смог запустить gcli (%v) - продолжаю в построчном режиме", err)
 	}
 	// Наследник отработал (exit 0) — выходим с его кодом.
 	os.Exit(0)
@@ -92,14 +92,14 @@ func looksLikeMintty() bool {
 }
 
 // interactiveIntent — запуск похож на интерактивную сессию, а не на
-// машинный режим: только в нём полноэкранный интерфейс вообще мог бы быть.
-// tuiBlocked уже посчитан в main из флагов (-p, -setup, -stats, -bench,
-// -watch, -mcp-serve, -plain); здесь добавляются -json и переменные.
+// машинный режим: только в нём композер с raw-режимом вообще имеет смысл.
+// Машинные флаги (-p, -setup, -stats, -bench, -watch, -mcp-serve, -json)
+// уже посчитаны в main; здесь добавляется GCLI_ASCII.
 func interactiveIntent(machine bool) bool {
-	if machine || tuiBlocked {
+	if machine {
 		return false
 	}
-	if os.Getenv("GCLI_TUI") == "0" || os.Getenv("GCLI_ASCII") != "" {
+	if os.Getenv("GCLI_ASCII") != "" {
 		return false
 	}
 	return true

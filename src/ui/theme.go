@@ -22,7 +22,7 @@ const (
 	colorRGB                    // 24-битный truecolor
 )
 
-// ColorLevel — уровень поддержки цвета.
+// ColorLevel - уровень поддержки цвета.
 type ColorLevel int
 
 // Уровни цвета в виде констант для /status и /doctor.
@@ -46,18 +46,18 @@ func (l ColorLevel) String() string {
 	}
 }
 
-// ParseColorLevel — разобрать значение флага -color / переменной GCLI_COLOR.
+// ParseColorLevel - разобрать значение флага -color / переменной GCLI_COLOR.
 // Второй результат false означает «значение не задано, определить автоматически».
 func ParseColorLevel(s string) (ColorLevel, bool) {
 	lvl, ok := parseColorLevel(s)
 	return ColorLevel(lvl), ok
 }
 
-// parseColorLevel — внутренняя разборка уровня цвета.
+// parseColorLevel - внутренняя разборка уровня цвета.
 func parseColorLevel(s string) (colorLevel, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "auto":
-		return colorNone, false // не задано — определим сами
+		return colorNone, false // не задано - определим сами
 	case "none", "off", "no", "0":
 		return colorNone, true
 	case "16", "ansi", "basic":
@@ -70,7 +70,7 @@ func parseColorLevel(s string) (colorLevel, bool) {
 	return colorNone, false
 }
 
-// detectColorLevel — определить уровень цвета окружения.
+// detectColorLevel - определить уровень цвета окружения.
 func detectColorLevel() colorLevel {
 	if os.Getenv("NO_COLOR") != "" {
 		return colorNone
@@ -103,7 +103,7 @@ func fgRGB(r, g, b int) string {
 	return "\033[38;2;" + itoa(r) + ";" + itoa(g) + ";" + itoa(b) + "m"
 }
 
-// blendRGB — линейная интерполяция между двумя цветами.
+// blendRGB - линейная интерполяция между двумя цветами.
 func blendRGB(a, b [3]int, t float64) [3]int {
 	if t < 0 {
 		t = 0
@@ -118,7 +118,7 @@ func blendRGB(a, b [3]int, t float64) [3]int {
 	}
 }
 
-// rgbTo256 — приблизить truecolor-цвет к палитре xterm-256.
+// rgbTo256 - приблизить truecolor-цвет к палитре xterm-256.
 // Сначала считаем ошибку для куба 6×6×6 и для серой шкалы, берём лучшую.
 func rgbTo256(c [3]int) int {
 	r, g, b := c[0], c[1], c[2]
@@ -155,7 +155,7 @@ func clampInt(v, lo, hi int) int {
 	return v
 }
 
-// nearestBasic — ближайший из 8 базовых ANSI-цветов.
+// nearestBasic - ближайший из 8 базовых ANSI-цветов.
 func nearestBasic(c [3]int) string {
 	bases := [][3]int{
 		{0, 0, 0}, {205, 49, 49}, {13, 188, 121}, {229, 229, 16},
@@ -173,7 +173,7 @@ func nearestBasic(c [3]int) string {
 
 const cBlack = "\033[30m"
 
-// hexToRGB — разобрать "#rrggbb" или "rrggbb".
+// hexToRGB - разобрать "#rrggbb" или "rrggbb".
 func hexToRGB(h string) ([3]int, bool) {
 	h = strings.TrimPrefix(strings.TrimSpace(h), "#")
 	if len(h) == 3 {
@@ -195,7 +195,7 @@ func hexToRGB(h string) ([3]int, bool) {
 
 // ---------- Цветовая тема в truecolor ----------
 
-// rgbTheme — семантические цвета темы в 24-битном виде.
+// rgbTheme - семантические цвета темы в 24-битном виде.
 type rgbTheme struct {
 	Accent, Accent2         [3]int
 	OK, Warn, Err, Info     [3]int
@@ -203,13 +203,13 @@ type rgbTheme struct {
 	Added, Removed, Hunk    [3]int
 }
 
-// rgbThemeFor — цвета «УГЛЯ» в truecolor. Параметр оставлен для
+// rgbThemeFor - цвета темы в truecolor. Параметр оставлен для
 // совместимости сигнатур; стиль один.
 func rgbThemeFor(theme string) rgbTheme {
-	return rgbEmber
+	return rgbNight
 }
 
-// codeFor — код ANSI для truecolor-цвета на текущем уровне.
+// codeFor - код ANSI для truecolor-цвета на текущем уровне.
 func codeFor(c [3]int, grade colorLevel) string {
 	switch grade {
 	case colorRGB:
@@ -221,7 +221,7 @@ func codeFor(c [3]int, grade colorLevel) string {
 	}
 }
 
-// upgradePalette — обогатить 16-цветную палитру кодами 256/rgb.
+// upgradePalette - обогатить 16-цветную палитру кодами 256/rgb.
 func upgradePalette(base Palette, theme string, grade colorLevel) Palette {
 	if grade < color256 {
 		return base
@@ -245,13 +245,13 @@ func upgradePalette(base Palette, theme string, grade colorLevel) Palette {
 
 // ---------- Пользовательские цвета темы ----------
 
-// ThemeColors — опциональные цвета темы (hex) из config.json.
+// ThemeColors - опциональные цвета темы (hex) из config.json.
 // Пустая строка означает «взять цвет темы по умолчанию».
 type ThemeColors struct {
 	Accent, Accent2, OK, Warn, Err, Muted, Text, Code, Link string
 }
 
-// applyThemeColors — наложить пользовательские цвета на палитру.
+// applyThemeColors - наложить пользовательские цвета на палитру.
 func applyThemeColors(p *Palette, tc ThemeColors, grade colorLevel) {
 	set := func(dst *string, hex string) {
 		if hex == "" {
@@ -274,33 +274,7 @@ func applyThemeColors(p *Palette, tc ThemeColors, grade colorLevel) {
 	set(&p.Link, tc.Link)
 }
 
-// ---------- Градиенты ----------
-
-// Gradient — раскрасить строку градиентом от одного цвета к другому.
-func (u *UI) Gradient(s string, from, to [3]int) string {
-	if s == "" || u.quiet || u.grade < color256 {
-		return s
-	}
-	r := []rune(s)
-	var b strings.Builder
-	b.Grow(len(s) * 2)
-	for i, ch := range r {
-		if ch == ' ' {
-			b.WriteRune(' ')
-			continue
-		}
-		t := 0.0
-		if len(r) > 1 {
-			t = float64(i) / float64(len(r)-1)
-		}
-		b.WriteString(codeFor(blendRGB(from, to, t), u.grade))
-		b.WriteRune(ch)
-	}
-	b.WriteString(cReset)
-	return b.String()
-}
-
-// ApplyHexes — применить пользовательские hex-цвета к теме «на лету».
+// ApplyHexes - применить пользовательские hex-цвета к теме «на лету».
 func (u *UI) ApplyHexes(tc ThemeColors) {
 	if u.grade == colorNone {
 		return

@@ -16,8 +16,8 @@ import (
 // bgStdin — stdinReader с одной строкой в буфере: после правдоподобной
 // кражи её не должно быть, тест проверяет это повторным Scan.
 func bgStdin(line string) *stdinReader {
-	s := &stdinReader{lines: make(chan string, 1), keys: make(chan byte, 1)}
-	s.lines <- line
+	s := &stdinReader{events: make(chan termEvent, 8)}
+	s.events <- termEvent{kind: evLine, line: line}
 	return s
 }
 
@@ -47,7 +47,7 @@ func TestBackgroundConfirmDeniesWithoutStdin(t *testing.T) {
 	}
 	// Строка не украдена: «y» дождался настоящего читателя.
 	if !a.stdin.Scan() || a.stdin.Text() != "y" {
-		t.Error("stdin-строка потеряна — фоновый ход её украл")
+		t.Error("stdin-строка потеряна - фоновый ход её украл")
 	}
 }
 
@@ -59,14 +59,14 @@ func TestInteractiveConfirmStillAsks(t *testing.T) {
 	setBgTurn(a, false) // интерактивный ход (REPL/TUI)
 
 	if a.confirm(tools.ConfirmReq{Kind: tools.ConfirmExec, Detail: "ls"}) {
-		t.Fatal("ответ «n» должен означать отказ")
+		t.Fatal("ответ \"n\" должен означать отказ")
 	}
 	if strings.Contains(out(buf), "отклонено") {
 		t.Error("интерактивному ходу отказ фонового хода не полагается")
 	}
 	select {
-	case l := <-a.stdin.lines:
-		t.Errorf("строка %q не потреблена вопросом — осталась в канале", l)
+	case ev := <-a.stdin.events:
+		t.Errorf("событие %+v не потреблено вопросом - осталось в канале", ev)
 	default:
 		// Прочитано readAns — правильно.
 	}
@@ -80,7 +80,7 @@ func TestInteractiveConfirmYesGrants(t *testing.T) {
 	setBgTurn(a, false)
 
 	if !a.confirm(tools.ConfirmReq{Kind: tools.ConfirmExec, Detail: "ls"}) {
-		t.Fatal("ответ «y» должен разрешить команду")
+		t.Fatal("ответ \"y\" должен разрешить команду")
 	}
 }
 
@@ -119,7 +119,7 @@ func TestBackgroundAskUserNoStdin(t *testing.T) {
 		t.Errorf("нужно объяснить отсутствие ответа, вывод:\n%s", out(buf))
 	}
 	if !a.stdin.Scan() || a.stdin.Text() != "да" {
-		t.Error("stdin-строка потеряна — ask_user её украл")
+		t.Error("stdin-строка потеряна - ask_user её украл")
 	}
 }
 
@@ -151,6 +151,6 @@ func TestBackgroundTrustCodeDenied(t *testing.T) {
 		t.Fatal("фоновой ход не может доверять чужой код")
 	}
 	if !a.stdin.Scan() || a.stdin.Text() != "y" {
-		t.Error("stdin-строка потеряна — askTrustCode её украл")
+		t.Error("stdin-строка потеряна - askTrustCode её украл")
 	}
 }

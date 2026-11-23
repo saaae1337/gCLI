@@ -63,16 +63,16 @@ func Presets() []*Provider {
 			ID: "zai", Label: "Z.ai GLM", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4"),
 			KeyEnvs:      []string{"ZAI_API_KEY", "Z_AI_API_KEY", "ZHIPUAI_API_KEY", "GLM_API_KEY"},
-			Models:       []string{"glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4.5-flash"},
+			Models:       []string{"glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-4.7-flash"},
 			ContextLimit: 200_000,
 		},
 		{
-			ID: "openrouter", Label: "OpenRouter · 300+ моделей", Kind: ProtoOpenAI,
+			ID: "openrouter", Label: "OpenRouter | 300+ моделей", Kind: ProtoOpenAI,
 			BaseURL: EnvOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 			KeyEnvs: []string{"OPENROUTER_API_KEY"},
 			Models: []string{
-				"z-ai/glm-4.6", "anthropic/claude-sonnet-4.5", "openai/gpt-4o",
-				"google/gemini-2.0-flash-001", "deepseek/deepseek-chat", "qwen/qwen3-coder",
+				"z-ai/glm-5.3-flash", "anthropic/claude-sonnet-5.5", "openai/gpt-6-luna",
+				"deepseek/deepseek-v4.1-flash", "google/gemini-3.8-flash", "qwen/qwen3-coder-next",
 			},
 			ContextLimit: 128_000,
 			ExtraHeaders: map[string]string{
@@ -84,25 +84,39 @@ func Presets() []*Provider {
 			ID: "openai", Label: "OpenAI", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 			KeyEnvs:      []string{"OPENAI_API_KEY"},
-			Models:       []string{"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"},
+			Models:       []string{"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"},
 			ContextLimit: 128_000,
 		},
 		{
 			ID: "anthropic", Label: "Anthropic Claude", Kind: ProtoAnthropic,
 			BaseURL:      EnvOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
 			KeyEnvs:      []string{"ANTHROPIC_API_KEY"},
-			Models:       []string{"claude-sonnet-4-5", "claude-opus-4-1", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"},
+			Models:       []string{"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-haiku-5-5"},
 			ContextLimit: 200_000,
+		},
+		{
+			// Google Gemini через OpenAI-совместимый слой
+			// generativelanguage.googleapis.com/openai: тот же протокол
+			// openai, свой ключ и каталог моделей — отдельный пресет
+			// вместо «только через OpenRouter».
+			ID: "gemini", Label: "Google Gemini", Kind: ProtoOpenAI,
+			BaseURL: EnvOr("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/openai/v1"),
+			KeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+			Models:  []string{"gemini-3.8-pro", "gemini-3.8-flash", "gemini-3.5-flash"},
+			// Окна gemini-3.x (1M) покрываются префиксным правилом
+			// в ctxlimit.go; здесь задаётся нижняя граница для моделей
+			// вне правила.
+			ContextLimit: 1_000_000,
 		},
 		{
 			ID: "deepseek", Label: "DeepSeek", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 			KeyEnvs:      []string{"DEEPSEEK_API_KEY"},
-			Models:       []string{"deepseek-chat", "deepseek-reasoner"},
-			ContextLimit: 128_000,
+			Models:       []string{"deepseek-flash", "deepseek-v4-pro"},
+			ContextLimit: 1_000_000,
 		},
 		{
-			ID: "groq", Label: "Groq · быстрый инференс", Kind: ProtoOpenAI,
+			ID: "groq", Label: "Groq | быстрый инференс", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
 			KeyEnvs:      []string{"GROQ_API_KEY"},
 			Models:       []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b"},
@@ -119,7 +133,7 @@ func Presets() []*Provider {
 			ID: "xai", Label: "xAI Grok", Kind: ProtoOpenAI,
 			BaseURL:      EnvOr("XAI_BASE_URL", "https://api.x.ai/v1"),
 			KeyEnvs:      []string{"XAI_API_KEY", "GROK_API_KEY"},
-			Models:       []string{"grok-4", "grok-3", "grok-3-mini"},
+			Models:       []string{"grok-4.7", "grok-4.6", "grok-4.5"},
 			ContextLimit: 128_000,
 		},
 		{
@@ -229,11 +243,17 @@ func Build(cfg core.Config) *Registry {
 			if kind != ProtoAnthropic {
 				kind = ProtoOpenAI
 			}
-			p = &Provider{ID: id, Label: id + " · свой", Kind: kind, Custom: true}
+			p = &Provider{ID: id, Label: id + " | свой", Kind: kind, Custom: true}
 			r.All = append(r.All, p)
 		}
 		if pc.BaseURL != "" {
 			p.BaseURL = pc.BaseURL
+		}
+		// Окно контекста своего endpoint-а: /provider add ... ctx=N.
+		// Пресеты не переопределяются пустым значением — ноль означает
+		// «в конфиге не задано», а не «окна нет».
+		if pc.ContextLimit > 0 {
+			p.ContextLimit = pc.ContextLimit
 		}
 		if pc.APIKey != "" {
 			p.Key = pc.APIKey
@@ -437,9 +457,9 @@ func (p *Provider) Ready() bool { return p != nil && p.HasKey() && p.BaseURL != 
 func MaskKey(k string) string {
 	r := []rune(k)
 	if len(r) <= 12 {
-		return strings.Repeat("•", len(r))
+		return strings.Repeat("*", len(r))
 	}
-	return string(r[:5]) + "…" + string(r[len(r)-4:])
+	return string(r[:5]) + "..." + string(r[len(r)-4:])
 }
 
 // CleanKey — нормализовать вставленный ключ: убрать пробелы, кавычки, "Bearer ".

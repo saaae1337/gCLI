@@ -12,7 +12,7 @@ func TestCronNextInterval(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		d := cronNextInterval()
 		if d < 15*time.Minute || d > 20*time.Minute {
-			t.Fatalf("интервал %v вне диапазона 15–20 мин", d)
+			t.Fatalf("интервал %v вне диапазона 15-20 мин", d)
 		}
 	}
 }
