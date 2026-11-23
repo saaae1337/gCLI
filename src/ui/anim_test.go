@@ -230,7 +230,7 @@ func TestRevealLinesNoDoubleAnimation(t *testing.T) {
 }
 
 // TestRailEndChainStopsWaitLine - закрывающая строка рельса гасит строку
-// ожидания (кот «working...») и печатается чисто: без управления курсором
+// ожидания («working...») и печатается чисто: без управления курсором
 // в обычном режиме и без хвоста ожидания после себя.
 func TestRailEndChainStopsWaitLine(t *testing.T) {
 	u, buf := animUI(80)

@@ -344,31 +344,7 @@ func toolKind(name string) string {
 	return "exec"
 }
 
-// kindGlyph - иконка по категории.
-func (u *UI) kindGlyph(kind string) (glyph, color string) {
-	switch kind {
-	case "read":
-		return "r", u.pal.Info
-	case "write":
-		return "w", u.pal.Warn
-	case "exec":
-		return "$", u.pal.Accent
-	case "net":
-		return "~", u.pal.Accent2
-	case "plan":
-		return "=", u.pal.OK
-	case "think":
-		return "?", u.pal.Muted
-	case "agent":
-		return "*", u.pal.Accent2
-	case "mcp":
-		return "+", u.pal.Info
-	default:
-		return "*", u.pal.Accent
-	}
-}
-
-// ToolStart - заголовок карточки инструмента (печатается до выполнения).
+// ToolStart - заголовок вызова инструмента (печатается до выполнения).
 func (u *UI) ToolStart(tc ToolCall) {
 	if sink := u.sink(); sink != nil {
 		sink.ToolStart(tc)

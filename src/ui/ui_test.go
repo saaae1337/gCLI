@@ -23,15 +23,15 @@ func testUI() (*UI, *strings.Builder) {
 
 func TestGlyphsFor(t *testing.T) {
 	uni := GlyphsFor("ember", true)
-	if uni.TL != "|" {
-		t.Errorf("ожидались ASCII-глифы «УГЛЯ», получено %q", uni.TL)
+	if uni.TL != "╭" || uni.Mark != "✻" {
+		t.Errorf("ожидались глифы Claude Code, получено TL=%q mark=%q", uni.TL, uni.Mark)
 	}
 	asc := GlyphsFor("ember", false)
-	if asc.TL != "|" {
+	if asc.TL != "+" {
 		t.Errorf("ожидались ASCII-глифы, получено %q", asc.TL)
 	}
-	if old := GlyphsFor("orbit", true); old.Mark != "*" {
-		t.Errorf("старые имена тем сводятся к «УГЛЮ», получено %q", old.Mark)
+	if old := GlyphsFor("orbit", true); old.Mark != "✻" {
+		t.Errorf("старые имена тем сводятся к канону, получено %q", old.Mark)
 	}
 }
 
@@ -40,7 +40,7 @@ func TestBlockRendersFlat(t *testing.T) {
 	u.Block("строка один\nстрока два", BlockOpts{Title: "Тест", Accent: true})
 	out := buf.String()
 
-	for _, want := range []string{"*", "Тест", "строка один", "строка два"} {
+	for _, want := range []string{"⏺", "Тест", "строка один", "строка два"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("в выводе нет %q:\n%s", want, out)
 		}
@@ -86,8 +86,8 @@ func TestTableAligns(t *testing.T) {
 			t.Errorf("в таблице нет %q", want)
 		}
 	}
-	// Колонки разделяет точка - стиль «УГОЛЬ».
-	if !strings.Contains(out, " . ") {
+	// Колонки разделяет маркер события - как в Claude Code.
+	if !strings.Contains(StripANSI(out), " ⏺ ") {
 		t.Error("в таблице нет разделителей колонок")
 	}
 }
@@ -230,14 +230,15 @@ func TestRenderHeading(t *testing.T) {
 	if !strings.Contains(got, "Заголовок") {
 		t.Errorf("заголовок потерян: %q", got)
 	}
-	if !strings.Contains(got, "-") {
-		t.Errorf("подчёркивание заголовка отсутствует: %q", got)
+	// Заголовок - просто жирный текст, без линеек и маркеров.
+	if strings.Contains(got, "---") || strings.Contains(got, "⏺") {
+		t.Errorf("заголовок разукрашен, как в Claude Code быть не должно: %q", got)
 	}
 }
 
 func TestRenderList(t *testing.T) {
 	u, _ := testUI()
-	if got := u.RenderLine("- пункт"); !strings.Contains(got, "пункт") || !strings.Contains(got, "-") {
+	if got := u.RenderLine("- пункт"); !strings.Contains(got, "пункт") || !strings.Contains(got, "•") {
 		t.Errorf("маркированный список: %q", got)
 	}
 	if got := u.RenderLine("1. пункт"); !strings.Contains(got, "1.") {
@@ -255,9 +256,9 @@ func TestRenderTask(t *testing.T) {
 
 func TestRenderFence(t *testing.T) {
 	u, _ := testUI()
-	open := u.RenderLine("```go")
-	if !strings.Contains(open, "go") {
-		t.Errorf("язык не показан: %q", open)
+	// Ограды скрыты: код отличает приглушённый цвет строк.
+	if open := u.RenderLine("```go"); open != "" {
+		t.Errorf("ограда не скрыта: %q", open)
 	}
 }
 
@@ -296,7 +297,7 @@ func TestPadRightWithANSI(t *testing.T) {
 func TestBar(t *testing.T) {
 	u, _ := testUI()
 	half := u.Bar(5, 10, 10)
-	if !strings.Contains(half, "#") {
+	if !strings.Contains(half, "█") {
 		t.Errorf("нет заполненной части: %q", half)
 	}
 	full := u.Bar(10, 10, 10)
@@ -455,11 +456,11 @@ func TestInlineLongUnicodeURLStaysValid(t *testing.T) {
 
 // Заголовок с CJK должен тянуть линию на ширину текста в колонках:
 // «日本語» - это 6 колонок, а не 3 руны.
-func TestHeadingCJKRuleWidth(t *testing.T) {
+func TestHeadingCJKWidth(t *testing.T) {
 	u, _ := testUI()
 	got := StripANSI(u.RenderLine("## 日本語"))
-	if n := strings.Count(got, "-"); n != 6 {
-		t.Errorf("линия заголовка %d колонок вместо 6: %q", n, got)
+	if !strings.Contains(got, "日本語") {
+		t.Errorf("заголовок потерян: %q", got)
 	}
 }
 
@@ -471,7 +472,7 @@ func TestTitleCJKFillsWidth(t *testing.T) {
 	u.Title("日本語")
 
 	for _, line := range strings.Split(buf.String(), "\n") {
-		if strings.Contains(line, "*") {
+		if strings.Contains(line, "日本語") {
 			if got := cellWidth(line); got != 40 {
 				t.Errorf("заголовок шириной %d колонок вместо 40: %q", got, line)
 			}
@@ -492,7 +493,7 @@ func TestBlockCJKWidth(t *testing.T) {
 		if w := cellWidth(line); w > 40 {
 			t.Errorf("строка блока шире 40 колонок (%d): %q", w, line)
 		}
-		if strings.Contains(line, "*") {
+		if strings.Contains(line, "⏺") {
 			foundHead = true
 			if w := cellWidth(line); w != 40 {
 				t.Errorf("шапка блока шириной %d колонок вместо 40: %q", w, line)
@@ -581,22 +582,5 @@ func TestBarNegativeDone(t *testing.T) {
 	}
 	if w := cellWidth(got); w != 10 {
 		t.Errorf("ширина полосы %d вместо 10: %q", w, got)
-	}
-}
-
-func TestStatusLine(t *testing.T) {
-	u, buf := testUI()
-	u.StatusLine([]StatusItem{
-		{Text: "модель", Kind: StatusMuted},
-		{Text: "autopilot: all", Kind: StatusErr},
-		{Text: "", Kind: StatusMuted},
-	})
-	out := StripANSI(buf.String())
-	if !strings.Contains(out, "модель") || !strings.Contains(out, "autopilot: all") {
-		t.Errorf("строка статуса неполна:\n%s", out)
-	}
-	// Пустые элементы пропускаются, разделитель не двоится.
-	if strings.Contains(out, "|  |") {
-		t.Errorf("пустой элемент оставил лишний разделитель:\n%s", out)
 	}
 }

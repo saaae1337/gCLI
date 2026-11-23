@@ -33,7 +33,6 @@ import (
 	"gcli/providers"
 	"gcli/subagents"
 	"gcli/tools"
-	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -55,13 +54,6 @@ type app struct {
 	store   *core.Store
 	workDir string
 	stdin   *stdinReader
-
-	// tui - полноэкранный интерфейс. nil в обычном построчном режиме
-	// (пайп, CI, -p, -json, -ascii, -plain).
-	tui *tui.App
-	// tuiWanted - интерфейс выбран при старте; создаётся после загрузки
-	// сессии и модели (имя модели нужно шапке).
-	tuiWanted bool
 
 	// lsp - хаб language servers: один на процесс, переживает пересборки
 	// реестра. Создаётся лениво по первому .go/.ts/... файлу; Shutdown - перед
@@ -115,8 +107,8 @@ type app struct {
 	notes           []string
 	quiet           bool
 
-	// lastTurnFailed - предыдущий ход завершился ошибкой: на второй
-	// ошибке подряд кот не хандрит, а сердится.
+	// lastTurnFailed - предыдущий ход завершился ошибкой (учитывается при
+	// формировании подсказок после двух ошибок подряд).
 	lastTurnFailed bool
 
 	// lastAgent - агент текущего хода. Нужен инструменту self_status,
@@ -258,10 +250,9 @@ type app struct {
 	// reasonHinted - подсказка про Ctrl+O уже показана в этом ходу.
 	reasonHinted bool
 	// reasonPast - между ходами на экране уже напечатан блок размышлений
-	// последнего хода (showLastReason). По нему REPL рисует приглашение
-	// усадкой, как после команды или хода, иначе кот со строкой состояния
-	// нарисовался бы поверх мыслей, а анимация заикалась бы на только что
-	// дописанных строках.
+	// последнего хода (showLastReason). По нему REPL понимает, что регион
+	// ввода рисовать нельзя - иначе он нарисовался бы поверх мыслей, а
+	// анимация заикалась бы на только что дописанных строках.
 	reasonPast bool
 	// reasonPrintedLen - сколько байт буфера уже показано на экране.
 	// Нужно, чтобы задним числом не напечатать один блок дважды.
@@ -331,7 +322,7 @@ func (a *app) setProvider(p *providers.Provider) {
 }
 
 // reasonHint - подсказка на строке ожидания.
-const reasonHint = "(Ctrl+O - показать размышления)"
+const reasonHint = "(ctrl+o thinking)"
 
 func main() {
 	flag.Usage = usage
@@ -353,7 +344,6 @@ func main() {
 		flagColor        = flag.String("color", "", "уровень цвета: auto | 16 | 256 | truecolor | none")
 		flagNoColor      = flag.Bool("no-color", false, "без цвета")
 		flagUnicode      = flag.Bool("ascii", false, "только ASCII-псевдографика")
-		flagPlain        = flag.Bool("plain", false, "обычный построчный интерфейс (без полноэкранного TUI)")
 		flagCompact      = flag.Bool("compact", false, "компактный вывод")
 		flagSubagent     = flag.String("subagent", "", "разрешить субагентов: on | off")
 		flagMission      = flag.String("mission", "", "автономный прогон: long-time | extra-long-time | overnight (или путь к mission.json)")
@@ -368,12 +358,6 @@ func main() {
 		flagCronInterval = flag.Duration("cron-interval", 0, "интервал между автономными итерациями: 15m-20m (по умолчанию 15-20 мин со случайным сдвигом)")
 	)
 	flag.Parse()
-
-	// Режимы, в которых полноэкранный интерфейс противопоказан: машинный
-	// вывод, однократный запуск, мастер и печать статистики. Флаг -plain
-	// и GCLI_TUI=0 отключают его вручную.
-	tuiBlocked = *flagPrompt != "" || *flagSetup || *flagStats || *flagBench != "" ||
-		*flagWatch != "" || *flagMCPServe || *flagPlain
 
 	// Консоль готовим до первого же вывода, а не внутри setupUI: до неё
 	// уже печатаются -v и -help, где тоже есть "|". На Windows консоль
@@ -400,11 +384,8 @@ func main() {
 	a.store.Ensure()
 
 	a.setupUI(*flagNoColor, *flagUnicode, *flagCompact, *flagJSON, *flagColor)
-	// Интерфейс целиком ASCII, поэтому полноэкранный режим доступен на
-	// любом терминале с VT - раньше он требовал поддержку юникода.
-	a.tuiWanted = a.tuiReady(isTerminal(), true, *flagJSON)
 	// mintty (Git Bash) не даёт нативной программе консольных хэндлов:
-	// stdin/stdout приходят пайпами, и полноэкранный интерфейс там
+	// stdin/stdout приходят пайпами, и raw-режим там
 	// недостижим в принципе. Перезапускаем себя под winpty - он входит
 	// в Git for Windows и решает это ровно так же, как у fzf.
 	if relaunched, note := winptyRelaunch(*flagJSON); relaunched {
@@ -477,10 +458,7 @@ func main() {
 	// -bench и аварийные ветки иначе оставляли бы сирот.
 	defer a.shutdown()
 
-	a.stdin = nil
-	if !a.tuiWanted {
-		a.stdin = newStdin()
-	}
+	a.stdin = newStdin()
 
 	// Сессия.
 	a.sess = a.loadInitialSession(*flagResume, *flagContinue)
@@ -527,12 +505,6 @@ func main() {
 	}
 	a.sess.Provider = a.prov.ID
 	a.sess.Model = a.model
-	// Полноэкранный интерфейс создаётся здесь: шапке нужны модель,
-	// провайдер и номер сессии. Если он не поднялся, ввод остаётся за
-	// обычным stdinReader.
-	if !a.startTUI() && a.stdin == nil {
-		a.stdin = newStdin()
-	}
 	defer a.saveSession()
 
 	// Задание автономного прогона: файл проекта, поверх - флаги.
@@ -589,7 +561,7 @@ func main() {
 		return
 	}
 
-	if !a.quiet && a.tuiApp() == nil {
+	if !a.quiet {
 		a.banner()
 	}
 	if *flagSetup {
@@ -601,25 +573,14 @@ func main() {
 		a.printStats(a.repo.ListSessionInfos(), 30)
 		return
 	}
-	// Полноэкранный цикл: ввод, сырые клавиши и подтверждения целиком его.
-	if a.tuiApp() != nil {
-		a.replTUI()
-		return
-	}
 	// Raw-режим stdin - ровно на время REPL. Без него Ctrl+O не работал:
 	// canonical-режим терминала перехватывал байт (VDISCARD при IEXTEN) и
-	// до watchKeys он не доходил, а Ctrl+S замораживал вывод (IXON).
+	// горячие клавиши до приложения не доходили, а Ctrl+S замораживал вывод (IXON).
 	// Не терминал (пайп, CI) - enableRaw сам не включится.
 	a.stdin.enableRaw()
 	defer a.stdin.disableRaw()
-	// Ctrl+O читаем ровно один раз на весь сеанс (см. watchKeys): и во
-	// время хода, и между ходами. Иначе мысли последнего ответа уехали
-	// бы вверх по экрану навсегда, а на границе ходов нажатие
-	// обрабатывалось бы двумя конкурирующими читателями. В машинных
-	// режимах (-p, -bench) клавиатура не нужна - читатель там
-	// только висел бы лишней горутиной.
-	keys := a.startWatcher(a.ctrlO)
-	defer keys.stopWatcher()
+	// Клавиши (Ctrl+O, Esc, стрелки) обрабатывает цикл композера -
+	// единственного потребителя событий stdin (см. composer.go).
 	a.repl()
 }
 
@@ -711,12 +672,10 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 	tty := isTerminal()
 	// Решение принято один раз, до первого вывода: ascii - явное требование
 	// пользователя, а unicodeOK к этому моменту уже известно.
-	// Интерфейс печатает только ASCII: рамки "+ - |", статусы "ok x !".
-	// Декоративные юникод-символы (* ✓ ❯ ╭ ⠋ и т.п.) не используются
-	// вовсе - они ломаются на терминалах, которые их не рисуют
-	// (классическая консоль Windows 10/11). Флаг -ascii остался
-	// совместимости ради и больше ничего не меняет.
-	useUnicode := false
+	// Юникод-глифы Claude Code: терминал с UTF-8 (или переведённая в UTF-8
+	// консоль Windows). Без него - чистый ASCII: рамки "+ - |", маркер "*",
+	// зубец ":" - тот же вид в классической консоли Windows 10/11.
+	useUnicode := unicodeOK && !ascii
 	// Единое решение для строк вне UI-рендерера: отчёты инструментов и
 	// субагентов берут глифы через ui.Glyph, а не печатают юникод напрямую.
 	ui.SetUnicodeOutput(useUnicode)
@@ -749,7 +708,7 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 	})
 
 	a.ui = ui.New(ui.Options{
-		Theme:      "ember", // стиль один - "УГОЛЬ"
+		Theme:      "ember", // стиль один - коралл Claude Code
 		Unicode:    useUnicode,
 		Color:      color,
 		Animations: animations,
@@ -757,13 +716,10 @@ func (a *app) setupUI(noColor, ascii, compact, machine bool, colorMode string) {
 		ShowTime:   a.cfgShowTime(),
 		Width:      width,
 		Grade:      grade,
-		// Блоки и таблицы - в скруглённых рамках: свой интерфейс вместо
-		// потока текста.
-		Panels: true,
+		// Панели в рамках - только там, где они несут данные (таблицы
+		// команд, /usage). Поток ответа живёт без рамок, как в Claude Code.
+		Panels: false,
 	})
-	// Полноэкранный интерфейс включается только для интерактивного
-	// терминала с юникодом и не в машинных режимах. Решение принимает
-	// вызывающий: флаги режимов живут в main.
 }
 
 func (a *app) cfgShowTime() bool {
@@ -1064,18 +1020,9 @@ func (a *app) installSignalHandler() {
 			a.mu.Lock()
 			c := a.cancel
 			running := a.running
-			tuiApp := a.tui
 			a.mu.Unlock()
 			if running && c != nil {
 				c()
-				continue
-			}
-			// В полноэкранном режиме терминал возвращает не os.Exit, а
-			// цикл интерфейса: он снимет raw-режим и выйдет из
-			// альтернативного экрана. Иначе Ctrl+C (присланный извне)
-			// оставил бы консоль в "слепом" состоянии.
-			if tuiApp != nil {
-				tuiApp.Quit()
 				continue
 			}
 			if !a.quiet {
@@ -1358,8 +1305,8 @@ func (a *app) showLastReason() {
 	text := a.reasonLast
 	open := a.reasonOpen
 	a.reasonShown = true
-	// На экране появился новый блок: REPL обязан перерисовать приглашение
-	// усадкой, иначе кот со строкой состояния ляжет прямо на мысли. Пустой
+	// На экране появился новый блок: REPL обязан учесть его при перерисовке
+	// региона ввода, иначе регион ляжет прямо на мысли. Пустой
 	// блок и честное "пока нет" такой перерисовки не требуют.
 	a.reasonPast = open || strings.TrimSpace(text) != ""
 	a.reasonMu.Unlock()
@@ -1446,62 +1393,9 @@ func (a *app) ctrlO() {
 	a.showLastReason()
 }
 
-// watchKeys - читать горячие клавиши, пока жив done, и звать onCtrlO.
-//
-// Ровно один читатель keys на всё время работы: канал единственный, и два
-// конкурирующих читателя обработали бы одно нажатие дважды либо потеряли бы
-// его на границе ходов. Ввод строк не трогаем - его читает repl (см.
-// stdinReader), поэтому Ctrl+O не может доесть первую букву запроса.
-func (a *app) watchKeys(done <-chan struct{}, onCtrlO func()) {
-	if a.stdin == nil || onCtrlO == nil {
-		return
-	}
-	for {
-		select {
-		case <-done:
-			return
-		case b, ok := <-a.stdin.Keys():
-			if !ok {
-				return
-			}
-			if b == ctrlO {
-				onCtrlO()
-			}
-		}
-	}
-}
-
-// keyWatcher - горутина чтения горячих клавиш и её остановка.
-//
-// stop закрывают, чтобы прекратить чтение, done ждёт, чтобы убедиться, что
-// читатель действительно вышел.
-type keyWatcher struct {
-	stop chan struct{}
-	done chan struct{}
-	once sync.Once
-}
-
-// startWatcher - запустить читателя клавиш с заданной реакцией на Ctrl+O.
-func (a *app) startWatcher(onCtrlO func()) *keyWatcher {
-	w := &keyWatcher{stop: make(chan struct{}), done: make(chan struct{})}
-	go func() {
-		defer close(w.done)
-		a.watchKeys(w.stop, onCtrlO)
-	}()
-	return w
-}
-
-// stopWatcher - остановить читателя клавиш и дождаться его конца.
-//
-// Идемпотентна: её зовут и defer в main, и тесты по кругу, а второе
-// закрытие того же канала - паника.
-func (w *keyWatcher) stopWatcher() {
-	if w == nil {
-		return
-	}
-	w.once.Do(func() { close(w.stop) })
-	<-w.done
-}
+// Горячие клавиши (Ctrl+O, Esc) обрабатывает цикл композера - единственного
+// потребителя событий stdin. Отдельный watcher клавиш больше не нужен:
+// канала Keys() у stdinReader больше нет.
 
 // turnActive - идёт ли сейчас ход. Команды, подменяющие сессию (/fork,
 // /resume, /clear), проверяют это до Lock в sessSwap: предупреждение
@@ -1605,16 +1499,10 @@ func (a *app) turnLocked(text string, interactive bool) error {
 	// Строка ожидания: слово с переливом под эхом задачи. Первый delta
 	// гасит строку, конец хода - тоже.
 	if !a.quiet {
-		word := "думаю..."
-		if a.cfgPlanMode() {
-			word = "планирую..."
-		}
-		// В полноэкранном режиме запрос уже стоит в ленте: печатать эхо
-		// второй раз - дублировать его.
-		if a.tuiApp() == nil {
-			a.ui.RequestEcho(text)
-		}
-		a.ui.ShimmerStart(word)
+		// Эхо запроса: как в Claude Code, запрос остаётся в стенке вывода,
+		// отделяя ходы друг от друга. Строка ожидания - «✻ Pondering…».
+		a.ui.UserEcho(text)
+		a.ui.ShimmerStart("")
 	}
 	// Ctrl+O не держит своего читателя: он уже работает весь сеанс
 	// (см. main), иначе на границе ходов два конкурирующих читателя
@@ -1753,7 +1641,7 @@ func (a *app) newAgent(quiet bool) *agent.Agent {
 		Parallel:    cfg.ParallelTools,
 		Quiet:       quiet || a.quiet,
 		OnDelta: func(s string) {
-			// Первый кусок ответа - маскот умолкает и уступает место тексту.
+			// Первый кусок ответа гасит строку ожидания.
 			a.ui.SpinnerStop()
 			// Ответ пошёл - поток размышлений закрыт. Дальше модель
 			// размышляет уже по ходу инструментов (в agent-режиме), и
@@ -1990,92 +1878,29 @@ func shortArgs(tc core.ToolCall) string {
 	return ""
 }
 
-// repl - цикл ввода.
+// repl - цикл ввода: композер владеет нижней областью экрана и вводом.
 //
-// Блок "кот + строка состояния" печатается не на каждой итерации, а
-// только там, где выше появился новый вывод: после баннера, команды или
-// хода. Пустой Enter лишь перерисовывает приглашение - иначе скроллбэк
-// забивается одинаковыми котами.
+// Ходы и команды выполняются в горутине композера, поэтому печатать и
+// править текст можно прямо во время работы агента: Esc прерывает, Enter
+// ставит сообщение в очередь (см. composer.go).
 func (a *app) repl() {
-	header := true
-	// Ctrl+O между ходами печатает мысли последнего хода отдельным
-	// блоком. Обычная усадка после этого нарисовала бы кота и строку
-	// состояния поверх мыслей, а анимация заикалась бы на только что
-	// дописанных строках. Поэтому пока стоит флаг reasonPast, рисуем
-	// скромное приглашение, а как только пользователь что-то ввёл или
-	// выполнил команду, блок считается отработанным.
-	for {
-		if !a.quiet {
-			switch {
-			case a.reasonPastShown():
-				// Блок размышлений уже напечатан: обычная усадка нарисовала бы
-				// вторую строку состояния подряд. Повторно Ctrl+O оставляет
-				// в том же режиме - пока не напечатано новое.
-				a.ui.Prompt(a.agentMode())
-				a.clearReasonPast()
-			case header:
-				a.ui.Println("")
-				// Нижняя панель окна: слева состояние, справа расход -
-				// контекст с процентом от лимита модели, токены, скорость,
-				// время запроса и деньги.
-				a.ui.MetricsBar(a.statusItems(), a.metrics())
-				header = false
-				a.ui.Prompt(a.agentMode())
-			default:
-				// Перепечатка приглашения после Enter.
-				a.ui.Prompt(a.agentMode())
-			}
-		}
-		if !a.stdin.Scan() {
-			if !a.quiet {
-				a.ui.Println("")
-				a.ui.Info("до связи!")
-			}
-			// Дочерние процессы и журнал - до saveSession: последняя
-			// запись журнала должна дойти до диска.
-			a.shutdown()
-			a.saveSession()
-			return
-		}
-		line := a.stdin.Text()
-		// Перенос строки обратным слэшем.
-		for strings.HasSuffix(strings.TrimRight(line, " \t"), "\\") && !strings.HasSuffix(line, "\\\\") {
-			line = strings.TrimRight(line, " \t")[:len(strings.TrimRight(line, " \t"))-1] + "\n"
-			if !a.stdin.Scan() {
-				break
-			}
-			line += a.stdin.Text()
-		}
-		line = strings.TrimSpace(line)
-		// Любой ввод пользователя сбрасывает таймер автономных итераций.
-		a.cronTouch()
-		if line == "" {
-			// Пустой ввод: приглашение уже перерисовано в начале цикла.
-			continue
-		}
-		if strings.HasPrefix(line, "/") {
-			if !a.handleCommand(line) {
-				a.saveSession()
-				return
-			}
-			header = true // команда печатала вывод - панель статуса сажаем заново
-			continue
-		}
-		if strings.HasPrefix(line, "#") {
-			// Заметка в память проекта (GCLI.md) - приём из Claude Code.
-			a.appendMemoryNote(line)
-			header = true
-			continue
-		}
-		err := a.turn(line)
-		if err != nil && !a.quiet {
-			a.ui.Err(err.Error())
-		}
-		header = true // ход печатал вывод - панель статуса сажаем заново
-		a.mu.Lock()
-		a.lastTurnFailed = err != nil
-		a.mu.Unlock()
+	c := newComposer(a)
+	a.setComposer(c)
+	defer a.setComposer(nil)
+	c.run()
+	// Живая область гасится до возвращения терминала в исходный режим:
+	// стирание региона идёт курсором по экрану и требует raw.
+	if c.live {
+		a.ui.LiveStop()
 	}
+	if !a.quiet {
+		a.ui.Println("")
+		a.ui.Info("до связи!")
+	}
+	// Дочерние процессы и журнал - до saveSession: последняя
+	// запись журнала должна дойти до диска.
+	a.shutdown()
+	a.saveSession()
 }
 
 // metrics - снимок расхода сессии для панелей интерфейса.
@@ -2157,62 +1982,6 @@ func (a *app) agentActiveEnd() {
 		a.activeSince = time.Time{}
 	}
 	a.activeMu.Unlock()
-}
-
-// statusItems - элементы нижней строки состояния (стиль Claude Code).
-// Порядок повторяет референс: модель | состояние | контекст | режимы.
-func (a *app) statusItems() []ui.StatusItem {
-	// Пара под provMu: /model может прийти из очереди ввода, пока REPL
-	// собирает строку состояния после хода.
-	prov, mdl := a.providerModel()
-	items := []ui.StatusItem{
-		{Text: mdl, Kind: ui.StatusMuted},
-		{Text: "idle", Kind: ui.StatusAccent},
-	}
-	// Поля сессии - снимком под sessMu: счётчики и AgentMode пишет ход
-	// из cron-горутины, не прикрытой busy-очередью REPL, а Perms -
-	// confirm в ходе против /yolo и /autopilot.
-	sessMu.Lock()
-	reqs, agentOn, auto, autoAll, bashAll := 0, false, false, false, false
-	if a.sess != nil {
-		reqs = a.sess.Economy.Requests
-		agentOn = a.sess.AgentMode
-		auto = a.sess.Perms.Autopilot
-		autoAll = a.sess.Perms.AutopilotAll
-		bashAll = a.sess.Perms.BashAll
-	}
-	sessMu.Unlock()
-	// Сколько запросов стоила сессия: цифра рядом с моделью отвечает на
-	// вопрос "сколько это заняло" раньше, чем человек спросит.
-	if reqs > 0 {
-		items = append(items, ui.StatusItem{Text: fmt.Sprintf("%d запр.", reqs), Kind: ui.StatusMuted})
-	}
-	// Каким ключом идёт запрос: при пуле из нескольких ключей это видно
-	// сразу, иначе расход по ключам не свести.
-	if prov != nil {
-		if n := prov.CurrentKeyIndex(); n > 1 {
-			items = append(items, ui.StatusItem{Text: fmt.Sprintf("ключ #%d", n), Kind: ui.StatusMuted})
-		}
-	}
-	if agentOn {
-		items = append(items, ui.StatusItem{Text: "agent", Kind: ui.StatusAccent})
-	} else {
-		items = append(items, ui.StatusItem{Text: "chat", Kind: ui.StatusMuted})
-	}
-	if a.cfgPlanMode() {
-		items = append(items, ui.StatusItem{Text: "plan", Kind: ui.StatusWarn})
-	}
-	if autoAll {
-		items = append(items, ui.StatusItem{Text: "autopilot: all", Kind: ui.StatusErr})
-	} else if auto {
-		items = append(items, ui.StatusItem{Text: "autopilot", Kind: ui.StatusAccent})
-	} else if bashAll {
-		items = append(items, ui.StatusItem{Text: "yolo", Kind: ui.StatusWarn})
-	}
-	if prov == nil || !prov.HasKey() {
-		items = append(items, ui.StatusItem{Text: "нет ключа - /setup", Kind: ui.StatusErr})
-	}
-	return items
 }
 
 // unicodeOK - решение о псевдографике, принятое до первого вывода.

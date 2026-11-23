@@ -24,7 +24,7 @@ func TestTitleFlatStyle(t *testing.T) {
 	u, buf := uiAt(ColorNone, 60)
 	u.Title("Заголовок")
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "*") || !strings.Contains(out, "Заголовок") {
+	if !strings.Contains(out, "⏺") || !strings.Contains(out, "Заголовок") {
 		t.Errorf("заголовок должен быть помечен ромбом:\n%s", out)
 	}
 	if strings.Contains(out, "+") || strings.Contains(out, "+-") {
@@ -123,7 +123,7 @@ func TestRailPushPopIndents(t *testing.T) {
 	if !strings.HasPrefix(StripANSI(lines[1]), "  | ") {
 		t.Errorf("во вложенном вызове нет дополнительного рельса:\n%s", buf.String())
 	}
-	if !strings.HasPrefix(StripANSI(lines[0]), "  *") {
+	if !strings.HasPrefix(StripANSI(lines[0]), "  ⏺") {
 		t.Errorf("базовый вызов должен начинаться с отступа 2:\n%s", buf.String())
 	}
 	// После выхода из вложенности отступ возвращается.
@@ -137,7 +137,7 @@ func TestRailEndChainCloses(t *testing.T) {
 	u.ToolStart(ToolCall{Name: "grep", Args: "TODO", Kind: "read"})
 	u.RailEndChain("готово")
 	out := buf.String()
-	if !strings.Contains(StripANSI(out), ":") {
+	if !strings.Contains(StripANSI(out), "⎿") {
 		t.Errorf("серия вызовов должна закрываться зубцом:\n%s", out)
 	}
 }
@@ -145,8 +145,8 @@ func TestRailEndChainCloses(t *testing.T) {
 func TestStatusGlyphs(t *testing.T) {
 	u, _ := uiAt(ColorNone, 60)
 	cases := map[string]string{
-		"ok":     "+",
-		"fail":   "x",
+		"ok":     "✓",
+		"fail":   "×",
 		"denied": "-",
 		"skip":   "-",
 	}
@@ -219,14 +219,18 @@ func TestGradientOnlyWithRichColor(t *testing.T) {
 	}
 }
 
-func TestCodeFenceShowsLanguage(t *testing.T) {
+func TestCodeFenceHidden(t *testing.T) {
 	u, _ := uiAt(ColorRGB, 70)
-	open := u.RenderLine("```go")
-	if !strings.Contains(StripANSI(open), "go") {
-		t.Errorf("язык не показан: %q", open)
+	// Ограды кода скрываются: приглушённый цвет строк отличает код,
+	// как в Claude Code. Содержимое не трогается.
+	if open := u.RenderLine("```go"); open != "" {
+		t.Errorf("открывающая ограда не скрыта: %q", open)
 	}
-	if !strings.Contains(StripANSI(open), "*") {
-		t.Errorf("блок кода должен быть помечен ромбом: %q", open)
+	if close := u.RenderLine("```"); close != "" {
+		t.Errorf("закрывающая ограда не скрыта: %q", close)
+	}
+	if code := u.RenderLine("fmt.Println(1)"); !strings.Contains(StripANSI(code), "fmt.Println(1)") {
+		t.Errorf("строка кода потеряна: %q", code)
 	}
 }
 

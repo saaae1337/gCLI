@@ -92,14 +92,14 @@ func looksLikeMintty() bool {
 }
 
 // interactiveIntent — запуск похож на интерактивную сессию, а не на
-// машинный режим: только в нём полноэкранный интерфейс вообще мог бы быть.
-// tuiBlocked уже посчитан в main из флагов (-p, -setup, -stats, -bench,
-// -watch, -mcp-serve, -plain); здесь добавляются -json и переменные.
+// машинный режим: только в нём композер с raw-режимом вообще имеет смысл.
+// Машинные флаги (-p, -setup, -stats, -bench, -watch, -mcp-serve, -json)
+// уже посчитаны в main; здесь добавляется GCLI_ASCII.
 func interactiveIntent(machine bool) bool {
-	if machine || tuiBlocked {
+	if machine {
 		return false
 	}
-	if os.Getenv("GCLI_TUI") == "0" || os.Getenv("GCLI_ASCII") != "" {
+	if os.Getenv("GCLI_ASCII") != "" {
 		return false
 	}
 	return true

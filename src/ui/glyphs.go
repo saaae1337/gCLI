@@ -1,20 +1,25 @@
-// Package ui — терминальный интерфейс gcli: рамки, цвета,
-// таблицы, карточки инструментов, диффы и потоковый markdown.
+// Package ui — терминальный интерфейс gcli: цвета, карточки инструментов,
+// диффы, потоковый markdown и нижняя живая область (поле ввода).
 //
-// Пакет умеет работать и в цвете, и без него (NO_COLOR, пайпы).
-// Оформление — чистый ASCII: рамки «+ - |», статусы «ok x !», линии из
-// дефисов. Декоративные юникод-символы не используются: тот же вид в
-// классической консоли Windows 10/11, в linux-консоли и на macOS.
+// Визуальный язык — терминальный интерфейс Claude Code: скруглённая рамка
+// поля ввода «╭ ─ ╮», маркер события «⏺», зубец результата «⎿», спиннер
+// «✻». Оформление сдержанное: почти весь текст — обычным цветом терминала,
+// хром — приглушённым серым, единственный акцент — фирменный коралловый.
+//
+// Пакет умеет работать и в цвете, и без него (NO_COLOR, пайпы). Если
+// терминал не умеет юникод (-ascii, GCLI_ASCII, консоль без UTF-8), весь
+// набор глифов заменяется чистым ASCII: тот же вид в классической консоли
+// Windows 10/11, в linux-консоли и на macOS.
 package ui
 
 // Glyphs — набор символов оформления.
 //
-// Поля Unicode и набор для «юникод-терминалов» оставлены для
-// совместимости сигнатур, но оба набора — один и тот же ASCII: gcli
-// больше не печатает псевдографику ни в каком режиме.
+// Два набора: юникодный (Claude Code: ╭ ⏺ ⎿ ✻) и ASCII-запаска для
+// терминалов без UTF-8 (рамки «+», маркер «*», зубец «:`»). Поля и
+// сигнатуры исторические, смысл прежний.
 type Glyphs struct {
 	Unicode bool
-	Sharp   bool // прямые углы вместо округлённых
+	Sharp   bool // прямые углы вместо округлённых (ASCII-набор)
 
 	// Рамки.
 	TL, TR, BL, BR, H, V string
@@ -29,23 +34,43 @@ type Glyphs struct {
 
 	// DashDot — символ пунктирной линии (мягкий разделитель).
 	DashDot string
-	// RuleChar — символ сплошной линии (длинные заголовки, хвосты таблиц).
+	// RuleChar — символ сплошной линии (заголовки, хвосты таблиц).
 	RuleChar string
-	// Mark — монограмма стиля.
+	// Mark — монограмма стиля (брендовый «✻»).
 	Mark string
-	// Tick — «зубец» перед результатом инструмента.
+	// Tick — «зубец» перед результатом инструмента («⎿»).
 	Tick string
 	// Retry — знак ожидания.
 	Retry string
 }
 
-// asciiGlyphs — единственный набор символов gcli: чистый ASCII.
+// ccGlyphs — юникодный набор: визуальный язык Claude Code.
+func ccGlyphs() Glyphs {
+	return Glyphs{
+		Unicode: true,
+		TL:      "╭", TR: "╮", BL: "╰", BR: "╯",
+		H: "─", V: "│",
+		Tee: "├", Elbow: "└", Pipe: "│", Dash: "─", Arrow: "→",
+		Bullet: "•", Check: "✓", Cross: "×", Excl: "!", Star: "✻", Dot: "⏺",
+		Running: "✻", Pending: "·", BarFull: "█", BarEmpty: "·",
+		Separator: "·", Ellipsis: "…", Dots: "·",
+		DashDot:  "·",
+		RuleChar: "─",
+		Mark:     "✻",
+		Tick:     "⎿",
+		Retry:    "…",
+	}
+}
+
+// asciiGlyphs — ASCII-запаска: терминал без юникода рисует то же самое
+// другими знаками (классическая консоль Windows, пайп, -ascii).
 func asciiGlyphs() Glyphs {
 	return Glyphs{
-		TL: "|", TR: "", BL: "|", BR: "",
+		Sharp: true,
+		TL:    "+", TR: "+", BL: "+", BR: "+",
 		H: "-", V: "|",
 		Tee: "|-", Elbow: "`-", Pipe: "|", Dash: "-", Arrow: "->",
-		Bullet: "-", Check: "+", Cross: "x", Excl: "!", Star: "*", Dot: ".",
+		Bullet: "-", Check: "+", Cross: "x", Excl: "!", Star: "*", Dot: "*",
 		Running: ">", Pending: "o", BarFull: "#", BarEmpty: ".",
 		Separator: "|", Ellipsis: "...", Dots: "...",
 		DashDot:  ".",
@@ -56,38 +81,36 @@ func asciiGlyphs() Glyphs {
 	}
 }
 
-// emberGlyphs — историческое имя набора стиля «УГОЛЬ». Раньше различались
-// юникод и ASCII варианты, теперь набор один и всегда ASCII.
-func emberGlyphs() Glyphs {
-	g := asciiGlyphs()
-	g.Unicode = true
-	return g
-}
+// emberGlyphs — историческое имя юникодного набора.
+func emberGlyphs() Glyphs { return ccGlyphs() }
 
 // emberASCIIGlyphs — то же самое (совместимость имён).
 func emberASCIIGlyphs() Glyphs { return asciiGlyphs() }
 
-// GlyphsFor — набор под текущий терминал. Стиль один — «УГОЛЬ», и всегда
-// ASCII: аргумент unicodeOK оставлен в сигнатуре для совместимости.
+// GlyphsFor — набор под текущий терминал: юникод Claude Code, если терминал
+// умеет UTF-8, иначе ASCII-запаска.
 func GlyphsFor(theme string, unicodeOK bool) Glyphs {
+	if unicodeOK {
+		return ccGlyphs()
+	}
 	return asciiGlyphs()
 }
 
-// unicodeOutput — решение «можно ли печатать юникод-глифы». С 0.9.3
-// всегда ложь: декоративные символы не печатаются нигде. Переменная и
-// SetUnicodeOutput оставлены для совместимости вызовов.
+// unicodeOutput — решение «можно ли печатать юникод-глифы». Ставится при
+// старте приложения: оно знает про -ascii, GCLI_ASCII и кодировку консоли.
 var unicodeOutput = false
 
-// SetUnicodeOutput — зафиксировать решение о юникоде. Значение
-// игнорируется: gcli печатает только ASCII.
-func SetUnicodeOutput(bool) { unicodeOutput = false }
+// SetUnicodeOutput — зафиксировать решение о юникоде.
+func SetUnicodeOutput(v bool) { unicodeOutput = v }
 
 // UnicodeOutput — текущее решение о юникоде.
 func UnicodeOutput() bool { return unicodeOutput }
 
-// Glyph — глиф для строк вне UI-рендерера: исторически пары «✔»/«+»,
-// «✖»/«x», «█»/«#», «░»/«.», «◆»/«*», «⊘»/«-». Теперь всегда ASCII-вариант.
+// Glyph — глиф для строк вне UI-рендерера: юникод, если можно, иначе ascii.
 func Glyph(mark, ascii string) string {
+	if unicodeOutput {
+		return mark
+	}
 	return ascii
 }
 
@@ -98,16 +121,18 @@ const (
 	barEmpty = "."
 )
 
-// SpinnerFrames — кадры анимации ожидания.
+// SpinnerFrames — кадры анимации ожидания: набор Claude Code
+// (восьмилучевые звёздочки) и ASCII-палочка для терминалов без юникода.
 var (
-	// emberSpinner — классическая палочка: знак один, движение создаёт цвет.
-	emberSpinner = []string{"|", "/", "-", "\\"}
-	// SpinnerAscii — тот же набор: ASCII для любых терминалов.
+	ccSpinner = []string{"✻", "✽", "✶", "✳", "✢"}
+	// SpinnerAscii — тот же набор для любых терминалов.
 	SpinnerAscii = []string{"|", "/", "-", "\\"}
 )
 
-// SpinnerFor — кадры ожидания под текущий терминал. Аргумент
-// unicodeOK оставлен в сигнатуре для совместимости: кадры всегда ASCII.
+// SpinnerFor — кадры ожидания под текущий терминал.
 func SpinnerFor(theme string, unicodeOK bool) []string {
+	if unicodeOK {
+		return ccSpinner
+	}
 	return SpinnerAscii
 }

@@ -64,8 +64,8 @@ func cmdApp(t *testing.T) (*app, *strings.Builder) {
 // команда ждала бы ввода до конца. Собираем структуру руками — поля
 // приватные, но тест живёт в том же пакете.
 func testStdin(line string) *stdinReader {
-	s := &stdinReader{lines: make(chan string, 1), keys: make(chan byte, 1)}
-	s.lines <- line
+	s := &stdinReader{events: make(chan termEvent, 8)}
+	s.events <- termEvent{kind: evLine, line: line}
 	return s
 }
 

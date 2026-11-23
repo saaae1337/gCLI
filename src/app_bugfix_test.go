@@ -21,13 +21,9 @@ func ansApp(t *testing.T, answers ...string) *app {
 		Theme: "ember", Unicode: true, Color: false, Grade: ui.Color16,
 		Animations: false, Width: 80, Out: buf,
 	})
-	s := &stdinReader{
-		lines: make(chan string, len(answers)+1),
-		keys:  make(chan byte, 8),
-		out:   buf,
-	}
+	s := &stdinReader{events: make(chan termEvent, len(answers)+8)}
 	for _, ans := range answers {
-		s.lines <- ans
+		s.events <- termEvent{kind: evLine, line: ans}
 	}
 	a.stdin = s
 	return a

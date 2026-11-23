@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
-	"gcli/core"
 	"gcli/providers"
 	"gcli/ui"
 )
@@ -15,68 +15,159 @@ func osGOOS() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
 func osArch() string { return runtime.Version() }
 
-// banner — приветственный экран.
-//
-// Концепт OpenCode: минимум украшений. Первая строка — бренд и версия,
-// под ней подпись. Ниже — один блок фактов сессии: модель, каталог,
-// ключ, режимы. Ничего лишнего между человеком и рабочим окном.
+// banner - приветственный экран в стиле Claude Code: скруглённый бокс
+// «✻ Welcome to gCLI», подсказки, каталог, модель. Ничего лишнего между
+// человеком и рабочим окном.
 func (a *app) banner() {
-	key := a.ui.Red("не задан - /setup")
-	switch {
-	case a.prov.NoKey:
-		key = a.ui.Green("локальный провайдер")
-	case a.prov.Key != "":
-		key = a.ui.Green("задан")
+	if a.quiet {
+		return
 	}
-	agent := a.ui.Gray("агент выкл")
-	if a.sess.AgentMode {
-		agent = a.ui.Accent("агент")
-	}
-	m := a.metrics()
-	// Панель окна: название и подпись. Правый блок — занятый контекст.
-	a.ui.TitleBar(ui.TitleBarOpts{
-		Title:    "gcli v" + version(),
-		Subtitle: "ИИ-агент в терминале",
-		Right:    "ctx " + m.ContextText(),
-	})
+	g := a.ui.Glyphs()
 
-	facts := []string{
-		a.ui.Gray("модель ") + a.ui.Accent(a.model) +
-			a.ui.Gray("  |  ") + a.ui.Gray(m.Provider) +
-			a.ui.Gray("  |  каталог ") + a.ui.Gray(core.RelToWD(a.workDir, a.workDir)),
-		a.ui.Gray("ключ ") + key + a.ui.Gray("  |  ") + agent,
+	// Строки бокса: бренд, подсказка, каталог, модель. Ширина бокса -
+	// по самой длинной строке плюс воздух, но не шире терминала.
+	title := a.ui.Accent(g.Mark) + " " + a.ui.Head("Welcome to gCLI v"+version()) + "!"
+	tips := a.ui.Gray("/help for help, /status for your current setup")
+	cwd := a.ui.Gray("cwd: ") + a.workDir
+	prov, _ := a.providerModel()
+	label := ""
+	if prov != nil {
+		label = prov.Label
 	}
-	if a.pool.Enabled() {
-		facts[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Accent2, "субагенты")
+	model := a.ui.Gray("model: ") + a.ui.Accent(a.model) + a.ui.Gray(" · "+label)
+
+	lines := []string{title, "", "  " + tips, "", cwd, model}
+	// Нет ключа - предупреждаем в боксе: это первое, что надо исправить.
+	if !a.prov.HasKey() {
+		lines = append(lines,
+			a.ui.Gray("key:  ")+a.ui.Paint(a.ui.Pal().Warn, "не задан - /setup"))
 	}
-	if a.repo.Cfg.PlanMode {
-		facts[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Warn, "план")
-	}
-	// Автопилот — предупреждаем сразу, чтобы режим не был сюрпризом.
-	if ap, risk := a.autopilotChip(); ap != "" {
-		facts[1] += a.ui.Gray("  |  ") + a.ui.Paint(a.ui.Pal().Warn, "автопилот ") + a.ui.Paint(risk, ap)
+	// Режимы - последним рядом: агент, план, автопилот, песочница.
+	if chips := a.modeChips(); chips != "" {
+		lines = append(lines, a.ui.Gray("mode: ")+chips)
 	}
 
-	a.ui.Println("")
-	for _, line := range facts {
-		a.ui.Println("  " + line)
+	inner := 0
+	for _, l := range lines {
+		if n := ui.VisibleWidth(l); n > inner {
+			inner = n
+		}
 	}
-	a.PrintNoKeyHint()
+	if max := a.ui.Width() - 6; inner > max {
+		inner = max
+	}
+	if inner < 24 {
+		inner = 24
+	}
+
+	var b strings.Builder
+	b.WriteString(" " + a.ui.Gray(g.TL+strings.Repeat(g.H, inner+2)+g.TR) + "\n")
+	for _, l := range lines {
+		pad := inner - ui.VisibleWidth(l)
+		if pad < 0 {
+			pad = 0
+		}
+		b.WriteString(" " + a.ui.Gray(g.V) + " " + l + strings.Repeat(" ", pad) + " " + a.ui.Gray(g.V) + "\n")
+	}
+	b.WriteString(" " + a.ui.Gray(g.BL+strings.Repeat(g.H, inner+2)+g.BR) + "\n")
+	a.ui.Print(b.String())
+
+	// Замечания старта - приглушённым списком под боксом. setupNotes
+	// уже содержит startupNotes на момент последней сборки реестра:
+	// печать обоих списков дублировала бы каждое замечание.
 	for _, n := range a.setupNotes {
 		a.ui.Info(n)
+	}
+	for _, n := range a.startupNotes {
+		if _, dup := notesSeen(a.setupNotes, n); !dup {
+			a.ui.Info(n)
+		}
+	}
+	if a.pool.Enabled() {
+		a.ui.Info(a.ui.Gray("субагенты подключены - /agents"))
 	}
 	a.ui.Println("")
 }
 
-// PrintNoKeyHint — подсказка, если у провайдера нет ключа.
+// modeChips - краткие бейджи режимов для бокса и строки подсказок.
+func (a *app) modeChips() string {
+	var chips []string
+	sessMu.Lock()
+	agentOn, auto, autoAll, bashAll := false, false, false, false
+	if a.sess != nil {
+		agentOn = a.sess.AgentMode
+		auto = a.sess.Perms.Autopilot
+		autoAll = a.sess.Perms.AutopilotAll
+		bashAll = a.sess.Perms.BashAll
+	}
+	sessMu.Unlock()
+	if agentOn {
+		chips = append(chips, a.ui.Accent("agent"))
+	}
+	if a.cfgPlanMode() {
+		chips = append(chips, a.ui.Paint(a.ui.Pal().Warn, "plan"))
+	}
+	switch {
+	case autoAll:
+		chips = append(chips, a.ui.Paint(a.ui.Pal().Err, "autopilot: all"))
+	case auto:
+		chips = append(chips, a.ui.Accent("autopilot"))
+	case bashAll:
+		chips = append(chips, a.ui.Paint(a.ui.Pal().Warn, "yolo"))
+	}
+	return strings.Join(chips, " · ")
+}
+
+// footerRight - правая часть строки подсказок под полем ввода:
+// режимы, модель и занятый контекст.
+func (a *app) footerRight() string {
+	var chips []string
+	if c := a.modeChips(); c != "" {
+		chips = append(chips, c)
+	}
+	_, mdl := a.providerModel()
+	if mdl != "" {
+		chips = append(chips, mdl)
+	}
+	m := a.metrics()
+	if m.Context > 0 {
+		chips = append(chips, m.ContextText())
+	}
+	return strings.Join(chips, " · ")
+}
+
+// menuItems - пункты pop-up меню команд по «/».
+//
+// Собирается из каталога commandDefs - того же, что питает роутер и
+// /help: три списка раньше переписывались отдельно и расползались.
+// Свои команды из .gcli/commands идут после встроенных: имя, совпавшее
+// со встроенным, не показывается второй раз - роутер и меню отдают
+// приоритет встроенным одинаково.
+func (a *app) menuItems() []ui.MenuItem {
+	out := make([]ui.MenuItem, 0, len(commandDefs)+4)
+	for i := range commandDefs {
+		d := &commandDefs[i]
+		if d.group == "" {
+			continue
+		}
+		out = append(out, ui.MenuItem{Name: d.names[0], Desc: d.desc})
+	}
+	for _, r := range a.customHelpRows() {
+		name := strings.TrimPrefix(r[0], "/")
+		if lookupCommand("/"+name) != nil {
+			continue
+		}
+		out = append(out, ui.MenuItem{Name: "/" + name, Desc: r[1]})
+	}
+	return out
+}
+
+// PrintNoKeyHint - подсказка, если у провайдера нет ключа.
 func (a *app) PrintNoKeyHint() {
 	if a.prov.HasKey() {
 		return
 	}
-	// В «УГЛЕ» подсказка — ещё одна строка потока: ромб-маркер акцентом,
-	// зубец продолжения — как у результатов инструментов.
-	a.ui.Println("  " + a.ui.Yellow(a.ui.Glyphs().Excl+" ") +
-		"Нет ключа для " + a.prov.Label + " - настройка: " + a.ui.Accent("/setup") +
+	a.ui.Info("Нет ключа для " + a.prov.Label + " - настройка: " + a.ui.Accent("/setup") +
 		a.ui.Gray("  |  или свой endpoint: /provider add <id> <base_url>"))
 }
 
@@ -90,7 +181,7 @@ func (a *app) autopilotChip() (string, string) {
 	return "", ""
 }
 
-// usage — справка по флагам.
+// usage - справка по флагам.
 func usage() {
 	fmt.Println("gcli v" + version() + " - ИИ-агент в терминале (в духе Claude Code)")
 	fmt.Println()
@@ -129,7 +220,7 @@ func usage() {
 	fmt.Println("  -compact          компактный вывод (меньше пустых строк)")
 	fmt.Println("  -no-color         без цвета")
 	fmt.Println("  -color <уровень>  auto | 16 | 256 | truecolor | none")
-	fmt.Println("  -ascii            только ASCII-псевдографика")
+	fmt.Println("  -ascii            без юникод-глифов (рамки и маркеры из ASCII)")
 	fmt.Println("  -json             машинный вывод: только ответ, без UI")
 	fmt.Println("  -v                версия и платформа")
 	fmt.Println()
@@ -160,21 +251,31 @@ func usage() {
 	fmt.Println("  Нужен headless-браузер (Edge/Chrome/Chromium); путь: GCLI_BROWSER.")
 }
 
-// pingProvider — проверить доступность endpoint-а.
+// pingProvider - проверить доступность endpoint-а.
 func pingProvider(a *app) (time.Duration, int, error) {
 	return providers.Ping(a.client, a.prov)
 }
 
-// testKey — проверить ключ активного провайдера.
+// testKey - проверить ключ активного провайдера.
 func testKey(a *app) (bool, string) { return providers.TestKey(a.client, a.prov) }
 
-// testKeyFor — проверить ключ произвольного провайдера.
+// testKeyFor - проверить ключ произвольного провайдера.
 func testKeyFor(a *app, p *providers.Provider) (bool, string) {
 	return providers.TestKey(a.client, p)
 }
 
-// mustNotExist — проверка наличия файла.
+// mustNotExist - проверка наличия файла.
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// notesSeen - есть ли заметка в списке (для дедупликации в баннере).
+func notesSeen(list []string, n string) (int, bool) {
+	for i, v := range list {
+		if v == n {
+			return i, true
+		}
+	}
+	return -1, false
 }

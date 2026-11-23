@@ -11,7 +11,6 @@ import (
 	"gcli/core"
 	"gcli/subagents"
 	"gcli/tools"
-	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -701,13 +700,6 @@ func (a *app) askTrustCode(w tools.ProjectCodeWarning) bool {
 	}
 	if w.Hash != "" {
 		a.ui.Println("    " + a.ui.Gray("отпечаток: "+core.Truncate(w.Hash, 16)))
-	}
-	if ch, ok := a.tuiConfirm(tui.Confirm{
-		Title:  fmt.Sprintf("Доверять и подключить (%s)?", kindWord),
-		Detail: w.Label(),
-		Note:   "код из проекта: " + w.Path,
-	}); ok {
-		return ch == tui.ChoiceYes || ch == tui.ChoiceAlways
 	}
 	if a.quiet {
 		// В машинном режиме (один запрос, CI) подтверждать чужой код нельзя:

@@ -1,11 +1,12 @@
 package ui
 
-// Тест чистоты REPL-вывода: печатается только ASCII и кириллица.
+// Тест чистоты REPL-вывода: печатается только разрешённый набор рун.
 //
-// Пакет tui проверяет свои кадры клетками (ascii_purity_test.go), здесь
-// же — потоковый вывод для режима без полноэкранного интерфейса: баннер,
-// блоки, таблицы, статусы, глифы. Управляющие ANSI-последовательности
-// вырезаются перед проверкой: они не рисуют символы, а красят их.
+// Разрешены: ASCII, кириллица и юникод-глифы Claude Code (⏺ ⎿ ✻ ╭ ╮ ╰ ╯
+// и соседи). Всё остальное - экзотические стрелки, эмодзи, типографика -
+// запрещено: они рвутся на терминалах без нужных шрифтов. Управляющие
+// ANSI-последовательности вырезаются перед проверкой: они не рисуют
+// символы, а красят их.
 
 import (
 	"regexp"
@@ -15,22 +16,38 @@ import (
 
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;:]*[a-zA-Z]`)
 
-// asciiOrCyrillic — руна допустима в выводе.
-func asciiOrCyrillic(r rune) bool {
+// ccAllowed - руна допустима в выводе.
+func ccAllowed(r rune) bool {
 	if r < 0x7F && r >= 0x20 {
 		return true
 	}
 	if r == '\n' || r == '\t' || r == '\r' {
 		return true
 	}
-	return r >= 0x0400 && r <= 0x04FF
+	if r >= 0x0400 && r <= 0x04FF {
+		return true // кириллица
+	}
+	// Юникод-глифы набора Claude Code.
+	switch r {
+	case 0x2500, 0x2502, // ─ │
+		0x256D, 0x256E, 0x2570, 0x256F, // ╭ ╮ ╰ ╯
+		0x250C, 0x2510, 0x2514, 0x2518, // ┌ ┐ └ ┘
+		0x251C, 0x276F, // ├ ❯
+		0x2022, 0x2713, 0x00D7, // • ✓ ×
+		0x23FA, 0x23BF, // ⏺ ⎿
+		0x273B, 0x273D, 0x2736, 0x2733, 0x2722, // ✻ ✽ ✶ ✳ ✢
+		0x2026, 0x00B7, 0x2192, // … · →
+		0x2588, 0x2591, 0x25CF: // █ ░ ●
+		return true
+	}
+	return false
 }
 
-func assertOutputASCII(t *testing.T, name, out string) {
+func assertOutputAllowed(t *testing.T, name, out string) {
 	t.Helper()
 	clean := ansiSeq.ReplaceAllString(out, "")
 	for i, r := range clean {
-		if !asciiOrCyrillic(r) {
+		if !ccAllowed(r) {
 			around := clean
 			if i > 20 {
 				around = clean[i-20:]
@@ -44,10 +61,9 @@ func assertOutputASCII(t *testing.T, name, out string) {
 	}
 }
 
-// TestOutputASCIIOnly — весь репертуар REPL-вывода без декоративной
-// юникодщины: никаких рамок из псевдографики, стрелок, типографских
-// кавычек и тире.
-func TestOutputASCIIOnly(t *testing.T) {
+// TestOutputGlyphWhitelist — весь репертуар REPL-вывода укладывается в
+// разрешённый набор: статусы, глифы, блоки, таблицы, живая область.
+func TestOutputGlyphWhitelist(t *testing.T) {
 	buf := &strings.Builder{}
 	u := New(Options{
 		Theme:   "ember",
@@ -72,13 +88,6 @@ func TestOutputASCIIOnly(t *testing.T) {
 		g.Ellipsis, g.Dots, g.DashDot, g.RuleChar, g.Mark, g.Tick, g.Retry}
 	u.Println("глифы: " + strings.Join(all, " "))
 
-	// Шапка окна.
-	u.TitleBar(TitleBarOpts{
-		Title:    "gcli",
-		Subtitle: "модель glm-4.6, провайдер zai",
-		Right:    "контекст 24%",
-	})
-
 	// Блок и таблица.
 	u.Block("первая строка\nвторая строка", BlockOpts{Title: "Проверка", Accent: true})
 	u.Table(
@@ -87,15 +96,45 @@ func TestOutputASCIIOnly(t *testing.T) {
 		BlockOpts{Title: "таблица"},
 	)
 
-	// Строка статуса.
-	u.StatusLine([]StatusItem{
-		{Text: "in 18k", Kind: StatusMuted},
-		{Text: "out 3.2k", Kind: StatusAccent},
-		{Text: "$0.42", Kind: StatusOK},
-	})
+	// Вызов инструмента и результат.
+	u.RailStart(ToolCall{Name: "read_file", Args: "x.go"})
+	u.RailEnd(ToolCall{Name: "read_file", Detail: "481 строка", Status: "ok"})
 
-	// Библиотека не добавляет своих декоративных символов: всё, что
-	// попадает в буфер, — ASCII, кириллица и ANSI-раскраска. Текст от
-	// модели нормализует лента TUI (cleanControl/sanitizeBlock).
-	assertOutputASCII(t, "repl", buf.String())
+	// Живая область: бокс ввода, меню, подсказки.
+	u.LiveStart(`Try "/help"`)
+	u.LiveInput("> пользовательский запрос", 20)
+	u.LiveMenu([]MenuItem{{Name: "/help", Desc: "эта справка"}, {Name: "/status", Desc: "состояние"}}, 0)
+	u.LiveFooter("? for shortcuts", "glm-4.6 · ctx 12k/128k (9%)")
+	u.LiveStop()
+
+	// Библиотека не добавляет своих декоративных символов сверх набора
+	// Claude Code: всё, что попало в буфер, — ASCII, кириллица, глифы и
+	// ANSI-раскраска.
+	assertOutputAllowed(t, "repl", buf.String())
+}
+
+// TestASCIIFallbackStaysASCII — без юникода вывод обязан остаться чистым
+// ASCII (кириллица разрешена: это текст, а не оформление).
+func TestASCIIFallbackStaysASCII(t *testing.T) {
+	buf := &strings.Builder{}
+	u := New(Options{
+		Theme:   "ember",
+		Unicode: false,
+		Color:   true,
+		Width:   80,
+		Out:     buf,
+	})
+	u.Ok("готово")
+	u.Err("упало")
+	g := u.Glyphs()
+	u.Println(strings.Join([]string{g.TL, g.H, g.TR, g.Tick, g.Mark, g.Dot}, " "))
+	u.Block("тело", BlockOpts{Title: "Панель"})
+	u.Table([]Column{{Title: "имя"}}, [][]string{{"a"}}, BlockOpts{Title: "т"})
+	clean := ansiSeq.ReplaceAllString(buf.String(), "")
+	for _, r := range clean {
+		if r > 127 && !(r >= 0x400 && r <= 0x4FF) {
+			t.Errorf("ASCII-режим напечатал не-ASCII руну %q (U+%04X)", r, r)
+			return
+		}
+	}
 }

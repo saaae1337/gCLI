@@ -136,6 +136,26 @@ type UI struct {
 	// think - открыт ли поток размышлений: пока модель думает, на экране
 	// висит «указатель», и первый кусок текста его закрывает.
 	think bool
+	// thinkPend - недовведённый хвост потока размышлений. Стрим размышлений
+	// печатается построчно: живая область снизу требует, чтобы каждая печать
+	// заканчивалась переводом строки.
+	thinkPend string
+
+	// ---------- Нижняя живая область (интерфейс Claude Code) ----------
+	// Поле ввода в скруглённой рамке, pop-up меню команд, строка ожидания и
+	// подсказки живут внизу экрана и перерисовываются при каждой печати
+	// (см. live.go). Состояние защищено тем же u.mu, что и весь вывод.
+	liveOn          bool
+	liveRows        int
+	liveInp         string
+	liveCur         int
+	livePlaceholder string
+	liveMenu        []MenuItem
+	liveMenuSel     int
+	liveFooterL     string
+	liveFooterR     string
+	liveBusy        string
+	liveMark        string
 }
 
 // New - создать интерфейс.
@@ -330,7 +350,7 @@ func (u *UI) Write(s string) {
 // Валидная строка возвращается как есть, без копии.
 //
 // Обёртка именно здесь, а не в Write, потому что Write держит блокировку
-// и гасит строку ожидания, а спиннер, маскот и прогресс пишут в u.out
+// и гасит строку ожидания, а спиннер и прогресс пишут в u.out
 // напрямую. Отдельная точка нужна, чтобы ни один путь её не обошёл.
 func (u *UI) put(s string) {
 	if !utf8.ValidString(s) {
@@ -338,6 +358,12 @@ func (u *UI) put(s string) {
 	}
 	if sink := u.sink(); sink != nil {
 		sink.Text(s)
+		return
+	}
+	if u.liveOn {
+		// Живая область внизу экрана: стереть регион, напечатать строки,
+		// нарисовать регион заново (см. live.go).
+		u.putLiveLocked(s)
 		return
 	}
 	_, _ = u.out.Write([]byte(s))
@@ -353,7 +379,7 @@ func (u *UI) Printf(f string, a ...any) { u.Write(fmt.Sprintf(f, a...)) }
 //
 // В терминале строка начинается с «возврата каретки»: она всегда должна
 // начинаться с нулевой колонки, даже если курсор остался где-то посреди
-// строки. Так случается, когда фоновый рисунок (маскот, перелив)
+// строки. Так случается, когда спиннер
 // оставил его не там, где ожидалось, - и без этого ответ модели уезжал
 // в середину экрана.
 //
@@ -366,6 +392,10 @@ func (u *UI) Println(s string) { u.Write(u.lineStart() + s + "\n") }
 // Это управляющий символ, а не текст: на экране его не видно, и в
 // содержимом строки его нет.
 func (u *UI) lineStart() string {
+	// Живой области CR не нужен: putLive сам ставит «\r» в начале каждой строки.
+	if u.liveOn {
+		return ""
+	}
 	// Полноэкранному интерфейсу CR не нужен: у него своя сетка клеток.
 	if u.sink() == nil && u.tty() {
 		return "\r"
@@ -412,9 +442,11 @@ func (u *UI) RawWrite(s string) {
 		}
 		return
 	}
+	// Сырые последовательности (OSC52) идут мимо живой области напрямую:
+	// это управляющие байты, а не контент, и курсор они не двигают.
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.put(s)
+	_, _ = u.out.Write([]byte(s))
 }
 
 // ClearScreen - очистить экран терминала.
@@ -428,20 +460,20 @@ func (u *UI) ClearScreen() {
 
 // ---------- Сообщения ----------
 
-// Err - ошибка.
-func (u *UI) Err(s string) { u.Println(" " + u.Red(u.g.Cross) + " " + s) }
+// Err - ошибка: красный маркер события, как «⏺» у ошибок в Claude Code.
+func (u *UI) Err(s string) { u.Println("  " + u.c(u.pal.Err, u.g.Dot) + " " + u.Red(s)) }
 
-// Ok - успех.
-func (u *UI) Ok(s string) { u.Println(" " + u.Green(u.g.Check) + " " + s) }
+// Ok - успех: зелёный маркер события.
+func (u *UI) Ok(s string) { u.Println("  " + u.c(u.pal.OK, u.g.Dot) + " " + s) }
 
-// Warn - предупреждение.
-func (u *UI) Warn(s string) { u.Println(" " + u.Yellow(u.g.Excl) + " " + s) }
+// Warn - предупреждение: янтарный маркер события.
+func (u *UI) Warn(s string) { u.Println("  " + u.c(u.pal.Warn, u.g.Dot) + " " + s) }
 
-// Info - информация (приглушённая).
-func (u *UI) Info(s string) { u.Println(" " + u.Gray(u.g.Dot) + " " + s) }
+// Info - информация: приглушённый маркер события.
+func (u *UI) Info(s string) { u.Println("  " + u.c(u.pal.Muted, u.g.Dot) + " " + u.Gray(s)) }
 
 // Step - шаг процесса.
-func (u *UI) Step(s string) { u.Println(" " + u.Accent(u.g.Arrow) + " " + s) }
+func (u *UI) Step(s string) { u.Println("  " + u.Gray(u.g.Arrow) + " " + s) }
 
 // AutoOK - строка «автопилот одобрил изменение файла».
 func (u *UI) AutoOK(path string) {
@@ -455,70 +487,19 @@ func (u *UI) AutoTag() string {
 	return u.c(u.pal.Accent2, "автопилот")
 }
 
-// Prompt - приглашение к вводу с индикатором агентного режима.
-// Стрелка - то же приглашение, что и в поле полноэкранного интерфейса:
-// оба режима говорят одним языком. Отступ в две колонки держит поле.
-func (u *UI) Prompt(agentMode bool) {
-	if u.sink() != nil {
+// UserEcho - эхо запроса пользователя: «> текст». Как в Claude Code, запрос
+// остаётся в стенке вывода: поле ввода стирается при отправке, и без эха
+// сообщение исчезало бы с экрана. Многострочный запрос печатается целиком:
+// первая строка - с маркером, продолжения - с отступом.
+func (u *UI) UserEcho(text string) {
+	if u.quiet || text == "" {
 		return
 	}
-	if agentMode {
-		u.Print("  " + u.Accent("> "))
-		return
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	u.Println(u.c(u.pal.Accent, ">") + " " + lines[0])
+	for _, l := range lines[1:] {
+		u.Println("  " + l)
 	}
-	u.Print("  " + u.Gray("> "))
-}
-
-// StatusLine - нижняя панель состояния: модель, режим, токены, автопилот.
-// Печатается перед приглашением к вводу, как строка статуса в Claude Code.
-func (u *UI) StatusLine(items []StatusItem) {
-	if u.quiet || len(items) == 0 || u.sink() != nil {
-		return
-	}
-	parts := make([]string, 0, len(items))
-	for _, it := range items {
-		text := it.Text
-		if text == "" {
-			continue
-		}
-		switch it.Kind {
-		case StatusOK:
-			text = u.c(u.pal.OK, text)
-		case StatusWarn:
-			text = u.c(u.pal.Warn, text)
-		case StatusErr:
-			text = u.c(u.pal.Err, text)
-		case StatusAccent:
-			text = u.c(u.pal.Accent, text)
-		default:
-			text = u.c(u.pal.Muted, text)
-		}
-		parts = append(parts, text)
-	}
-	if len(parts) == 0 {
-		return
-	}
-	sep := u.c(u.pal.Muted, " | ")
-	// Зубец на том же поле, что и результаты инструментов: строка
-	// состояния читается как последняя строка потока, а не как
-	// отдельная плашка.
-	indent := "  " + u.emberTail() + " "
-	u.Println(indent + strings.Join(parts, sep))
-}
-
-// RequestEcho - эхо задачи в начале хода: «> почини тесты». Как в
-// Claude Code: запрос остаётся в стенке вывода, отделяя ходы друг от
-// друга. В живом терминале не печатается - строка запроса и так видна
-// у приглашения; эхо нужно пайпам и логам, где ввод не отображается.
-func (u *UI) RequestEcho(text string) {
-	if u.quiet || text == "" || isTerminal() {
-		return
-	}
-	line := core.OneLine(text)
-	if w := u.Width() - 10; w > 20 {
-		line = truncate(line, w)
-	}
-	u.Println("  " + u.emberTail() + " " + u.Gray(line))
 }
 
 // Виды элементов строки статуса.
@@ -633,7 +614,7 @@ func (u *UI) RenderTodos(todos []core.Todo) {
 	// Сделано - зелёный ромб в тон шапке плана, в работе - охра,
 	// не начато - зубец. Отличаются цветом, а не только формой:
 	// три похожих значка в одной колонке глаз не различает.
-	markDone, markActive, markTodo := u.g.Star, u.g.Star, u.emberTickOf()
+	markDone, markActive, markTodo := u.g.Check, u.g.Arrow, u.g.Bullet
 	for _, t := range todos {
 		text := truncate(core.OneLine(t.Content), u.Width()-10)
 		switch t.Status {
@@ -747,6 +728,10 @@ func (u *UI) Bar(done, total int, width int) string {
 }
 
 // ---------- Спиннер ----------
+//
+// Строка ожидания в стиле Claude Code: «✻ Pondering… (esc to interrupt · 4s
+// · ↓ 1.2k tok)». С живой областью она рисуется над полем ввода; без неё -
+// перерисовывается на текущей строке терминала.
 
 // SpinnerStart - запустить анимацию ожидания «кадр + метка + время».
 func (u *UI) SpinnerStart(label string) {
@@ -757,8 +742,8 @@ func (u *UI) SpinnerStart(label string) {
 		return
 	}
 	u.mu.Lock()
+	defer u.mu.Unlock()
 	if u.spin {
-		u.mu.Unlock()
 		return
 	}
 	u.spin = true
@@ -768,15 +753,17 @@ func (u *UI) SpinnerStart(label string) {
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
 	u.spinDone = make(chan struct{})
-	// Кадры спиннера - классическая палочка.
 	frames := u.spins
 	stop, done := u.spinStop, u.spinDone
-	u.mu.Unlock()
-
+	if u.liveOn {
+		u.liveBusy = label
+		u.liveMark = frames[0]
+		u.flushLiveLocked()
+	}
 	go func() {
 		defer close(done)
 		i := 0
-		t := time.NewTicker(90 * time.Millisecond)
+		t := time.NewTicker(120 * time.Millisecond)
 		defer t.Stop()
 		for {
 			select {
@@ -789,35 +776,36 @@ func (u *UI) SpinnerStart(label string) {
 					return
 				}
 				frame := frames[i%len(frames)]
-				el := time.Since(u.spinT0).Truncate(time.Second)
+				i++
+				if u.liveOn {
+					u.liveMark = frame
+					u.flushLiveLocked()
+					u.mu.Unlock()
+					continue
+				}
 				label := u.spinLbl
 				// Обрезаем, чтобы не ломать строку на узком терминале.
 				maxl := u.opts.Width - 14
 				if maxl > 8 && cellWidth(label) > maxl {
 					label = truncate(label, maxl)
 				}
-				u.put("\r" + cReset + "\033[K" + u.pal.Accent + frame + cReset + " " + label + " " + u.pal.Muted + el.String() + cReset)
-				i++
+				u.put("\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame+" "+label+"…") +
+					u.c(u.pal.Muted, " "+time.Since(u.spinT0).Truncate(time.Second).String()) + cReset)
 				u.mu.Unlock()
 			}
 		}
 	}()
 }
 
-// ShimmerStart - строка ожидания с переливающимся словом:
-//
-//	| думаю... 4s  ctx 12.3k/200k (6%)
-//
-// Слово переливается цветом по кругу (shimmerWord): фронт ходит по кольцу
-// длиной в слово и никогда не покидает его, поэтому строка жива всё время
-// ожидания, а не первые секунды. Кадр слева - классический спиннер.
-// Остановка - общий SpinnerStop; любая содержательная печать через Write
-// гасит строку сама (clearSpinLocked останавливает анимацию).
+// ShimmerStart - строка ожидания в стиле Claude Code: случайный глагол
+// («✻ Pondering… (esc to interrupt · 3s)»). Аргумент word сохранён для
+// совместимости вызовов и больше не влияет на вид: глагол выбирается
+// случайно на каждый ход.
 func (u *UI) ShimmerStart(word string) {
-	u.ShimmerHint(word, "")
+	u.ShimmerHint(ccVerb(), "")
 }
 
-// ShimmerHint - ShimmerStart с подсказкой справа от слова.
+// ShimmerHint - ShimmerStart с подсказкой справа от глагола.
 //
 // Подсказка нужна, когда модель молчит в размышления, а пользователь ещё не
 // знает, что их можно посмотреть. Показывается только пока строка жива;
@@ -828,10 +816,8 @@ func (u *UI) ShimmerHint(word, hint string) {
 		return
 	}
 	if !u.opts.Animations || !u.opts.Color || u.quiet {
-		// Без анимаций и цвета перелива нет - но слово «думаю...»
-		// пользователь всё равно должен увидеть, иначе ход выглядит
-		// зависшим. Печатаем один раз и уходим: без перерисовки таймер
-		// ожидания тут незачем.
+		// Без анимаций и цвета перерисовки нет - но факт ожидания
+		// пользователь всё равно должен увидеть. Печатаем один раз и уходим.
 		u.Println("  " + word)
 		return
 	}
@@ -841,19 +827,24 @@ func (u *UI) ShimmerHint(word, hint string) {
 		return
 	}
 	u.spin = true
-	u.spinLbl = ""
-	u.spinShimmer = word
+	u.spinLbl = word
+	u.spinShimmer = ""
 	u.spinHint = hint
 	u.spinT0 = time.Now()
 	u.spinStop = make(chan struct{})
 	u.spinDone = make(chan struct{})
 	stop, done := u.spinStop, u.spinDone
 	frames := u.spins
+	if u.liveOn {
+		u.liveBusy = word
+		u.liveMark = frames[0]
+		u.flushLiveLocked()
+	}
 	u.mu.Unlock()
 
 	go func() {
 		defer close(done)
-		t := time.NewTicker(90 * time.Millisecond)
+		t := time.NewTicker(120 * time.Millisecond)
 		defer t.Stop()
 		i := 0
 		for {
@@ -868,29 +859,25 @@ func (u *UI) ShimmerHint(word, hint string) {
 				}
 				frame := frames[i%len(frames)]
 				i++
-				el := time.Since(u.spinT0)
-				// Слово переливается: волна бежит по буквам, кадр и счётчик
-				// секунд показывают, что ожидание не зависло.
-				line := "\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame) + cReset + " " +
-					u.shimmerWord(u.spinShimmer, el.Seconds()) + " " +
-					u.c(u.pal.Muted, shimmerElapsed(el))
-				// Пока модель думает, видно, сколько занято контекста:
-				// человек видит, вписывается ли ход в окно модели.
-				if m := u.metrics; m.Context > 0 {
-					ctxInfo := u.c(u.pal.Muted, "  ctx "+m.ContextText())
-					if visibleWidth(line+ctxInfo) <= u.opts.Width {
-						line += ctxInfo
-					}
+				if u.liveOn {
+					u.liveMark = frame
+					u.flushLiveLocked()
+					u.mu.Unlock()
+					continue
 				}
-				// Подсказка про Ctrl+O идёт последней и уступает место
-				// переливу на узком терминале: без неё строка бессмысленна,
-				// с ней - просто теснее.
+				// Строка ожидания без живой области: «✻ Pondering… (esc to
+				// interrupt · 4s)». Пока модель думает, видно, сколько занято
+				// контекста, и есть подсказка про Ctrl+O, если она задана.
+				parts := []string{}
 				if h := u.spinHint; h != "" {
-					withHint := line + u.c(u.pal.Muted, "  "+h)
-					if visibleWidth(withHint) <= u.opts.Width {
-						line = withHint
-					}
+					parts = append(parts, h)
 				}
+				parts = append(parts, time.Since(u.spinT0).Truncate(time.Second).String())
+				if m := u.metrics; m.Context > 0 {
+					parts = append(parts, "ctx "+m.ContextText())
+				}
+				line := "\r" + cReset + "\033[K" + u.c(u.pal.Accent, frame+" "+u.spinLbl+"…") +
+					u.c(u.pal.Muted, " ("+strings.Join(parts, " · ")+")")
 				u.put(line)
 				u.mu.Unlock()
 			}
@@ -906,23 +893,35 @@ func (u *UI) SpinnerStop() {
 		return
 	}
 	u.spin = false
+	u.liveBusy = ""
+	u.spinHint = ""
 	stop, done := u.spinStop, u.spinDone
-	u.put("\r" + cReset + "\033[K")
+	if u.liveOn {
+		u.flushLiveLocked()
+	} else {
+		u.put("\r" + cReset + "\033[K")
+	}
 	u.mu.Unlock()
 	close(stop)
 	<-done
 }
 
 // clearSpinLocked - остановить анимацию ожидания и очистить её строку.
-// Вызывается перед любой содержательной печатью: строка «thinking...»
+// Вызывается перед любой содержательной печатью: строка ожидания
 // не должна пережить вывод, иначе она перерисуется поверх ответа.
 func (u *UI) clearSpinLocked() {
 	if !u.spin {
 		return
 	}
 	u.spin = false
+	u.liveBusy = ""
+	u.spinHint = ""
 	stop, done := u.spinStop, u.spinDone
-	u.put("\r" + cReset + "\033[K")
+	if u.liveOn {
+		u.flushLiveLocked()
+	} else {
+		u.put("\r" + cReset + "\033[K")
+	}
 	u.mu.Unlock()
 	close(stop)
 	<-done
@@ -936,6 +935,10 @@ func runeLen(s string) int { return len([]rune(s)) }
 
 // visibleWidth - ширина строки без ANSI-последовательностей.
 func visibleWidth(s string) int { return cellWidth(s) }
+
+// VisibleWidth - экспорт visibleWidth: баннеру и композеру надо мерить
+// строки за пределами пакета.
+func VisibleWidth(s string) int { return visibleWidth(s) }
 
 // padRight - дополнить строку (учитывая ANSI) пробелами до ширины w.
 func padRight(s string, w int) string {

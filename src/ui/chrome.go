@@ -122,133 +122,9 @@ func (u *UI) Metrics() Metrics {
 	return u.metrics
 }
 
-// TitleBarOpts - параметры верхней панели окна.
-type TitleBarOpts struct {
-	// Title - имя окна (жирное).
-	Title string
-	// Subtitle - что внутри: модель, провайдер.
-	Subtitle string
-	// Right - правый блок, прижатый к краю.
-	Right string
-}
-
-// TitleBar - верхняя панель окна: бренд, подпись и контекст справа.
-//
-// Концепт OpenCode - минимум украшений: одна строка фактов, никаких
-// «лампочек» и декоративных линеек. Подпись и правый блок приглушены,
-// название - акцентом.
-func (u *UI) TitleBar(o TitleBarOpts) {
-	if u.quiet || u.sink() != nil {
-		return
-	}
-	w := u.Width()
-	left := "  "
-	if o.Title != "" {
-		left += u.Accent(u.Bold(o.Title))
-	}
-	if o.Subtitle != "" {
-		left += u.Gray("  |  ") + u.c(u.pal.Muted, o.Subtitle)
-	}
-	right := o.Right
-	if right != "" {
-		right = u.c(u.pal.Muted, right)
-	}
-	u.Println(fitRight(left, right, w))
-}
-
-// MetricsBar - нижняя панель окна: метрики расхода.
-//
-// Слева - состояние (модель, режимы), справа - расход: контекст с
-// процентом от лимита модели, токены, скорость вывода, время запроса и
-// деньги. Всё в одной строке: разрозненные числа в разных местах экрана
-// невозможно сравнивать между собой.
-//
-// Линии-разделителя здесь нет: строка и так читается как подпись, а
-// линия во всю ширину режет экран пополам и мешает видеть поток ответа.
-func (u *UI) MetricsBar(items []StatusItem, m Metrics) {
-	if u.quiet || u.sink() != nil {
-		return
-	}
-	w := u.Width()
-
-	left := make([]string, 0, len(items))
-	for _, it := range items {
-		text := it.Text
-		if text == "" {
-			continue
-		}
-		switch it.Kind {
-		case StatusOK:
-			text = u.c(u.pal.OK, text)
-		case StatusWarn:
-			text = u.c(u.pal.Warn, text)
-		case StatusErr:
-			text = u.c(u.pal.Err, text)
-		case StatusAccent:
-			text = u.c(u.pal.Accent, text)
-		default:
-			text = u.c(u.pal.Muted, text)
-		}
-		left = append(left, text)
-	}
-	leftText := strings.Join(left, u.c(u.pal.Muted, " | "))
-	if leftText == "" {
-		leftText = "  "
-	} else {
-		leftText = "  " + leftText
-	}
-
-	right := u.metricsParts(m, w-visibleWidth(leftText)-2)
-	rightText := ""
-	if right != "" {
-		rightText = u.c(u.pal.Muted, right)
-	}
-
-	// Строка не заполняет ширину до конца: терминал, в котором текст
-	// кончается ровно на краю, оставляет курсор в состоянии «перенос
-	// отложен», и следующая запись уезжает в неожиданную колонку.
-	u.Println(fitRight(leftText, rightText, w-2))
-}
-
-// metricsParts - правый блок метрик: контекст, скорость, время.
-//
-// Порядок - по важности: что не влезает в строку, отпадает с конца, а
-// не с начала. Первым уходит стоимость, последним - процент контекста:
-// ради него человек и смотрит в панель.
-func (u *UI) metricsParts(m Metrics, room int) string {
-	var parts []string
-	if m.Context > 0 {
-		parts = append(parts, fmt.Sprintf("ctx %d%%", m.ContextPct()))
-	}
-	if r := m.RateText(); r != "" {
-		// Скорость вывода, а не всего запроса: входные токены - это
-		// повторённый контекст, и делить их на время значит показывать
-		// скорость, которой нет.
-		parts = append(parts, "вывод "+r)
-	}
-	if m.Last > 0 {
-		parts = append(parts, "запрос "+core.HumanDuration(m.Last))
-	}
-	if m.Prompt > 0 || m.Completion > 0 {
-		parts = append(parts, "in "+core.Kfmt(m.Prompt)+" out "+core.Kfmt(m.Completion))
-	}
-	if m.CostKnown {
-		parts = append(parts, core.FormatUSD(m.Cost))
-	}
-	// Отрезаем с конца, пока не влезем.
-	sep := " | "
-	for len(parts) > 1 {
-		text := strings.Join(parts, sep)
-		if visibleWidth(text) <= room {
-			return text
-		}
-		parts = parts[:len(parts)-1]
-	}
-	if len(parts) == 1 {
-		return parts[0]
-	}
-	return ""
-}
+// TitleBar/MetricsBar удалены: в интерфейсе Claude Code шапок и панелей
+// метрик нет - расходы живут в строке подсказок под полем ввода (live.go),
+// а приветствие рисует баннер приложения.
 
 // fitRight - прижать правый блок к правому краю строки.
 //
@@ -276,23 +152,10 @@ func fitRight(left, right string, width int) string {
 
 // ---------- Скруглённые панели ----------
 
-// Панель в духе OpenCode: рамка со скруглёнными углами, заголовок
-// внутри верхней границы.
-const (
-	panelTL = "+"
-	panelTR = "+"
-	panelBL = "+"
-	panelBR = "+"
-	panelH  = "-"
-	panelV  = "|"
-)
-
-// panelGlyphs - рамка под текущий терминал.
+// panelGlyphs - рамка под текущий терминал: скруглённые углы Claude Code
+// «╭ ╮ ╰ ╯» и ASCII-запаска «+» для терминалов без юникода.
 func (u *UI) panelGlyphs() (tl, tr, bl, br, h, v string) {
-	if u.g.Unicode {
-		return panelTL, panelTR, panelBL, panelBR, panelH, panelV
-	}
-	return "+", "+", "+", "+", "-", "|"
+	return u.g.TL, u.g.TR, u.g.BL, u.g.BR, u.g.H, u.g.V
 }
 
 // PanelOpts - параметры панели.

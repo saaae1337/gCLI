@@ -11,7 +11,6 @@ import (
 	"gcli/core"
 	"gcli/subagents"
 	"gcli/tools"
-	"gcli/tui"
 	"gcli/ui"
 )
 
@@ -445,24 +444,6 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		if a.permFileWrite() {
 			return true
 		}
-		if ch, ok := a.tuiConfirm(tui.Confirm{
-			Title:       "Изменить файл?",
-			Path:        a.relPath(req.Path),
-			Note:        req.Reason,
-			Old:         req.Old,
-			New:         req.New,
-			AllowAlways: true,
-		}); ok {
-			switch ch {
-			case tui.ChoiceYes:
-				return true
-			case tui.ChoiceAlways:
-				a.grantFileWrite()
-				a.saveSession()
-				return true
-			}
-			return false
-		}
 		if !askable {
 			a.denyBackground(req)
 			return false
@@ -484,28 +465,6 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 		allowed := !danger && a.permBash(req.Detail)
 		if allowed {
 			return true
-		}
-		if ch, ok := a.tuiConfirm(tui.Confirm{
-			Title:       "Выполнить команду?",
-			Detail:      req.Detail,
-			Note:        req.Reason,
-			Danger:      danger,
-			AllowAlways: !danger,
-			AllowAll:    !danger,
-		}); ok {
-			switch ch {
-			case tui.ChoiceYes:
-				return true
-			case tui.ChoiceAlways:
-				a.grantBashExact(req.Detail)
-				a.saveSession()
-				return true
-			case tui.ChoiceAll:
-				a.grantBashAll()
-				a.saveSession()
-				return true
-			}
-			return false
 		}
 		if !askable {
 			a.denyBackground(req)
@@ -539,22 +498,6 @@ func (a *app) confirm(req tools.ConfirmReq) bool {
 	case tools.ConfirmNet:
 		if a.permWebFetch() {
 			return true
-		}
-		if ch, ok := a.tuiConfirm(tui.Confirm{
-			Title:       "Сетевой запрос?",
-			Detail:      core.Truncate(req.Detail, 120),
-			Note:        req.Reason,
-			AllowAlways: true,
-		}); ok {
-			switch ch {
-			case tui.ChoiceYes:
-				return true
-			case tui.ChoiceAlways:
-				a.grantWebFetch()
-				a.saveSession()
-				return true
-			}
-			return false
 		}
 		if !askable {
 			a.denyBackground(req)
@@ -768,19 +711,15 @@ const (
 
 // readAns — прочитать ответ пользователя.
 func (a *app) readAns(allowAlways, allowAll bool) int {
-	if a.stdin == nil {
-		// Полноэкранный интерфейс не должен доходить сюда: подтверждения
-		// идут окнами (см. confirm). Отказ безопаснее паники.
-		return confirmNo
-	}
 	for {
-		if !a.stdin.Scan() {
+		text, ok := a.askLine("")
+		if !ok {
 			return confirmNo
 		}
 		// Сравнение с исходным регистром внутри: «A» (заглавная) — «все»,
 		// «a» — «всегда». ToLower целиком делал «A» недостижимой веткой,
 		// и пользователь получал более слабое «всегда» молча.
-		raw := strings.TrimSpace(a.stdin.Text())
+		raw := strings.TrimSpace(text)
 		low := strings.ToLower(raw)
 		switch low {
 		case "y", "д", "да", "yes", "1":
@@ -828,12 +767,12 @@ func (a *app) askUser(question string, options []string) (string, error) {
 			core.Truncate(core.OneLine(question), 70))
 		return "[автопилот: реши самостоятельно]", nil
 	}
-	// Полноэкранный интерфейс спрашивает окном: старые Prompt2/Scan
-	// писали бы мимо ленты, а stdin в этом режиме нет.
-	if ans, ok := a.tuiAskUser(question, options); ok {
-		return strings.TrimSpace(ans), nil
-	} else if t := a.tuiApp(); t != nil && t.Running() {
-		return "", nil
+	// Композер спрашивает в поле ввода: вопрос печатается над регионом,
+	// ответ набирается как обычное сообщение.
+	if c := a.composerRef(); c != nil {
+		if ans, ok := c.ask(question, false, options); ok {
+			return strings.TrimSpace(ans), nil
+		}
 	}
 	// Фоновый ход не читает stdin: строка предназначена REPL-циклу, а не
 	// этому вопросу. Пустой ответ — как в тихом режиме: модель видит,

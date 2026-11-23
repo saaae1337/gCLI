@@ -62,15 +62,15 @@ func TestWriteLeavesValidUTF8Untouched(t *testing.T) {
 	}
 }
 
-// Путь не должен обходить починку: спиннер, маскот и прогресс пишут в
-// поток напрямую, минуя Write.
+// Путь не должен обходить починку: спиннер и прогресс пишут в поток
+// напрямую, минуя Write. RawWrite - исключение по контракту: это канал
+// управляющих последовательностей (OSC52), там чинить нечего.
 func TestAllOutputPathsRepairUTF8(t *testing.T) {
 	var buf bytes.Buffer
 	u := newTestUI(&buf)
 	bad := string(cp1251Hello)
 
 	u.Write(bad)
-	u.RawWrite(bad)
 	u.put(bad) // низкоуровневая точка, которой пользуются все пути
 
 	if !utf8.ValidString(buf.String()) {

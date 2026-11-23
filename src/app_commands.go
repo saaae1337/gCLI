@@ -372,8 +372,9 @@ func (a *app) cmdHelp() {
 		}
 		a.ui.Println("")
 	}
-	a.ui.Println("  " + a.ui.Gray("Подсказки: @файл - приложить файл | \\ в конце строки - перенос"))
-	a.ui.Println("  " + a.ui.Gray("#текст - записать факт в память проекта (GCLI.md) | Ctrl+C - прервать генерацию"))
+	a.ui.Println("  " + a.ui.Gray("/ - меню команд · @файл - приложить файл · \\ + Enter - перенос строки"))
+	a.ui.Println("  " + a.ui.Gray("esc - прервать ход · ctrl+o - показать размышления · ctrl+l - очистить экран"))
+	a.ui.Println("  " + a.ui.Gray("#текст - записать факт в память проекта (GCLI.md) · ctrl+d - выход"))
 	a.ui.Println("")
 }
 
@@ -1838,9 +1839,6 @@ func (a *app) cmdCron(rest string) {
 		a.repo.Cfg.Cron = true
 		cfgMu.Unlock()
 		a.saveConfig()
-		if t := a.tuiApp(); t != nil {
-			t.SetCronEnabled(true)
-		}
 		a.ui.Ok("автономные итерации включены - через 15-20 мин тишины агент сам найдёт и починит баги, проблемы, уязвимости")
 	case "off", "выкл", "0", "false":
 		a.cronMu.Lock()
@@ -1859,9 +1857,6 @@ func (a *app) cmdCron(rest string) {
 		a.repo.Cfg.Cron = false
 		cfgMu.Unlock()
 		a.saveConfig()
-		if t := a.tuiApp(); t != nil {
-			t.SetCronEnabled(false)
-		}
 		a.ui.Ok("автономные итерации выключены")
 	default:
 		a.ui.Warn("не понял: " + rest + " - /cron on | off | status")

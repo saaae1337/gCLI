@@ -40,24 +40,24 @@ func TestNormalizeThemeEmber(t *testing.T) {
 	}
 }
 
-// Глифы «УГЛА»: ромб-маркер и «зубец» результата, ASCII-фолбэк на всё.
+// Глифы Claude Code: брендовый «✻» и «зубец» результата «⎿», ASCII-фолбэк.
 func TestEmberGlyphs(t *testing.T) {
 	g := emberGlyphs()
-	if g.Mark != "*" {
-		t.Errorf("маркер юникода = %q, ожидался ромб", g.Mark)
+	if g.Mark != "✻" {
+		t.Errorf("брендовый знак юникода = %q, ожидался ✻", g.Mark)
 	}
-	if g.Tick != ":" {
-		t.Errorf("зубец юникода = %q, ожидался :", g.Tick)
+	if g.Tick != "⎿" {
+		t.Errorf("зубец юникода = %q, ожидался ⎿", g.Tick)
 	}
-	if g.Star != "*" {
-		t.Errorf("событийный маркер = %q, ожидался ромб", g.Star)
+	if g.Dot != "⏺" {
+		t.Errorf("маркер события = %q, ожидался ⏺", g.Dot)
 	}
 	a := emberASCIIGlyphs()
-	if !isASCIIString(a.Mark + a.Tick) {
-		t.Errorf("ASCII-набор не должен содержать юникод-ромбы: mark=%q tick=%q", a.Mark, a.Tick)
+	if !isASCIIString(a.Mark + a.Tick + a.Dot) {
+		t.Errorf("ASCII-набор не должен содержать юникод-глифы: mark=%q tick=%q", a.Mark, a.Tick)
 	}
-	if a.Mark != "*" {
-		t.Errorf("ASCII-маркер = %q, ожидался '*'", a.Mark)
+	if a.Mark != "*" || a.Tick != ":" {
+		t.Errorf("ASCII-набор = %q/%q, ожидались '*' и ':'", a.Mark, a.Tick)
 	}
 }
 
@@ -68,23 +68,26 @@ func TestEmberTickASCII(t *testing.T) {
 		t.Errorf("ASCII-зубец содержит юникод: %q", tick)
 	}
 	u2, _ := emberUI()
-	if tick := u2.emberTickOf(); !isASCIIString(tick) {
-		t.Errorf("зубец не ASCII: %q", tick)
+	if tick := u2.emberTickOf(); tick != "⎿" {
+		t.Errorf("юникод-зубец = %q, ожидался ⎿", tick)
 	}
 }
 
 // GlyphsFor/SpinnerFor обязаны возвращать набор «УГЛА» по теме.
 func TestEmberGlyphsFor(t *testing.T) {
 	g := GlyphsFor("ember", true)
-	if g.Mark != "*" {
-		t.Errorf("GlyphsFor(ember) маркер = %q", g.Mark)
+	if g.Mark != "✻" {
+		t.Errorf("GlyphsFor(ember) маркер = %q, ожидался ✻", g.Mark)
 	}
 	if GlyphsFor("coal", false).Unicode {
 		t.Error("алиас «coal» без юникода должен вернуть ASCII-набор")
 	}
 	sp := SpinnerFor("ember", true)
-	if len(sp) == 0 || (sp[0] != "|" && sp[0] != "/") {
-		t.Errorf("спиннер «УГЛА» = %v, ожидались |//", sp)
+	if len(sp) == 0 || sp[0] != "✻" {
+		t.Errorf("спиннер Claude Code = %v, ожидались ✻✽✶", sp)
+	}
+	if sp2 := SpinnerFor("ember", false); sp2[0] != "|" {
+		t.Errorf("ASCII-спиннер = %v, ожидалась палочка", sp2)
 	}
 }
 
@@ -104,8 +107,8 @@ func TestEmberBlock(t *testing.T) {
 	u, buf := emberUI()
 	u.Block("строка один\nстрока два", BlockOpts{Title: "Заголовок"})
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "*") {
-		t.Errorf("шапка блока должна начинаться с ромба:\n%s", out)
+	if !strings.Contains(out, "⏺") {
+		t.Errorf("шапка блока должна начинаться с маркера события:\n%s", out)
 	}
 	if !strings.Contains(out, "Заголовок") || !strings.Contains(out, "строка один") {
 		t.Errorf("блок потерял содержимое:\n%s", out)
@@ -121,8 +124,8 @@ func TestEmberTable(t *testing.T) {
 	u.Table([]Column{{Title: "имя", Width: 10}, {Title: "год", Width: 6, Right: true}},
 		[][]string{{"uno", "1"}, {"dos", "2"}}, BlockOpts{Title: "Т"})
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, ".") {
-		t.Errorf("колонки должны разделяться точкой:\n%s", out)
+	if !strings.Contains(out, "⏺") {
+		t.Errorf("колонки должны разделяться маркером события:\n%s", out)
 	}
 	if !strings.Contains(out, "uno") || !strings.Contains(out, "dos") {
 		t.Errorf("таблица потеряла строки:\n%s", out)
@@ -135,7 +138,7 @@ func TestEmberThinking(t *testing.T) {
 	u.ThinkChunk("мысль")
 	u.ThinkEnd()
 	out := StripANSI(buf.String())
-	if !strings.Contains(out, "размышления") {
+	if !strings.Contains(out, "thinking") {
 		t.Errorf("нет подписи размышлений:\n%s", out)
 	}
 	if !strings.Contains(out, "мысль") {
@@ -147,10 +150,10 @@ func TestEmberThinking(t *testing.T) {
 // куски размышлений выглядели бы как обычный ответ модели.
 func TestThinkChunkOpensMarker(t *testing.T) {
 	u, buf := emberUI()
-	u.ThinkChunk("первая мысль")
-	u.ThinkChunk("вторая")
+	u.ThinkChunk("первая мысль\n")
+	u.ThinkChunk("вторая\n")
 	out := StripANSI(buf.String())
-	if n := strings.Count(out, "размышления"); n != 1 {
+	if n := strings.Count(out, "thinking"); n != 1 {
 		t.Errorf("маркер потока должен быть один, напечатано %d:\n%s", n, out)
 	}
 	if !strings.Contains(out, "первая мысль") || !strings.Contains(out, "вторая") {
@@ -162,10 +165,10 @@ func TestThinkChunkOpensMarker(t *testing.T) {
 // открыт раньше - иначе на экране появлялось бы второе «размышления».
 func TestThinkHiddenNoSecondMarker(t *testing.T) {
 	u, buf := emberUI()
-	u.ThinkChunk("старое")
+	u.ThinkChunk("старое\n")
 	u.ThinkHidden("новое")
 	out := StripANSI(buf.String())
-	if n := strings.Count(out, "размышления"); n != 1 {
+	if n := strings.Count(out, "thinking"); n != 1 {
 		t.Errorf("маркер потока должен быть один, напечатано %d:\n%s", n, out)
 	}
 	if !strings.Contains(out, "новое") {
@@ -182,18 +185,8 @@ func TestEmberRail(t *testing.T) {
 	if !strings.Contains(out, "read_file") {
 		t.Errorf("нет вызова инструмента:\n%s", out)
 	}
-	if !strings.Contains(out, ":") {
+	if !strings.Contains(out, "⎿") {
 		t.Errorf("результат должен идти с «зубцом»:\n%s", out)
-	}
-}
-
-// Приглашение: стрелка акцентом в агентном режиме.
-func TestEmberPrompt(t *testing.T) {
-	u, buf := emberUI()
-	u.Prompt(true)
-	out := StripANSI(buf.String())
-	if !strings.Contains(out, ">") {
-		t.Errorf("приглашение должно начинаться со стрелки:\n%s", out)
 	}
 }
 

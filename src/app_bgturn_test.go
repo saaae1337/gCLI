@@ -16,8 +16,8 @@ import (
 // bgStdin — stdinReader с одной строкой в буфере: после правдоподобной
 // кражи её не должно быть, тест проверяет это повторным Scan.
 func bgStdin(line string) *stdinReader {
-	s := &stdinReader{lines: make(chan string, 1), keys: make(chan byte, 1)}
-	s.lines <- line
+	s := &stdinReader{events: make(chan termEvent, 8)}
+	s.events <- termEvent{kind: evLine, line: line}
 	return s
 }
 
@@ -65,8 +65,8 @@ func TestInteractiveConfirmStillAsks(t *testing.T) {
 		t.Error("интерактивному ходу отказ фонового хода не полагается")
 	}
 	select {
-	case l := <-a.stdin.lines:
-		t.Errorf("строка %q не потреблена вопросом - осталась в канале", l)
+	case ev := <-a.stdin.events:
+		t.Errorf("событие %+v не потреблено вопросом - осталось в канале", ev)
 	default:
 		// Прочитано readAns — правильно.
 	}

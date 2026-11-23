@@ -92,17 +92,3 @@ func stdinIsTerminal() bool {
 	r, _, _ := procGetConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode)))
 	return r != 0
 }
-
-// rawTUIHint — подсказка к отказу raw-режима на Windows.
-//
-// Отказ случается в двух разных мирах, и лечатся они по-разному: без
-// подсказки пользователь видит «не удалось включить raw-режим» и не знает,
-// виноват ли терминал, система или gcli.
-func rawTUIHint() string {
-	if !stdinIsTerminal() {
-		return " | ввод не подключён к консоли (пайп или mintty): запусти gcli в Windows Terminal, cmd или через winpty gcli"
-	}
-	// SetConsoleMode с ENABLE_VIRTUAL_TERMINAL_INPUT требует Windows 10
-	// 1607+; на более старых raw для полноэкранного режима недостижим.
-	return " | нужен Windows 10 1607+ (VT-ввод); на старой системе используй -plain"
-}

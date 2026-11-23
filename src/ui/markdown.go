@@ -79,7 +79,6 @@ func (s *Stream) End() {
 		s.pend = ""
 	}
 	if s.state.fence {
-		s.u.Println(s.u.Gray(s.u.g.BL + s.u.g.H + s.u.g.H))
 		s.state.fence = false
 	}
 	if sink := s.u.sink(); sink != nil {
@@ -104,19 +103,13 @@ func (u *UI) renderLine(line string, st *streamState) string {
 		if !st.fence {
 			st.fence = true
 			st.lang = lang
-			// Блок кода помечен ромбом, как и любое другое событие,
-			// а язык - приглушённым хвостом. Иначе строка «* ``` go »
-			// читается как ещё один заголовок, а кода под ней нет.
-			head := "  " + u.emberMark(u.pal.Code)
-			if lang != "" {
-				head += " " + u.c(u.pal.Muted, lang)
-			}
-			return head
+			// Claude Code не рисует ограды блоков кода: сам блок отличает
+			// приглушённый цвет строк. Ограда печатается пустой строкой,
+			// чтобы код не слипался с прозой.
+			return ""
 		}
 		st.fence = false
-		// Закрывающий зубец: блок «схлопывается» в зубок, а не
-		// обводится рамкой, и глаз видит, где код кончился.
-		return "  " + u.emberTail()
+		return ""
 	}
 
 	if trimmed != "" && reHRule.MatchString(trimmed) {
@@ -131,13 +124,9 @@ func (u *UI) renderLine(line string, st *streamState) string {
 	if m := reH.FindStringSubmatch(line); m != nil {
 		level, title := len(m[1]), strings.TrimSpace(m[2])
 		if level <= 2 {
-			body := u.Bold(u.c(u.pal.Accent, title))
-			// Заголовок ответа - ровно как заголовок блока: тот же
-			// ромб и та же линия вправо. Иначе он уезжает в край
-			// терминала и выглядит как вывод чужой программы.
-			n := maxInt(4, minInt(cellWidth(title), u.Width()-6))
-			return "  " + u.emberMark(u.pal.Accent) + " " + body + " " +
-				u.emberRule(n)
+			// Заголовок ответа - просто жирный текст: в Claude Code ответы
+			// печатаются как обычный markdown, без маркеров и линеек.
+			return u.Bold(title)
 		}
 		return u.Bold(title)
 	}
@@ -153,12 +142,14 @@ func (u *UI) renderLine(line string, st *streamState) string {
 
 	if m := reOrdered.FindStringSubmatch(line); m != nil {
 		indent, num, text := m[1], m[2], m[3]
-		return indent + u.c(u.pal.Accent, num+".") + " " + u.inline(text)
+		return indent + num + ". " + u.inline(text)
 	}
 
 	if m := reBullet.FindStringSubmatch(line); m != nil {
 		indent, text := m[1], m[2]
-		return indent + u.c(u.pal.Accent, u.g.Bullet) + " " + u.inline(text)
+		// Маркер списка - как в Claude Code: обычный цвет терминала,
+		// без подсветки. Выделяется содержимое, а не структура.
+		return indent + u.g.Bullet + " " + u.inline(text)
 	}
 
 	if m := reQuote.FindStringSubmatch(line); m != nil {
